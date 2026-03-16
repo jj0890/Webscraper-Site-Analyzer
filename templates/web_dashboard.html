@@ -4479,7 +4479,8 @@
                 const _ptLabel = {
                     landingPage: 'Landing Page', singleArticle: 'Article', blogListing: 'Blog',
                     productListing: 'Store', audioStream: 'Audio Stream', podcastListing: 'Podcast',
-                    showArchive: 'Show Archive', documentation: 'Documentation', apiReference: 'API Reference'
+                    showArchive: 'Show Archive', documentation: 'Documentation', apiReference: 'API Reference',
+                    contentGrid: 'Content Grid', gallery: 'Gallery'
                 }[_pageType] || _pageType;
                 inventoryEl.innerHTML = `<div style="padding: 1rem; background: rgba(255,255,255,0.03); border-radius: 6px; color: #888; font-size: 0.85rem;">
                     ${_pageType === 'landingPage'
@@ -4506,7 +4507,12 @@
                                     ${sample.name ? `<div style="font-size: 1.1rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem;">${sample.name}</div>` : ''}
                                     ${sample.title ? `<div style="font-size: 1.1rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem;">${sample.title}</div>` : ''}
                                     ${sample.price ? `<div style="color: #00ff88; font-weight: 600; margin-bottom: 0.5rem;">${sample.price}</div>` : ''}
+                                    ${sample.image ? `<div style="margin-bottom: 0.5rem;"><img src="${sample.image}" alt="${sample.image_alt || sample.title || ''}" style="max-width: 200px; max-height: 120px; border-radius: 4px; object-fit: cover;" onerror="this.style.display='none'"></div>` : ''}
                                     ${sample.text ? `<div style="color: #ccc; margin-bottom: 0.5rem;">${sample.text.substring(0, 150)}${sample.text.length > 150 ? '...' : ''}</div>` : ''}
+                                    ${sample.excerpt ? `<div style="color: #ccc; margin-bottom: 0.5rem;">${sample.excerpt.substring(0, 150)}${sample.excerpt.length > 150 ? '...' : ''}</div>` : ''}
+                                    ${sample.dimensions ? `<div style="color: #666; font-size: 0.8rem; margin-bottom: 0.25rem;">${sample.dimensions}</div>` : ''}
+                                    ${sample.date ? `<div style="color: #666; font-size: 0.8rem;">${sample.date}</div>` : ''}
+                                    ${sample.tag ? `<span style="display: inline-block; background: rgba(10,132,255,0.15); color: #0a84ff; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; margin-bottom: 0.5rem;">${sample.tag}</span>` : ''}
                                     ${sample.selector ? `<div style="font-family: 'SF Mono', monospace; font-size: 0.85rem; color: #888; margin-top: 0.75rem;"><strong>Selector:</strong> <code style="background: #0a0a0a; padding: 0.25rem 0.5rem; border-radius: 4px;">${sample.selector}</code></div>` : ''}
                                 </div>
                             </div>
@@ -4548,6 +4554,17 @@
                 `;
             }
 
+            if (strategy.detection_method) {
+                const methodLabel = strategy.detection_method === 'generic_sibling_clustering'
+                    ? 'Generic DOM Analysis (no hardcoded selectors)'
+                    : strategy.detection_method;
+                strategyHTML += `
+                    <div style="margin-bottom: 1rem;">
+                        <span style="display: inline-block; background: rgba(255,159,10,0.15); color: #ff9f0a; font-size: 0.75rem; padding: 3px 10px; border-radius: 4px; font-weight: 600;">Detection: ${methodLabel}</span>
+                    </div>
+                `;
+            }
+
             if (strategy.reasoning) {
                 strategyHTML += `
                     <div style="margin-bottom: 1.5rem;">
@@ -4555,6 +4572,26 @@
                         <div style="color: #ccc;">${strategy.reasoning}</div>
                     </div>
                 `;
+            }
+
+            if (strategy.item_anatomy) {
+                const anatomy = strategy.item_anatomy;
+                const pills = [];
+                if (anatomy.has_image) pills.push('Images');
+                if (anatomy.has_heading) pills.push('Headings');
+                if (anatomy.has_text) pills.push('Text');
+                if (anatomy.has_link) pills.push('Links');
+                if (pills.length > 0) {
+                    strategyHTML += `
+                        <div style="margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; color: #fff; margin-bottom: 0.5rem;">Item Contains</div>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                ${pills.map(p => `<span style="background: rgba(0,255,136,0.1); color: #00ff88; padding: 4px 12px; border-radius: 4px; font-size: 0.8rem;">${p}</span>`).join('')}
+                            </div>
+                            ${anatomy.avg_height ? `<div style="color: #666; font-size: 0.8rem; margin-top: 0.5rem;">Avg item height: ${anatomy.avg_height}px</div>` : ''}
+                        </div>
+                    `;
+                }
             }
 
             if (strategy.validation && strategy.validation.length > 0) {

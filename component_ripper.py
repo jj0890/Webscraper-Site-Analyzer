@@ -728,6 +728,54 @@ class ComponentRipper:
                 if (r) { r.category = 'footer'; results.push(r); }
             });
 
+            // Scan content grid: find containers with 3+ structurally similar children
+            const main = document.querySelector('main') || document.querySelector('[role="main"]') ||
+                         document.querySelector('#content') || document.querySelector('.content') || document.body;
+            const allContainers = main.querySelectorAll('*');
+            let bestGrid = null;
+            for (const container of allContainers) {
+                const kids = Array.from(container.children).filter(c => {
+                    const cr = c.getBoundingClientRect();
+                    return cr.width > 50 && cr.height > 20;
+                });
+                if (kids.length < 3) continue;
+
+                // Find same-tag groups
+                const groups = {};
+                for (const kid of kids) {
+                    const kt = kid.tagName;
+                    if (!groups[kt]) groups[kt] = [];
+                    groups[kt].push(kid);
+                }
+                for (const [kt, group] of Object.entries(groups)) {
+                    if (group.length < 3) continue;
+
+                    // Check structural similarity
+                    const sig = (el) => {
+                        const ct = Array.from(el.children).map(c => c.tagName).sort().join(',');
+                        return `${ct}|${!!el.querySelector('img')}|${!!el.querySelector('a')}`;
+                    };
+                    const ref = sig(group[0]);
+                    const matching = group.filter(el => sig(el) === ref);
+                    if (matching.length < 3) continue;
+
+                    if (!bestGrid || matching.length > bestGrid.matchCount) {
+                        const cn2 = (typeof container.className === 'string') ? container.className : (container.className?.baseVal || '');
+                        const r = score(container, container.tagName.toLowerCase(), cn2, container.id);
+                        if (r) {
+                            r.category = 'content_grid';
+                            r.matchCount = matching.length;
+                            r.itemTag = kt.toLowerCase();
+                            r.hasItemImages = !!matching[0].querySelector('img, picture, video');
+                            r.hasItemHeadings = !!matching[0].querySelector('h1, h2, h3, h4');
+                            r.hasItemLinks = !!matching[0].querySelector('a');
+                            bestGrid = r;
+                        }
+                    }
+                }
+            }
+            if (bestGrid) results.push(bestGrid);
+
             return { candidates: results, vh };
         }''')
 
@@ -765,6 +813,17 @@ class ComponentRipper:
                 s += 30 if c['buttons'] >= 2 else 0
                 s += 20 if c['widthPct'] > 60 else 0
                 s -= 100 if c['textLen'] > 5000 else 0              # too much text = not a player
+                # Penalize root-level elements (html, body) — they're never a "player"
+                s -= 500 if c['tag'] in ('html', 'body') else 0
+
+            elif cat == 'content_grid':
+                match_count = c.get('matchCount', 0)
+                s += match_count * 5                                 # more items = stronger signal
+                s += 30 if c.get('hasItemImages') else 0             # visual grid
+                s += 20 if c.get('hasItemHeadings') else 0           # editorial content
+                s += 20 if c.get('hasItemLinks') else 0              # navigable items
+                s += 30 if c['widthPct'] > 60 else 0                # takes up most of the page
+                s -= 50 if c['tag'] in ('html', 'body') else 0      # avoid root
 
             elif cat == 'footer':
                 s += 50 if c['tag'] == 'footer' else 0

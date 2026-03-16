@@ -32,6 +32,8 @@ class PageType(Enum):
     AUDIO_STREAM = "audioStream"
     SHOW_ARCHIVE = "showArchive"
     PODCAST_LISTING = "podcastListing"
+    CONTENT_GRID = "contentGrid"       # Generic repeating content (magazine, gallery, portfolio)
+    GALLERY = "gallery"                 # Image-dominant grid
     LANDING_PAGE = "landingPage"
     UNKNOWN = "unknown"
 
@@ -229,10 +231,128 @@ class IntelligentContentExtractor:
                 });
             }
 
-            // Return highest confidence signal
+            // Return highest confidence signal if specific selectors matched
             if (signals.length > 0) {
                 signals.sort((a, b) => b.confidence - a.confidence);
                 return signals[0];
+            }
+
+            // ── GENERIC REPEATING-ELEMENT DETECTION ──
+            // When no hardcoded selectors match, scan the DOM for clusters of
+            // structurally similar siblings. This catches magazine grids, poem
+            // listings, portfolio cards, etc. that use custom class names.
+            const main = document.querySelector('main') || document.querySelector('[role="main"]') ||
+                         document.querySelector('#content') || document.querySelector('.content') || document.body;
+
+            // Strategy: find containers whose direct children share the same tag
+            // and similar structure (child count, presence of images/links/headings).
+            let bestCluster = null;
+
+            const containers = main.querySelectorAll('*');
+            for (const container of containers) {
+                const kids = Array.from(container.children).filter(c => {
+                    // Skip tiny/hidden elements
+                    const r = c.getBoundingClientRect();
+                    return r.width > 50 && r.height > 20;
+                });
+
+                if (kids.length < 3) continue;
+
+                // Group children by tag name
+                const tagGroups = {};
+                for (const kid of kids) {
+                    const tag = kid.tagName;
+                    if (!tagGroups[tag]) tagGroups[tag] = [];
+                    tagGroups[tag].push(kid);
+                }
+
+                // Find the largest group of same-tag siblings
+                for (const [tag, group] of Object.entries(tagGroups)) {
+                    if (group.length < 3) continue;
+
+                    // Check structural similarity: compare child tag signature of first vs others
+                    const getSignature = (el) => {
+                        const childTags = Array.from(el.children).map(c => c.tagName).sort().join(',');
+                        const hasImg = !!el.querySelector('img, picture, video, svg');
+                        const hasLink = !!el.querySelector('a');
+                        const hasHeading = !!el.querySelector('h1, h2, h3, h4, h5, h6');
+                        const hasText = !!el.querySelector('p, span');
+                        return `${childTags}|${hasImg}|${hasLink}|${hasHeading}|${hasText}`;
+                    };
+
+                    const refSig = getSignature(group[0]);
+                    const matching = group.filter(el => getSignature(el) === refSig);
+
+                    if (matching.length < 3) continue;
+
+                    // Score this cluster — prefer content-rich items over pure image carousels
+                    const sample = matching[0];
+                    const hasImg = !!sample.querySelector('img, picture, video');
+                    const hasLink = !!sample.querySelector('a');
+                    const hasHeading = !!sample.querySelector('h1, h2, h3, h4, h5, h6');
+                    const hasText = !!sample.querySelector('p, span');
+
+                    // Complexity score: richer items rank higher
+                    let complexity = 0;
+                    if (hasImg) complexity += 1;
+                    if (hasLink) complexity += 2;    // navigable = likely content items
+                    if (hasHeading) complexity += 3;  // headings = editorial structure
+                    if (hasText) complexity += 2;     // text = content, not just thumbnails
+
+                    // Combined score: item count * complexity, with minimum size
+                    const avgH = matching.slice(0, 5).reduce((s, el) => s + el.getBoundingClientRect().height, 0) / Math.min(matching.length, 5);
+                    if (avgH < 30) continue;  // skip tiny repeated elements (list bullets, icons)
+
+                    // Penalize carousels (horizontal scroll containers)
+                    const containerStyle = getComputedStyle(container);
+                    const isCarousel = containerStyle.overflowX === 'auto' || containerStyle.overflowX === 'scroll' ||
+                                       container.classList.toString().includes('carousel') ||
+                                       container.classList.toString().includes('slider');
+
+                    const score = matching.length * (complexity || 1) * (isCarousel ? 0.3 : 1);
+                    if (!bestCluster || score > bestCluster.score) {
+                        // Build the selector for this cluster
+                        const containerSel = container.id ? `#${container.id}` :
+                            container.className ? `.${container.className.trim().split(/\\s+/)[0]}` :
+                            container.tagName.toLowerCase();
+                        const itemSel = `${containerSel} > ${tag.toLowerCase()}`;
+
+                        bestCluster = {
+                            count: matching.length,
+                            score: score,
+                            selector: itemSel,
+                            containerSelector: containerSel,
+                            tag: tag.toLowerCase(),
+                            hasImage: hasImg,
+                            hasLink: hasLink,
+                            hasHeading: hasHeading,
+                            hasText: hasText,
+                            isCarousel: isCarousel,
+                            avgHeight: Math.round(avgH)
+                        };
+                    }
+                }
+            }
+
+            if (bestCluster && bestCluster.count >= 3) {
+                // Determine if it's image-dominant (gallery) or mixed (content grid)
+                const imagePercent = bestCluster.hasImage ? 1 : 0;
+                const isGallery = bestCluster.hasImage && !bestCluster.hasHeading && !bestCluster.hasText;
+
+                const type = isGallery ? 'gallery' : 'contentGrid';
+                const anatomy = [];
+                if (bestCluster.hasImage) anatomy.push('images');
+                if (bestCluster.hasHeading) anatomy.push('headings');
+                if (bestCluster.hasText) anatomy.push('text');
+                if (bestCluster.hasLink) anatomy.push('links');
+
+                return {
+                    type: type,
+                    count: bestCluster.count,
+                    confidence: Math.min(0.85, 0.6 + bestCluster.count * 0.01),
+                    reasoning: `Found ${bestCluster.count} repeating ${bestCluster.tag} elements via \`${bestCluster.selector}\` containing ${anatomy.join(', ')}`,
+                    _cluster: bestCluster  // pass through for inventory/sampling
+                };
             }
 
             return {
@@ -242,6 +362,9 @@ class IntelligentContentExtractor:
                 reasoning: 'No specific content pattern detected, likely a landing page'
             };
         }""")
+
+        # Store cluster data for use in inventory/sampling
+        self._detected_cluster = result.get('_cluster')
 
         return {
             'type': PageType(result['type']),
@@ -269,13 +392,16 @@ class IntelligentContentExtractor:
 
         elif page_type == PageType.BLOG_LISTING:
             return await self.page.evaluate("""() => {
-                const articles = document.querySelectorAll('article, .post');
+                const articles = Array.from(document.querySelectorAll('article, .post'));
+                const sampled = articles.slice(0, 20);
                 return {
                     articles: articles.length,
-                    images: document.querySelectorAll('article img, .post img').length,
+                    with_images: sampled.filter(a => a.querySelector('img, picture')).length,
+                    with_headings: sampled.filter(a => a.querySelector('h1, h2, h3, h4, [class*="title"]')).length,
+                    with_links: sampled.filter(a => a.querySelector('a')).length,
                     authors: document.querySelectorAll('.author, [class*="author"]').length,
-                    dates: document.querySelectorAll('time, .date').length,
-                    categories: document.querySelectorAll('.category, .tag').length
+                    dates: document.querySelectorAll('time, .date, [datetime]').length,
+                    categories: document.querySelectorAll('.category, .tag, [class*="category"]').length
                 };
             }""")
 
@@ -354,6 +480,38 @@ class IntelligentContentExtractor:
                 };
             }""")
 
+        elif page_type in (PageType.CONTENT_GRID, PageType.GALLERY):
+            # Use the detected cluster selector for accurate counting
+            cluster = getattr(self, '_detected_cluster', None)
+            sel = cluster['selector'] if cluster else '[class*="item"]'
+            return await self.page.evaluate("""(selector) => {
+                const items = document.querySelectorAll(selector);
+                if (!items.length) return { items: 0 };
+
+                // Count what's inside each item
+                let withImages = 0, withHeadings = 0, withText = 0, withLinks = 0, withDates = 0;
+                for (const item of Array.from(items).slice(0, 30)) {
+                    if (item.querySelector('img, picture, video, svg.icon')) withImages++;
+                    if (item.querySelector('h1, h2, h3, h4, h5, h6')) withHeadings++;
+                    if (item.querySelector('p, span, .excerpt, .description')) withText++;
+                    if (item.querySelector('a[href]')) withLinks++;
+                    if (item.querySelector('time, .date, [datetime]')) withDates++;
+                }
+
+                const sampled = Math.min(items.length, 30);
+                return {
+                    items: items.length,
+                    with_images: withImages,
+                    with_headings: withHeadings,
+                    with_text: withText,
+                    with_links: withLinks,
+                    with_dates: withDates,
+                    selector_used: selector,
+                    image_ratio: Math.round(withImages / sampled * 100) + '%',
+                    heading_ratio: Math.round(withHeadings / sampled * 100) + '%'
+                };
+            }""", sel)
+
         elif page_type == PageType.LANDING_PAGE:
             return await self.page.evaluate("""() => {
                 const main = document.querySelector('main') || document.body;
@@ -406,16 +564,28 @@ class IntelligentContentExtractor:
             return await self.page.evaluate("""() => {
                 const articles = Array.from(
                     document.querySelectorAll('article, .post')
-                ).slice(0, 3);
+                ).slice(0, 5);
 
-                return articles.map((a, idx) => ({
-                    title: a.querySelector('h2, h3, .title')?.innerText?.trim(),
-                    excerpt: a.querySelector('p, .excerpt')?.innerText?.trim()?.slice(0, 100),
-                    author: a.querySelector('.author, [class*="author"]')?.innerText?.trim(),
-                    date: a.querySelector('time, .date')?.innerText?.trim(),
-                    link: a.querySelector('a')?.href,
-                    selector: `article:nth-child(${idx + 1})`
-                }));
+                return articles.map((a, idx) => {
+                    // Try multiple heading selectors — different sites use different patterns
+                    const heading = a.querySelector('h1, h2, h3, h4, .title, [class*="title"], [class*="headline"]');
+                    // Fallback: first link text often IS the title
+                    const firstLink = a.querySelector('a');
+                    const title = heading?.innerText?.trim() ||
+                                  firstLink?.innerText?.trim()?.substring(0, 100) ||
+                                  a.innerText?.trim()?.substring(0, 80) ||
+                                  null;
+
+                    return {
+                        title: title,
+                        excerpt: a.querySelector('p, .excerpt, .description, .summary, [class*="dek"]')?.innerText?.trim()?.slice(0, 150),
+                        author: a.querySelector('.author, [class*="author"], [rel="author"]')?.innerText?.trim(),
+                        date: a.querySelector('time, .date, [datetime]')?.innerText?.trim(),
+                        image: a.querySelector('img')?.src || null,
+                        link: firstLink?.href || null,
+                        selector: 'article:nth-child(' + (idx + 1) + ')'
+                    };
+                });
             }""")
 
         elif page_type == PageType.SINGLE_ARTICLE:
@@ -511,6 +681,50 @@ class IntelligentContentExtractor:
                     selector: `.episode:nth-child(${idx + 1})`
                 }));
             }""")
+
+        elif page_type in (PageType.CONTENT_GRID, PageType.GALLERY):
+            cluster = getattr(self, '_detected_cluster', None)
+            sel = cluster['selector'] if cluster else '[class*="item"]'
+            return await self.page.evaluate("""(selector) => {
+                const items = Array.from(document.querySelectorAll(selector)).slice(0, 5);
+                return items.map((item, idx) => {
+                    const r = item.getBoundingClientRect();
+                    const s = getComputedStyle(item);
+
+                    // Extract whatever content is in this item
+                    const heading = item.querySelector('h1, h2, h3, h4, h5, h6');
+                    const imgEl = item.querySelector('img');
+                    const pictureEl = item.querySelector('picture img') || imgEl;
+                    const text = item.querySelector('p, span, .excerpt, .description, .summary');
+                    const link = item.querySelector('a[href]');
+                    const date = item.querySelector('time, .date, [datetime]');
+                    const tag = item.querySelector('.tag, .category, .label, [class*="tag"], [class*="category"]');
+
+                    // Build title from multiple sources
+                    const title = heading?.innerText?.trim()?.substring(0, 100) ||
+                                  link?.innerText?.trim()?.substring(0, 100) ||
+                                  item.querySelector('a')?.innerText?.trim()?.substring(0, 100) ||
+                                  pictureEl?.alt?.trim()?.substring(0, 100) ||
+                                  pictureEl?.title?.trim()?.substring(0, 100) ||
+                                  null;
+
+                    const imgSrc = pictureEl?.src || pictureEl?.getAttribute('data-src') ||
+                                   pictureEl?.srcset?.split(',')[0]?.trim()?.split(' ')[0] || null;
+
+                    return {
+                        title: title || ('Image ' + (idx + 1)),
+                        text: text?.innerText?.trim()?.substring(0, 200) || null,
+                        image: imgSrc,
+                        image_alt: pictureEl?.alt || null,
+                        link: link?.href || item.querySelector('a')?.href || null,
+                        date: date?.innerText?.trim() || date?.getAttribute('datetime') || null,
+                        tag: tag?.innerText?.trim() || null,
+                        dimensions: Math.round(r.width) + 'x' + Math.round(r.height) + 'px',
+                        display: s.display,
+                        selector: selector + ':nth-child(' + (idx + 1) + ')'
+                    };
+                });
+            }""", sel)
 
         elif page_type == PageType.LANDING_PAGE:
             return await self.page.evaluate("""() => {
@@ -666,6 +880,32 @@ class IntelligentContentExtractor:
                 'scaling_note': 'Landing pages are unique compositions — no repeating content pattern to extract at scale'
             }
         }
+
+        # For content grid / gallery — build strategy from actual detected cluster
+        if page_type in (PageType.CONTENT_GRID, PageType.GALLERY):
+            cluster = getattr(self, '_detected_cluster', None)
+            if cluster:
+                anatomy = []
+                if cluster.get('hasImage'): anatomy.append('images')
+                if cluster.get('hasHeading'): anatomy.append('headings')
+                if cluster.get('hasText'): anatomy.append('text')
+                if cluster.get('hasLink'): anatomy.append('links')
+                return {
+                    'primary_selector': cluster.get('selector', 'auto-detected'),
+                    'container_selector': cluster.get('containerSelector', 'auto-detected'),
+                    'confidence': 'medium-high',
+                    'reasoning': f'Detected {cluster["count"]} structurally similar {cluster["tag"]} elements via DOM analysis (not hardcoded selectors)',
+                    'detection_method': 'generic_sibling_clustering',
+                    'fields_extracted': anatomy,
+                    'item_anatomy': {
+                        'has_image': cluster.get('hasImage', False),
+                        'has_heading': cluster.get('hasHeading', False),
+                        'has_text': cluster.get('hasText', False),
+                        'has_link': cluster.get('hasLink', False),
+                        'avg_height': cluster.get('avgHeight', 0)
+                    },
+                    'scaling_note': f'All {cluster["count"]} items match the same selector — full extraction possible'
+                }
 
         return strategies.get(page_type, {
             'primary_selector': 'unknown',
