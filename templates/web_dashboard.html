@@ -341,20 +341,46 @@
             background: var(--surface-2);
             border-radius: var(--radius-lg);
             padding: var(--space-6);
-            border: 1px solid var(--border-subtle);
+            border: 1px solid var(--card-border, var(--border-subtle));
+            border-top: 3px solid var(--card-accent, var(--border-subtle));
             break-inside: avoid;
             margin-bottom: 0;
+            position: relative;
             transition: border-color var(--duration-normal) var(--ease-out),
-                        box-shadow var(--duration-normal) var(--ease-out);
+                        box-shadow var(--duration-normal) var(--ease-out),
+                        opacity var(--duration-normal) var(--ease-out);
         }
 
         .metric-card:hover {
-            border-color: var(--border-default);
-            box-shadow: var(--shadow-md);
+            border-color: var(--card-accent, var(--border-default));
+            box-shadow: 0 4px 24px var(--card-accent-muted, rgba(0,0,0,0.3));
         }
 
-        .metric-card.large {
+        .metric-card.large,
+        .metric-card.card-hero {
             grid-column: 1 / -1;
+        }
+
+        .metric-card.card-hero {
+            border-top-width: 4px;
+        }
+
+        .metric-card.card-compact {
+            padding: var(--space-4);
+            opacity: 0.85;
+        }
+        .metric-card.card-compact .metric-value {
+            font-size: var(--text-md);
+        }
+        .metric-card.card-compact .metric-body {
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        @media (min-width: 700px) {
+            .metric-card.card-featured {
+                grid-column: span 2;
+            }
         }
 
         /* ── Compact Card Pattern ── */
@@ -432,8 +458,18 @@
             font-size: 1.1rem;
         }
 
-        /* Confidence badges removed — values were not evidence-backed */
-        .confidence-badge { display: none; }
+        /* ── Confidence System ── */
+        .confidence-badge {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--card-accent-muted, var(--accent-muted));
+            color: var(--card-accent, var(--accent));
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
 
         .metric-value {
             font-family: var(--font-display);
@@ -482,6 +518,102 @@
         .copy-btn:hover {
             background: var(--surface-4);
             color: var(--text-primary);
+        }
+
+        /* ── Evidence Tree Button ── */
+        .evidence-btn {
+            background: var(--surface-3);
+            border: 1px solid var(--border-subtle);
+            padding: 2px 8px;
+            border-radius: var(--radius-sm);
+            color: var(--text-disabled);
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            cursor: pointer;
+            transition: all var(--duration-fast) var(--ease-out);
+            white-space: nowrap;
+        }
+        .evidence-btn:hover {
+            background: var(--surface-4);
+            color: var(--accent-text);
+            border-color: var(--border-default);
+        }
+
+        /* ── Evidence Tree Modal ── */
+        .evidence-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: var(--surface-overlay);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(8px);
+        }
+        .evidence-modal.active { display: flex; }
+        .evidence-modal-content {
+            background: var(--surface-1);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-xl);
+            max-width: 1100px;
+            width: 94%;
+            max-height: 88vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            animation: scaleIn var(--duration-slow) var(--ease-out);
+        }
+        .evidence-tree-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--space-5) var(--space-6);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .evidence-tree-header h3 {
+            font-family: var(--font-display);
+            font-size: var(--text-lg);
+            color: var(--text-primary);
+            margin: 0;
+            font-weight: 600;
+        }
+        .evidence-tree-body {
+            flex: 1;
+            overflow: auto;
+            padding: var(--space-4) var(--space-6) var(--space-6);
+        }
+        /* Interactive tree nodes */
+        .ev-node { margin-left: 1.25rem; }
+        .ev-node-root { margin-left: 0; }
+        .ev-key {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            padding: 3px 0;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            transition: color var(--duration-fast) var(--ease-out);
+        }
+        .ev-key:hover { color: var(--accent-text); }
+        .ev-key .ev-toggle {
+            display: inline-block;
+            width: 14px;
+            text-align: center;
+            color: var(--text-disabled);
+            font-size: 0.7rem;
+            transition: transform var(--duration-fast) var(--ease-out);
+        }
+        .ev-key.collapsed .ev-toggle { transform: rotate(-90deg); }
+        .ev-key-name { color: #e2b56a; font-weight: 500; }
+        .ev-key-type { color: var(--text-disabled); font-size: 0.68rem; font-style: italic; margin-left: 4px; }
+        .ev-val { font-family: var(--font-mono); font-size: 0.78rem; padding: 2px 0 2px 1.25rem; }
+        .ev-val-string { color: #98c379; }
+        .ev-val-number { color: #d19a66; }
+        .ev-val-boolean { color: #c678dd; }
+        .ev-val-null { color: var(--text-disabled); font-style: italic; }
+        .ev-children { overflow: hidden; transition: max-height 0.2s ease; }
+        .ev-children.collapsed { max-height: 0 !important; }
             border-color: var(--border-default);
         }
 
@@ -4497,8 +4629,8 @@
 
             // Content Inventory
             const inventoryEl = document.getElementById('contentInventory');
-            const inventory = extraction.content_inventory || {};
-            const inventoryEntries = Object.entries(inventory).filter(([, v]) => v > 0);
+            const inventoryData = extraction.content_inventory || {};
+            const inventoryEntries = Object.entries(inventoryData).filter(([, v]) => v > 0);
 
             if (inventoryEntries.length > 0) {
                 let inventoryHTML = '<div class="inventory-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">';
@@ -4532,12 +4664,12 @@
 
             // Content Samples
             const samplesEl = document.getElementById('contentSamples');
-            const samples = extraction.samples || [];
+            const samplesData = extraction.samples || [];
 
-            if (samples.length > 0) {
+            if (samplesData.length > 0) {
                 let samplesHTML = '<div style="display: grid; gap: 1rem;">';
 
-                samples.forEach((sample, idx) => {
+                samplesData.forEach((sample, idx) => {
                     samplesHTML += `
                         <div style="padding: 1.5rem; background: #1e1e1e; border-radius: 8px; border: 1px solid #333;">
                             <div style="display: flex; align-items: start; gap: 1rem; margin-bottom: 1rem;">
@@ -4573,32 +4705,32 @@
 
             // Extraction Strategy
             const strategyEl = document.getElementById('extractionStrategy');
-            const strategy = extraction.extraction_strategy || {};
+            const strategyData = extraction.extraction_strategy || {};
 
             let strategyHTML = '<div style="padding: 1.5rem; background: #1e1e1e; border-radius: 8px;">';
 
-            if (strategy.primary_selector) {
+            if (strategyData.primary_selector) {
                 strategyHTML += `
                     <div style="margin-bottom: 1.5rem;">
                         <div style="font-weight: 600; color: #fff; margin-bottom: 0.5rem;">Primary Selector</div>
-                        <code style="background: #0a0a0a; padding: 0.75rem; border-radius: 4px; display: block; color: #00ff88; font-family: 'SF Mono', monospace;">${strategy.primary_selector}</code>
+                        <code style="background: #0a0a0a; padding: 0.75rem; border-radius: 4px; display: block; color: #00ff88; font-family: 'SF Mono', monospace;">${strategyData.primary_selector}</code>
                     </div>
                 `;
             }
 
-            if (strategy.fallback_selector) {
+            if (strategyData.fallback_selector) {
                 strategyHTML += `
                     <div style="margin-bottom: 1.5rem;">
                         <div style="font-weight: 600; color: #fff; margin-bottom: 0.5rem;">Fallback Selector</div>
-                        <code style="background: #0a0a0a; padding: 0.75rem; border-radius: 4px; display: block; color: #ff9f0a; font-family: 'SF Mono', monospace;">${strategy.fallback_selector}</code>
+                        <code style="background: #0a0a0a; padding: 0.75rem; border-radius: 4px; display: block; color: #ff9f0a; font-family: 'SF Mono', monospace;">${strategyData.fallback_selector}</code>
                     </div>
                 `;
             }
 
-            if (strategy.detection_method) {
-                const methodLabel = strategy.detection_method === 'generic_sibling_clustering'
+            if (strategyData.detection_method) {
+                const methodLabel = strategyData.detection_method === 'generic_sibling_clustering'
                     ? 'Generic DOM Analysis (no hardcoded selectors)'
-                    : strategy.detection_method;
+                    : strategyData.detection_method;
                 strategyHTML += `
                     <div style="margin-bottom: 1rem;">
                         <span style="display: inline-block; background: rgba(255,159,10,0.15); color: #ff9f0a; font-size: 0.75rem; padding: 3px 10px; border-radius: 4px; font-weight: 600;">Detection: ${methodLabel}</span>
@@ -4606,17 +4738,17 @@
                 `;
             }
 
-            if (strategy.reasoning) {
+            if (strategyData.reasoning) {
                 strategyHTML += `
                     <div style="margin-bottom: 1.5rem;">
                         <div style="font-weight: 600; color: #fff; margin-bottom: 0.5rem;">Why This Selector?</div>
-                        <div style="color: #ccc;">${strategy.reasoning}</div>
+                        <div style="color: #ccc;">${strategyData.reasoning}</div>
                     </div>
                 `;
             }
 
-            if (strategy.item_anatomy) {
-                const anatomy = strategy.item_anatomy;
+            if (strategyData.item_anatomy) {
+                const anatomy = strategyData.item_anatomy;
                 const pills = [];
                 if (anatomy.has_image) pills.push('Images');
                 if (anatomy.has_heading) pills.push('Headings');
@@ -4635,22 +4767,22 @@
                 }
             }
 
-            if (strategy.validation && strategy.validation.length > 0) {
+            if (strategyData.validation && strategyData.validation.length > 0) {
                 strategyHTML += `
                     <div style="margin-bottom: 1.5rem;">
                         <div style="font-weight: 600; color: #fff; margin-bottom: 0.75rem;">Validation Checks</div>
                         <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                            ${strategy.validation.map(check => `<div style="color: #00ff88;">✓ ${check}</div>`).join('')}
+                            ${strategyData.validation.map(check => `<div style="color: #00ff88;">✓ ${check}</div>`).join('')}
                         </div>
                     </div>
                 `;
             }
 
-            if (strategy.confidence) {
-                const stratConfClass = strategy.confidence >= 80 || strategy.confidence === 'high' ? 'high' :
-                                      strategy.confidence >= 60 || strategy.confidence === 'medium' ? 'medium' : 'low';
-                const stratConfValue = typeof strategy.confidence === 'number' ? strategy.confidence :
-                                      strategy.confidence === 'high' ? 90 : strategy.confidence === 'medium' ? 70 : 50;
+            if (strategyData.confidence) {
+                const stratConfClass = strategyData.confidence >= 80 || strategyData.confidence === 'high' ? 'high' :
+                                      strategyData.confidence >= 60 || strategyData.confidence === 'medium' ? 'medium' : 'low';
+                const stratConfValue = typeof strategyData.confidence === 'number' ? strategyData.confidence :
+                                      strategyData.confidence === 'high' ? 90 : strategyData.confidence === 'medium' ? 70 : 50;
 
                 strategyHTML += `
                     <div>
@@ -5045,13 +5177,26 @@
                     : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--space-4);';
                 metricsContainer.style.cssText = colStyle;
 
+                const categoryCards = [];
                 category.metrics.forEach(metric => {
                     const data = evidence[metric.key];
                     if (!data) return;
 
                     const card = createMetricCard(metric.icon, metric.title, data);
+                    categoryCards.push(card);
                     metricsContainer.appendChild(card);
                 });
+
+                // Promote top-scoring non-large card to featured (2-col span)
+                const promotable = categoryCards.filter(c => !c.classList.contains('large') && !c.classList.contains('card-compact'));
+                if (promotable.length >= 3) {
+                    const best = promotable.reduce((a, b) =>
+                        parseInt(a.dataset.compositeScore || 0) > parseInt(b.dataset.compositeScore || 0) ? a : b
+                    );
+                    if (parseInt(best.dataset.compositeScore || 0) >= 50) {
+                        best.classList.add('card-featured');
+                    }
+                }
 
                 // Toggle functionality
                 header.addEventListener('click', () => {
@@ -5363,17 +5508,33 @@
             `;
         }
 
+        // ── Evidence richness scoring — how much data does this card have? ──
+        function computeEvidenceRichness(title, data) {
+            let score = 0;
+            if (!data) return 0;
+            // Count meaningful nested keys
+            const countKeys = (obj, depth) => {
+                if (!obj || typeof obj !== 'object' || depth > 3) return 0;
+                let n = 0;
+                for (const k of Object.keys(obj)) {
+                    n++;
+                    if (Array.isArray(obj[k])) n += Math.min(obj[k].length, 10);
+                    else if (typeof obj[k] === 'object') n += countKeys(obj[k], depth + 1);
+                }
+                return n;
+            };
+            score = countKeys(data, 0);
+            // Specific richness signals
+            if (data.details) score += 10;
+            if (data.palette) score += 8;
+            if (data.levels && data.levels.length) score += data.levels.length * 2;
+            if (data.scale && data.scale.length) score += data.scale.length;
+            return Math.min(100, score);
+        }
+
         function createMetricCard(icon, title, data) {
             const card = document.createElement('div');
             card.className = 'metric-card';
-
-            // Add size classes based on card importance (for designers/builders)
-            const highValueCards = ['Layout System', 'Typography', 'Color Palette', 'Spacing Scale', 'Motion Tokens', 'Spatial Composition'];
-            const mediumValueCards = ['Responsive Breakpoints', 'DOM Depth', 'API Patterns'];
-
-            if (highValueCards.includes(title)) {
-                card.classList.add('large');
-            }
 
             const confidenceClass = data.confidence >= 80 ? 'high' : data.confidence >= 60 ? 'medium' : 'low';
 
@@ -5382,6 +5543,35 @@
                 ? (data.confidence <= 1 ? Math.round(data.confidence * 100) : Math.round(data.confidence))
                 : 0;
             card.dataset.confidence = confNum;
+
+            // ── Confidence-driven color temperature ──
+            // High = warm amber, medium = neutral, low = cool blue-gray
+            let hue, sat, lit;
+            if (confNum >= 85)      { hue = 38;  sat = '55%'; lit = '55%'; }
+            else if (confNum >= 70) { hue = 30;  sat = '40%'; lit = '48%'; }
+            else if (confNum >= 50) { hue = 220; sat = '25%'; lit = '50%'; }
+            else                    { hue = 210; sat = '12%'; lit = '40%'; }
+            card.style.setProperty('--card-accent', `hsl(${hue}, ${sat}, ${lit})`);
+            card.style.setProperty('--card-accent-muted', `hsla(${hue}, ${sat}, ${lit}, 0.10)`);
+            card.style.setProperty('--card-border', `hsla(${hue}, ${sat}, ${lit}, 0.18)`);
+
+            // ── Adaptive sizing — richness score drives card prominence ──
+            const richness = computeEvidenceRichness(title, data);
+            const compositeScore = confNum * 0.6 + richness * 0.4;
+            card.dataset.compositeScore = Math.round(compositeScore);
+
+            // Design-system cards get full-width at high confidence
+            const highValueCards = ['Layout System', 'Typography', 'Color Palette', 'Spacing Scale', 'Motion Tokens', 'Spatial Composition'];
+            if (highValueCards.includes(title) && confNum >= 60) {
+                card.classList.add('large');
+            }
+            // Low confidence = compact treatment
+            if (confNum > 0 && confNum < 40) {
+                card.classList.add('card-compact');
+            }
+
+            // Store evidence JSON for the evidence tree viewer
+            card.dataset.evidenceKey = title;
 
             // ── Generate card body content via existing builders ──
             let bodyHTML = '';
@@ -5466,8 +5656,22 @@
                         <span class="metric-icon">${icon}</span>
                         ${title}
                     </div>
-                    ${data.confidence ? `<div class="confidence-badge confidence-${confidenceClass}">${confNum}%</div>` : ''}
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <button class="evidence-btn" onclick="openEvidenceTree(this)" title="Explore evidence data">{ }</button>
+                        ${data.confidence ? `<div class="confidence-badge confidence-${confidenceClass}">${confNum}%</div>` : ''}
+                    </div>
                 `;
+            } else {
+                // Inject evidence button into existing headers
+                const badge = existingHeader.querySelector('.confidence-badge');
+                if (badge && !existingHeader.querySelector('.evidence-btn')) {
+                    const btn = document.createElement('button');
+                    btn.className = 'evidence-btn';
+                    btn.title = 'Explore evidence data';
+                    btn.textContent = '{ }';
+                    btn.onclick = function() { openEvidenceTree(this); };
+                    badge.parentNode.insertBefore(btn, badge);
+                }
             }
 
             // Collect everything after the header as body content
@@ -5675,17 +5879,28 @@
             const allColors = [...primaryColors, ...secondaryColors];
             const cleanColors = allColors.filter(c => c && typeof c === 'string' && (c.startsWith('#') || c.startsWith('rgb') || c.startsWith('hsl')) && !c.includes(' rgb'));
 
-            const colorSwatchesHTML = cleanColors.slice(0, 8).map(color => `
-                <div style="display: inline-flex; flex-direction: column; align-items: center; margin: 0.5rem;">
-                    <div style="width: 48px; height: 48px; background: ${color}; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 0.5rem;" title="${color}"></div>
-                    <span style="font-size: 0.75rem; color: #888; font-family: var(--font-mono); max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${color.length > 15 ? color.substring(0, 12) + '...' : color}</span>
+            // Palette strip — full-width proportional bar showing the palette at a glance
+            const paletteStripHTML = cleanColors.length > 1 ? `
+                <div style="display: flex; height: 32px; border-radius: 8px; overflow: hidden; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.08);">
+                    ${cleanColors.slice(0, 12).map(color => `
+                        <div style="flex: 1; background: ${color};" title="${color}"></div>
+                    `).join('')}
+                </div>
+            ` : '';
+
+            // Enlarged swatches with better labels
+            const colorSwatchesHTML = cleanColors.slice(0, 10).map((color, i) => `
+                <div style="display: inline-flex; flex-direction: column; align-items: center; margin: 0.25rem;">
+                    <div style="width: 56px; height: 56px; background: ${color}; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 0.4rem; box-shadow: 0 2px 8px rgba(0,0,0,0.3);" title="${color}"></div>
+                    <span style="font-size: 0.68rem; color: #777; font-family: var(--font-mono); max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${color.length > 9 ? color.substring(0, 7) : color}</span>
                 </div>
             `).join('');
 
             return `
                 <div class="metric-value">${data.pattern}</div>
-                ${colorSwatchesHTML ? `<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">${colorSwatchesHTML}</div>` : ''}
-                ${cleanColors.length > 8 ? `<div style="margin-top: 1rem; padding: 0.75rem; background: rgba(10,132,255,0.1); border-radius: 6px; color: #0a84ff; font-size: 0.85rem;">+${cleanColors.length - 8} more colors detected</div>` : ''}
+                ${paletteStripHTML}
+                ${colorSwatchesHTML ? `<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem;">${colorSwatchesHTML}</div>` : ''}
+                ${cleanColors.length > 10 ? `<div style="margin-top: 0.75rem; padding: 0.6rem; background: rgba(10,132,255,0.08); border-radius: 6px; color: #0a84ff; font-size: 0.8rem;">+${cleanColors.length - 10} more colors detected</div>` : ''}
                 ${data.color_roles && Object.keys(data.color_roles).length > 0 ? `
                     <div style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem;">
                         <div style="font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Semantic Roles</div>
@@ -5889,6 +6104,28 @@
                 ${frequencyHTML}
                 ${gapVisualsHTML}
                 ${visualBarsHTML}
+                ${(() => {
+                    // Spacing rhythm strip — shows scale as actual vertical gaps
+                    const vals = isTokenScale
+                        ? scale.map(t => parseFloat(t.value)).filter(v => v > 0 && v <= 128)
+                        : (Array.isArray(scale) ? scale.filter(v => v > 0 && v <= 128) : []);
+                    if (vals.length < 2) return '';
+                    const sorted = [...new Set(vals)].sort((a, b) => a - b).slice(0, 8);
+                    const maxVal = Math.max(...sorted);
+                    return `
+                        <div style="margin: 1.25rem 0; padding: 1.25rem; background: #0a0a0a; border-radius: 8px;">
+                            <div style="font-size: 0.68rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem;">Spacing Rhythm</div>
+                            <div style="display: flex; align-items: flex-end; gap: 0.5rem; height: ${Math.min(maxVal * 0.6 + 30, 120)}px;">
+                                ${sorted.map(v => {
+                                    const h = Math.max(4, v * 0.6);
+                                    return `<div style="display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1;">
+                                        <div style="font-size: 0.62rem; color: #888; font-family: var(--font-mono);">${v}px</div>
+                                        <div style="width: 100%; max-width: 48px; height: ${h}px; background: linear-gradient(180deg, rgba(10,132,255,0.8) 0%, rgba(10,132,255,0.3) 100%); border-radius: 3px;"></div>
+                                    </div>`;
+                                }).join('')}
+                            </div>
+                        </div>`;
+                })()}
                 <div class="metric-stats">
                     <span>📊 ${isTokenScale ? scale.length + ' tokens' : data.total_instances + ' instances'}</span>
                     <span>🎯 ${isTokenScale ? data.base_unit + ' based' : data.unique_values + ' unique values'}</span>
@@ -6861,17 +7098,34 @@
                 </div>
             ` : '';
 
-            // Heading scale visualization
+            // Type specimen — render headings at their ACTUAL sizes
             const headingScaleHTML = headings.length > 0 ? `
-                <div style="margin-top: 1rem; padding: 1rem; background: #0a0a0a; border-radius: 6px;">
-                    <div style="font-weight: 600; margin-bottom: 0.75rem; color: #fff;">Type Scale</div>
-                    ${headings.slice(0, 6).map(h => `
-                        <div style="display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid #333;">
-                            <code style="color: #0a84ff; font-size: 0.75rem; width: 40px;">${h.tag}</code>
-                            <div style="flex: 1; font-size: 0.85rem; color: #888;">${h.fontSize}</div>
-                            <div style="font-size: 0.75rem; color: #666;">weight: ${h.fontWeight}</div>
+                <div style="margin-top: 1rem; padding: 1.25rem; background: #0a0a0a; border-radius: 8px;">
+                    <div style="font-size: 0.68rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem;">Type Specimen</div>
+                    ${headings.slice(0, 6).map(h => {
+                        const fam = h.fontFamily ? h.fontFamily.split(',')[0].replace(/['"]/g, '').trim() : 'inherit';
+                        const size = parseFloat(h.fontSize) || 16;
+                        // Scale large headings down proportionally so they fit, but preserve relative sizing
+                        const displaySize = size > 48 ? Math.round(48 + (size - 48) * 0.3) : size;
+                        return `
+                        <div style="margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <div style="font-family: '${fam}', sans-serif; font-size: ${displaySize}px; font-weight: ${h.fontWeight || 400}; color: var(--text-primary); line-height: 1.2; margin-bottom: 0.35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                ${h.tag.toUpperCase()} Heading
+                            </div>
+                            <div style="display: flex; gap: 0.75rem; font-size: 0.68rem; color: #555;">
+                                <span style="color: #0a84ff;">${h.tag}</span>
+                                <span>${h.fontSize}</span>
+                                <span>wt ${h.fontWeight}</span>
+                                <span style="color: #444;">${fam}</span>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                    ${body.fontSize ? `
+                        <div style="margin-top: 0.5rem; font-family: '${(body.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim() || 'inherit'}', sans-serif; font-size: ${body.fontSize}; line-height: ${body.lineHeight || '1.6'}; color: var(--text-secondary);">
+                            Body text renders at ${body.fontSize} with ${body.lineHeight || 'default'} line-height. This sentence shows how readable paragraphs feel at this scale.
                         </div>
-                    `).join('')}
+                        <div style="font-size: 0.68rem; color: #555; margin-top: 0.35rem;">body &middot; ${body.fontSize} &middot; ${body.lineHeight || 'auto'} leading</div>
+                    ` : ''}
                 </div>
             ` : '';
 
@@ -7779,7 +8033,7 @@
                             <div style="height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
                                 <div style="height:100%; width:${score}%; background:${gradeColor}; border-radius:3px; transition:width 0.6s;"></div>
                             </div>
-                            <div style="font-size:0.68rem; color:#666; margin-top:3px;">${score}/100 — ${checks.filter(c => c.pass).length} of ${checks.length} checks passed</div>
+                            <div style="font-size:0.68rem; color:#666; margin-top:3px;">${score}/100 — ${Object.values(checks).filter(c => c.pass).length} of ${Object.keys(checks).length} checks passed</div>
                         </div>
                     </div>
 
@@ -11381,13 +11635,17 @@
         // ── Motion Track Interaction (hover/tap to play) ──────────────
         function initMotionTracks() {
             document.addEventListener('mouseenter', function(e) {
-                const track = e.target.closest('.motion-track');
+                const el = e.target.closest ? e.target : e.target.parentElement;
+                if (!el) return;
+                const track = el.closest('.motion-track');
                 if (track && !track.classList.contains('motion-track--active')) {
                     triggerMotionTrack(track);
                 }
             }, true);
             document.addEventListener('touchstart', function(e) {
-                const track = e.target.closest('.motion-track');
+                const el = e.target.closest ? e.target : e.target.parentElement;
+                if (!el) return;
+                const track = el.closest('.motion-track');
                 if (track && !track.classList.contains('motion-track--active')) {
                     triggerMotionTrack(track);
                 }
@@ -11677,6 +11935,150 @@
             originalDisplayMetrics(evidence);
             setTimeout(enhanceMetricDescriptions, 100);
         };
+
+        // ══════════════════════════════════════════════════════
+        // EVIDENCE TREE VIEWER — Interactive JSON exploration
+        // ══════════════════════════════════════════════════════
+
+        // Store evidence data globally so the tree viewer can access it
+        let _currentEvidence = null;
+        const _origDisplayMetrics2 = displayMetrics;
+        displayMetrics = function(evidence) {
+            _currentEvidence = evidence;
+            _origDisplayMetrics2(evidence);
+        };
+
+        function openEvidenceTree(btn) {
+            const card = btn.closest('.metric-card');
+            const key = card?.dataset.evidenceKey;
+            if (!key || !_currentEvidence) return;
+
+            // Find the evidence data for this card
+            let evidenceData = null;
+            const categories = [
+                { metrics: [{key:'typography',title:'Typography'},{key:'spacing_scale',title:'Spacing Scale'},{key:'colors',title:'Color Palette'},{key:'layout',title:'Layout System'},{key:'shadow_system',title:'Shadow System'},{key:'border_radius',title:'Border Radius'}] },
+                { metrics: [{key:'visual_hierarchy',title:'Visual Hierarchy'},{key:'spatial_composition',title:'Spatial Composition'},{key:'content_extraction',title:'Content Extraction'}] },
+                { metrics: [{key:'responsive_breakpoints',title:'Responsive Breakpoints'},{key:'dom_depth',title:'DOM Depth'},{key:'css_tricks',title:'CSS Efficiency'},{key:'css_specificity',title:'CSS Specificity'}] },
+                { metrics: [{key:'motion_tokens',title:'Motion Tokens'},{key:'interaction_states',title:'Interaction States'},{key:'interactive_elements',title:'Interactive Elements'},{key:'cdp_animations',title:'Runtime Animations'}] },
+                { metrics: [{key:'seo',title:'SEO'},{key:'security',title:'Security'},{key:'third_party',title:'Third-Party'},{key:'contrast_a11y',title:'Contrast Audit'},{key:'a11y_tree',title:'Accessibility'}] },
+                { metrics: [{key:'site_architecture',title:'Site Architecture'},{key:'site_topology',title:'Site Topology'},{key:'url_patterns',title:'URL Patterns'},{key:'api_relationships',title:'API Map'},{key:'content_layout',title:'Reading Experience'}] }
+            ];
+            for (const cat of categories) {
+                for (const m of cat.metrics) {
+                    if (m.title === key && _currentEvidence[m.key]) {
+                        evidenceData = _currentEvidence[m.key];
+                        break;
+                    }
+                }
+                if (evidenceData) break;
+            }
+            if (!evidenceData) {
+                // Fallback: search all evidence keys
+                for (const [k, v] of Object.entries(_currentEvidence)) {
+                    if (v && typeof v === 'object' && v.pattern && k.replace(/_/g, ' ').toLowerCase().includes(key.toLowerCase().substring(0, 6))) {
+                        evidenceData = v;
+                        break;
+                    }
+                }
+            }
+            if (!evidenceData) return;
+
+            const modal = document.getElementById('evidenceModal');
+            const title = document.getElementById('evidenceModalTitle');
+            const body = document.getElementById('evidenceModalBody');
+            title.textContent = key + ' — Evidence';
+            body.innerHTML = '';
+            body.appendChild(buildEvidenceTree(evidenceData, true));
+            modal.classList.add('active');
+        }
+
+        function closeEvidenceModal() {
+            document.getElementById('evidenceModal').classList.remove('active');
+        }
+
+        function buildEvidenceTree(obj, isRoot) {
+            const container = document.createElement('div');
+            container.className = isRoot ? 'ev-node ev-node-root' : 'ev-node';
+
+            if (obj === null || obj === undefined) {
+                const val = document.createElement('div');
+                val.className = 'ev-val ev-val-null';
+                val.textContent = 'null';
+                container.appendChild(val);
+                return container;
+            }
+
+            if (typeof obj !== 'object') {
+                const val = document.createElement('div');
+                const type = typeof obj;
+                val.className = 'ev-val ev-val-' + (type === 'string' ? 'string' : type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'null');
+                val.textContent = type === 'string' ? '"' + (obj.length > 200 ? obj.substring(0, 200) + '...' : obj) + '"' : String(obj);
+                container.appendChild(val);
+                return container;
+            }
+
+            const entries = Array.isArray(obj) ? obj.map((v, i) => [i, v]) : Object.entries(obj);
+            const isLargeArray = Array.isArray(obj) && obj.length > 20;
+
+            entries.slice(0, isLargeArray ? 20 : 100).forEach(([key, value], idx) => {
+                const row = document.createElement('div');
+                const isExpandable = value && typeof value === 'object';
+                const childId = 'ev_' + Math.random().toString(36).substr(2, 8);
+
+                // Key label
+                const keyEl = document.createElement('div');
+                keyEl.className = 'ev-key';
+                const typeLabel = Array.isArray(value) ? `[${value.length}]` : (value && typeof value === 'object') ? `{${Object.keys(value).length}}` : '';
+                keyEl.innerHTML = `${isExpandable ? '<span class="ev-toggle">▼</span>' : '<span style="width:14px;display:inline-block;"></span>'}
+                    <span class="ev-key-name">${Array.isArray(obj) ? '[' + key + ']' : key}</span>
+                    ${!isExpandable ? '' : '<span class="ev-key-type">' + typeLabel + '</span>'}`;
+
+                if (isExpandable) {
+                    keyEl.addEventListener('click', () => {
+                        const children = document.getElementById(childId);
+                        if (children) {
+                            const collapsed = children.classList.toggle('collapsed');
+                            keyEl.classList.toggle('collapsed', collapsed);
+                        }
+                    });
+                }
+
+                row.appendChild(keyEl);
+
+                if (isExpandable) {
+                    const children = document.createElement('div');
+                    children.className = 'ev-children';
+                    children.id = childId;
+                    // Auto-collapse deep children and large arrays
+                    const depth = container.closest('.ev-node-root') ? 0 : 1;
+                    if (!isRoot || idx > 5) {
+                        children.classList.add('collapsed');
+                        keyEl.classList.add('collapsed');
+                    }
+                    children.appendChild(buildEvidenceTree(value, false));
+                    row.appendChild(children);
+                } else {
+                    const val = document.createElement('span');
+                    const type = typeof value;
+                    val.className = 'ev-val ev-val-' + (value === null ? 'null' : type === 'string' ? 'string' : type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'null');
+                    const display = value === null ? 'null' : type === 'string' ? '"' + (value.length > 80 ? value.substring(0, 80) + '...' : value) + '"' : String(value);
+                    val.textContent = ' ' + display;
+                    keyEl.appendChild(val);
+                }
+
+                container.appendChild(row);
+            });
+
+            if (isLargeArray && obj.length > 20) {
+                const more = document.createElement('div');
+                more.className = 'ev-val ev-val-null';
+                more.style.paddingLeft = '1.25rem';
+                more.textContent = `... +${obj.length - 20} more items`;
+                container.appendChild(more);
+            }
+
+            return container;
+        }
     </script>
 
     <!-- Color Preview Modal -->
@@ -11687,6 +12089,17 @@
                 <button class="modal-close" onclick="closeColorModal()">×</button>
             </div>
             <div id="colorModalBody"></div>
+        </div>
+    </div>
+
+    <!-- Evidence Tree Modal -->
+    <div id="evidenceModal" class="evidence-modal" onclick="if(event.target===this)closeEvidenceModal()">
+        <div class="evidence-modal-content">
+            <div class="evidence-tree-header">
+                <h3 id="evidenceModalTitle">Evidence</h3>
+                <button class="modal-close" onclick="closeEvidenceModal()">×</button>
+            </div>
+            <div class="evidence-tree-body" id="evidenceModalBody"></div>
         </div>
     </div>
 </body>
