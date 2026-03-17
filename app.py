@@ -283,6 +283,47 @@ def rip_component():
         }), 500
 
 
+@app.route('/api/discover-components', methods=['POST'])
+def discover_components():
+    """
+    Component Discovery — scan a page and return a visual inventory of all
+    detectable components with bounding boxes, screenshots, and labels.
+
+    Request body:
+    {
+        "site_url": "https://polyesterzine.com"
+    }
+    """
+    data = request.json
+    site_url = data.get('site_url')
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    try:
+        print(f"\n{'='*70}")
+        print(f" 🔍 COMPONENT DISCOVERY: {site_url}")
+        print('='*70)
+
+        ripper = ComponentRipper(site_url)
+        result = run_async(ripper.discover_components())
+
+        print(f"\n✅ Discovery complete: {result.get('total', 0)} components found")
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        logger.error(f"Error during component discovery: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Component discovery failed.',
+            'detail': str(e)
+        }), 500
+
+
 @app.route('/api/rip-component/cross-site', methods=['POST'])
 def rip_component_cross_site():
     """

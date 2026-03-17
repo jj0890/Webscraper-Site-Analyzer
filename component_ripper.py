@@ -641,6 +641,317 @@ class ComponentRipper:
             logging.getLogger(__name__).error(f"Figma output failed: {traceback.format_exc()}")
             blueprint['figma_markdown'] = f'<!-- Figma output generation failed: {e} -->'
 
+    async def discover_components(self, page=None):
+        """
+        Discover ALL visible components on a page and return a visual inventory.
+        Unlike _rip_page_sections (which picks the best per category), this returns
+        every meaningful section with bounding boxes, labels, and content previews.
+
+        Returns a list of component descriptors, each with:
+        - selector: CSS selector to target this component
+        - label: Human-readable name (e.g. "Navigation Bar", "12-Item Content Grid")
+        - category: Semantic category (navigation, hero, content_grid, section, footer, etc.)
+        - bounds: {top, left, width, height} bounding box
+        - score: Relevance score
+        - preview: Content summary (text snippet, child count, image count)
+        - rippable: Whether this can be passed to the targeted ripper
+        """
+        close_browser = False
+        if page is None:
+            from patchright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            browser = await self._pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+            page = await context.new_page()
+            page.set_default_timeout(60000)
+            await page.goto(self.url, wait_until='domcontentloaded', timeout=60000)
+            await asyncio.sleep(3)
+            close_browser = True
+
+        try:
+            components = await page.evaluate('''() => {
+                const vw = window.innerWidth;
+                const vh = window.innerHeight;
+                const results = [];
+                const seen = new Set();
+
+                function getSelector(el) {
+                    if (el.id) return '#' + CSS.escape(el.id);
+                    const tag = el.tagName.toLowerCase();
+                    const cn = (typeof el.className === 'string') ? el.className : (el.className?.baseVal || '');
+                    if (cn) {
+                        const first = cn.trim().split(/\\s+/)[0];
+                        if (first) {
+                            const sel = tag + '.' + CSS.escape(first);
+                            // Verify uniqueness
+                            if (document.querySelectorAll(sel).length === 1) return sel;
+                        }
+                    }
+                    // Use nth-child fallback
+                    const parent = el.parentElement;
+                    if (!parent) return tag;
+                    const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+                    if (siblings.length === 1) {
+                        const parentSel = parent.id ? '#' + CSS.escape(parent.id) : parent.tagName.toLowerCase();
+                        return parentSel + ' > ' + tag;
+                    }
+                    const idx = siblings.indexOf(el) + 1;
+                    const parentSel = parent.id ? '#' + CSS.escape(parent.id) : parent.tagName.toLowerCase();
+                    return parentSel + ' > ' + tag + ':nth-child(' + idx + ')';
+                }
+
+                function getPreview(el) {
+                    const text = (el.textContent || '').trim().substring(0, 120);
+                    const imgs = el.querySelectorAll('img, picture, video, svg').length;
+                    const links = el.querySelectorAll('a').length;
+                    const buttons = el.querySelectorAll('button, [role="button"]').length;
+                    const inputs = el.querySelectorAll('input, textarea, select').length;
+                    const headings = el.querySelectorAll('h1, h2, h3, h4, h5, h6').length;
+                    const children = el.children.length;
+                    return { text, imgs, links, buttons, inputs, headings, children };
+                }
+
+                function classify(el, rect) {
+                    const tag = el.tagName.toLowerCase();
+                    const role = el.getAttribute('role') || '';
+                    const cn = ((typeof el.className === 'string') ? el.className : '').toLowerCase();
+                    const s = window.getComputedStyle(el);
+
+                    // Navigation
+                    if (tag === 'nav' || tag === 'header' || role === 'navigation' || role === 'banner') {
+                        const linkCount = el.querySelectorAll('a').length;
+                        return { category: 'navigation', label: linkCount > 0 ? `Navigation (${linkCount} links)` : 'Header', priority: 90 };
+                    }
+
+                    // Footer
+                    if (tag === 'footer' || role === 'contentinfo') {
+                        const linkCount = el.querySelectorAll('a').length;
+                        return { category: 'footer', label: linkCount > 0 ? `Footer (${linkCount} links)` : 'Footer', priority: 70 };
+                    }
+
+                    // Hero — large section near top with imagery, but NOT the whole page
+                    if (rect.top < vh * 0.5 && rect.height > vh * 0.3 && rect.height < vh * 1.5) {
+                        const hasImg = el.querySelectorAll('img, video, picture').length > 0;
+                        const hasCTA = el.querySelectorAll('button, a[href]').length > 0;
+                        const bgImg = s.backgroundImage !== 'none';
+                        const links = el.querySelectorAll('a').length;
+                        // Exclude if it's really just the whole page or a nav-heavy container
+                        if ((hasImg || bgImg || hasCTA) && links < 30) {
+                            return { category: 'hero', label: 'Hero Section', priority: 85 };
+                        }
+                    }
+
+                    // Form
+                    if (tag === 'form' || el.querySelector('form')) {
+                        const inputCount = el.querySelectorAll('input, textarea, select').length;
+                        if (inputCount > 0) {
+                            return { category: 'form', label: `Form (${inputCount} fields)`, priority: 75 };
+                        }
+                    }
+
+                    // Media/Player
+                    if (cn.includes('player') || cn.includes('audio') || cn.includes('video') ||
+                        el.querySelector('audio, video, [class*="player"]')) {
+                        return { category: 'media', label: 'Media Player', priority: 80 };
+                    }
+
+                    // Content grid — find repeating children
+                    const kids = Array.from(el.children).filter(c => {
+                        const cr = c.getBoundingClientRect();
+                        return cr.width > 40 && cr.height > 20;
+                    });
+                    if (kids.length >= 3) {
+                        const groups = {};
+                        for (const kid of kids) {
+                            const kt = kid.tagName;
+                            if (!groups[kt]) groups[kt] = [];
+                            groups[kt].push(kid);
+                        }
+                        for (const [, group] of Object.entries(groups)) {
+                            if (group.length < 3) continue;
+                            const sig = (el2) => {
+                                const ct = Array.from(el2.children).map(c => c.tagName).sort().join(',');
+                                return ct + '|' + (!!el2.querySelector('img')) + '|' + (!!el2.querySelector('a'));
+                            };
+                            const ref = sig(group[0]);
+                            const matching = group.filter(el2 => sig(el2) === ref);
+                            if (matching.length >= 3) {
+                                const hasImgs = !!matching[0].querySelector('img, picture');
+                                const hasHeadings = !!matching[0].querySelector('h1,h2,h3,h4');
+                                const itemType = hasImgs && hasHeadings ? 'Card' :
+                                                 hasImgs ? 'Image' :
+                                                 hasHeadings ? 'Text' : 'Item';
+                                return {
+                                    category: 'content_grid',
+                                    label: `${matching.length}-Item ${itemType} Grid`,
+                                    priority: 80,
+                                    meta: { itemCount: matching.length, hasImages: hasImgs, hasHeadings }
+                                };
+                            }
+                        }
+                    }
+
+                    // Generic section
+                    if (tag === 'section' || tag === 'main' || tag === 'article' ||
+                        role === 'main' || role === 'region') {
+                        const headingEl = el.querySelector('h1, h2, h3');
+                        const heading = headingEl ? headingEl.textContent.trim().substring(0, 60) : null;
+                        const label = heading ? `Section: "${heading}"` : 'Content Section';
+                        return { category: 'section', label, priority: 50 };
+                    }
+
+                    // Aside / sidebar
+                    if (tag === 'aside' || role === 'complementary') {
+                        return { category: 'sidebar', label: 'Sidebar', priority: 60 };
+                    }
+
+                    // Large div with significant content
+                    if (rect.width > vw * 0.5 && rect.height > 100 && kids.length >= 2) {
+                        const headingEl = el.querySelector('h1, h2, h3, h4');
+                        const heading = headingEl ? headingEl.textContent.trim().substring(0, 60) : null;
+                        return {
+                            category: 'block',
+                            label: heading ? `Block: "${heading}"` : 'Content Block',
+                            priority: 30
+                        };
+                    }
+
+                    return null;
+                }
+
+                // Scan semantic elements + large visible divs
+                const candidates = [
+                    ...document.querySelectorAll('nav, header, footer, main, section, article, aside, form, [role="navigation"], [role="banner"], [role="main"], [role="contentinfo"], [role="region"], [role="complementary"]'),
+                    ...Array.from(document.querySelectorAll('div')).filter(d => {
+                        const r = d.getBoundingClientRect();
+                        return r.width > vw * 0.4 && r.height > 80 && d.children.length >= 2;
+                    })
+                ];
+
+                for (const el of candidates) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+
+                    const s = window.getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+
+                    const sel = getSelector(el);
+                    if (seen.has(sel)) continue;
+                    seen.add(sel);
+
+                    const info = classify(el, rect);
+                    if (!info) continue;
+
+                    // Skip elements nested inside already-found elements
+                    const preview = getPreview(el);
+                    const layout = s.display.includes('flex') ? 'flex' :
+                                   s.display.includes('grid') ? 'grid' : 'block';
+
+                    results.push({
+                        selector: sel,
+                        label: info.label,
+                        category: info.category,
+                        priority: info.priority,
+                        bounds: {
+                            top: Math.round(rect.top),
+                            left: Math.round(rect.left),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height)
+                        },
+                        preview,
+                        layout,
+                        tag: el.tagName.toLowerCase(),
+                        meta: info.meta || null
+                    });
+                }
+
+                // Sort by vertical position (top of page first), then priority
+                results.sort((a, b) => {
+                    // Group by vertical thirds of the page
+                    const aThird = Math.floor(a.bounds.top / (vh / 3));
+                    const bThird = Math.floor(b.bounds.top / (vh / 3));
+                    if (aThird !== bThird) return aThird - bThird;
+                    return b.priority - a.priority;
+                });
+
+                // Deduplicate overlapping elements (keep higher priority)
+                // But preserve elements of different categories (nav inside hero = both valid)
+                const filtered = [];
+                for (const comp of results) {
+                    const dominated = filtered.some(existing => {
+                        // Never suppress different categories
+                        if (comp.category !== existing.category) return false;
+                        // Check if this component is mostly inside an existing one
+                        const overlap =
+                            comp.bounds.top >= existing.bounds.top - 5 &&
+                            comp.bounds.left >= existing.bounds.left - 5 &&
+                            (comp.bounds.top + comp.bounds.height) <= (existing.bounds.top + existing.bounds.height + 5) &&
+                            (comp.bounds.left + comp.bounds.width) <= (existing.bounds.left + existing.bounds.width + 5);
+                        return overlap && existing.priority >= comp.priority;
+                    });
+                    if (!dominated) filtered.push(comp);
+                }
+
+                return { components: filtered, viewport: { width: vw, height: vh } };
+            }''')
+
+            component_list = components.get('components', [])
+            viewport = components.get('viewport', {'width': 1920, 'height': 1080})
+
+            # Take element screenshots for each component (max 15 to avoid timeout)
+            for comp in component_list[:15]:
+                try:
+                    el = await page.query_selector(comp['selector'])
+                    if el:
+                        screenshot_bytes = await el.screenshot(timeout=5000)
+                        import base64
+                        comp['screenshot'] = base64.b64encode(screenshot_bytes).decode('utf-8')
+                    else:
+                        comp['screenshot'] = None
+                except Exception:
+                    comp['screenshot'] = None
+
+            # Generate plain-language summary
+            categories = {}
+            for comp in component_list:
+                cat = comp['category']
+                if cat not in categories:
+                    categories[cat] = 0
+                categories[cat] += 1
+
+            summary_parts = []
+            cat_labels = {
+                'navigation': 'navigation bar',
+                'hero': 'hero section',
+                'content_grid': 'content grid',
+                'footer': 'footer',
+                'section': 'content section',
+                'sidebar': 'sidebar',
+                'form': 'form',
+                'media': 'media player',
+                'block': 'content block'
+            }
+            for cat, count in categories.items():
+                label = cat_labels.get(cat, cat)
+                if count > 1:
+                    summary_parts.append(f"{count} {label}s")
+                else:
+                    summary_parts.append(f"1 {label}")
+
+            summary = f"Found {len(component_list)} components: " + ", ".join(summary_parts)
+
+            return {
+                'components': component_list,
+                'viewport': viewport,
+                'summary': summary,
+                'total': len(component_list)
+            }
+
+        finally:
+            if close_browser:
+                await page.context.browser.close()
+                await self._pw.stop()
+
     async def _rip_page_sections(self, page):
         """
         Auto-detect high-value page components using scoring heuristics.

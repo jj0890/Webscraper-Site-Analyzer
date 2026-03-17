@@ -2348,8 +2348,11 @@
                 <div class="content-extraction-container">
                     <div class="content-extraction-header">
                         <h2>📄 Content Extraction</h2>
-                        <p style="color: #888; margin-bottom: 2rem;">Intelligent classification, inventory, and sampling</p>
+                        <p style="color: #888; margin-bottom: 0.75rem;">Intelligent classification, inventory, and sampling</p>
                     </div>
+
+                    <!-- Plain-Language Summary (filled by JS) -->
+                    <div id="contentSummaryBanner" style="display:none; margin-bottom: 2rem; padding: 1.25rem 1.5rem; background: linear-gradient(135deg, rgba(10,132,255,0.08), rgba(52,211,153,0.06)); border-radius: 12px; border: 1px solid rgba(10,132,255,0.15);"></div>
 
                     <!-- Page Classification -->
                     <div class="classification-section">
@@ -2374,6 +2377,9 @@
                         <h3>🔧 Extraction Strategy</h3>
                         <div id="extractionStrategy"></div>
                     </div>
+
+                    <!-- Component Ripper Bridge -->
+                    <div id="ripperBridge" style="display:none; margin-bottom: var(--space-12); padding: 1.5rem; background: var(--surface-2); border-radius: 12px; border: 1px solid var(--border-accent);"></div>
 
                     <!-- Excluded Elements + DOM Quality — combined bottom section -->
                     <div class="excluded-section">
@@ -4425,20 +4431,55 @@
         }
 
         function displayContentExtraction(extraction) {
-            // Page Classification
-            const classificationEl = document.getElementById('pageClassification');
+            // Build plain-language summary banner
+            const summaryBanner = document.getElementById('contentSummaryBanner');
             const pageType = extraction.page_type || 'unknown';
             const rawConf = extraction.confidence || 0;
-            // Normalize confidence: if 0-1 scale, convert to 0-100
             const confidence = rawConf <= 1 && rawConf > 0 ? Math.round(rawConf * 100) : Math.round(rawConf);
             const reasoning = extraction.reasoning || 'No reasoning provided';
+            const inventory = extraction.content_inventory || {};
+            const samples = extraction.samples || [];
+            const strategy = extraction.extraction_strategy || {};
 
+            // Generate human-readable summary
+            const ptLabel = {
+                landingPage: 'a Landing Page', singleArticle: 'an Article', blogListing: 'a Blog Listing',
+                productListing: 'a Product Listing', audioStream: 'an Audio Stream', podcastListing: 'a Podcast Listing',
+                showArchive: 'a Show Archive', documentation: 'a Documentation Page', apiReference: 'an API Reference',
+                contentGrid: 'a Content Grid', gallery: 'a Gallery'
+            }[pageType] || 'a ' + pageType.replace(/([A-Z])/g, ' $1').trim();
+
+            let summaryLines = [`This page is <strong style="color:#0a84ff;">${ptLabel}</strong>.`];
+
+            const invEntries = Object.entries(inventory).filter(([, v]) => v > 0);
+            if (invEntries.length > 0) {
+                const invParts = invEntries.map(([k, v]) => `<strong style="color:#34d399;">${v}</strong> ${k.replace(/_/g, ' ')}`);
+                summaryLines.push('It contains ' + invParts.join(', ') + '.');
+            }
+
+            if (strategy.primary_selector) {
+                const method = strategy.detection_method === 'generic_sibling_clustering'
+                    ? 'generic DOM analysis (no hardcoded selectors)'
+                    : strategy.detection_method || 'selector matching';
+                summaryLines.push(`Content was found using <strong style="color:#ff9f0a;">${method}</strong>.`);
+            }
+
+            if (pageType === 'landingPage') {
+                summaryLines.push('Landing pages focus on a single message with hero + CTA — check <strong>Visual Hierarchy</strong> and <strong>Spatial Composition</strong> for layout details.');
+            }
+
+            summaryBanner.style.display = 'block';
+            summaryBanner.innerHTML = `
+                <div style="font-size: 0.95rem; color: #ccc; line-height: 1.7;">
+                    ${summaryLines.join(' ')}
+                </div>
+            `;
+
+            // Page Classification
+            const classificationEl = document.getElementById('pageClassification');
             const confidenceClass = confidence >= 80 ? 'high' : confidence >= 60 ? 'medium' : 'low';
 
             classificationEl.innerHTML = `
-                <div style="padding: 0.75rem 1rem; background: rgba(10,132,255,0.08); border-radius: 6px; margin-bottom: 1rem; font-size: 0.8rem; color: #888; line-height: 1.5;">
-                    This tab identifies <strong style="color:#ccc;">what kind of page</strong> this is and <strong style="color:#ccc;">what repeating content</strong> it contains. Useful for building scrapers that target specific content (e.g. "extract all product cards" or "grab every article headline").
-                </div>
                 <div style="padding: 1.5rem; background: #1e1e1e; border-radius: 8px; border-left: 4px solid #0a84ff;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <div>
@@ -4728,6 +4769,34 @@
 
             semanticHTML += '</div>';
             semanticEl.innerHTML = semanticHTML;
+
+            // Ripper Bridge — offer to extract detected content as a component
+            const bridgeEl = document.getElementById('ripperBridge');
+            if (strategy.primary_selector && pageType !== 'landingPage') {
+                const currentUrl = document.getElementById('urlInput')?.value || window._currentScanUrl || '';
+                bridgeEl.style.display = 'block';
+                bridgeEl.innerHTML = `
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 1.5rem;">
+                        <div>
+                            <div style="font-weight: 600; color: var(--accent-text); font-size: 0.95rem; margin-bottom: 0.35rem;">
+                                ⚡ Extract This as a Component
+                            </div>
+                            <div style="color: #888; font-size: 0.82rem;">
+                                Open this content in the Component Ripper to get the full blueprint — HTML, CSS, React code, and Figma-ready output.
+                            </div>
+                            <code style="font-size: 0.75rem; color: #666; margin-top: 0.5rem; display: inline-block;">${strategy.primary_selector}</code>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; flex-shrink: 0;">
+                            <a href="/ripper" onclick="sessionStorage.setItem('ripperPrefill', JSON.stringify({url: '${currentUrl.replace(/'/g, "\\'")}', selector: '${(strategy.primary_selector || '').replace(/'/g, "\\'")}', mode: 'targeted'}))" target="_blank"
+                               style="padding: 0.5rem 1.25rem; background: rgba(129,140,248,0.15); border: 1px solid rgba(129,140,248,0.3); color: #a5b4fc; border-radius: 8px; font-size: 0.82rem; font-weight: 600; text-decoration: none; white-space: nowrap; transition: all 0.15s;">
+                                Open in Ripper →
+                            </a>
+                        </div>
+                    </div>
+                `;
+            } else {
+                bridgeEl.style.display = 'none';
+            }
         }
 
         // ═══════════════════════════════════════════════════════════
