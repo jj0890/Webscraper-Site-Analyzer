@@ -614,6 +614,16 @@
         .ev-val-null { color: var(--text-disabled); font-style: italic; }
         .ev-children { overflow: hidden; transition: max-height 0.2s ease; }
         .ev-children.collapsed { max-height: 0 !important; }
+
+        /* ── API Graph ── */
+        .api-graph-node {
+            transition: r 0.2s ease, stroke-width 0.2s ease, filter 0.2s ease;
+            cursor: default;
+        }
+        .api-graph-node:hover {
+            stroke-width: 3;
+            filter: url(#apiGlow);
+        }
             border-color: var(--border-default);
         }
 
@@ -8937,6 +8947,9 @@
                 </div>
             ` : '';
 
+            // ── Network graph visualization ──
+            const graphHTML = buildAPIGraph(sem, catConfig, totalEndpoints);
+
             return `
                 <div class="metric-header">
                     <div class="metric-title">
@@ -8948,11 +8961,118 @@
                 </div>
                 ${heroHTML}
                 ${protocolHTML}
+                ${graphHTML}
                 ${groupsHTML}
                 ${fallbackHTML}
                 ${insightsHTML}
                 ${redHTML}
             `;
+        }
+
+        function buildAPIGraph(sem, catConfig, totalEndpoints) {
+            var entries = Object.entries(sem).filter(function(e) { return (e[1]||[]).length > 0; });
+            if (entries.length < 2) return '';
+
+            var W = 520, H = 380;
+            var cx = W / 2, cy = H / 2;
+            var catRadius = 130;  // distance of category nodes from center
+            var epRadius = 26;    // category node size (half)
+
+            // Collect unique domains across all endpoints
+            var domainMap = {};
+            entries.forEach(function(entry) {
+                (entry[1] || []).forEach(function(ep) {
+                    var d = ep.domain || '';
+                    if (!d) {
+                        try { d = new URL(ep.url || ep.path || '').hostname; } catch(e) {}
+                    }
+                    if (d && d.length > 3) {
+                        if (!domainMap[d]) domainMap[d] = { cats: new Set(), calls: 0 };
+                        domainMap[d].cats.add(entry[0]);
+                        domainMap[d].calls += (ep.call_count || 1);
+                    }
+                });
+            });
+
+            // Build SVG
+            var lines = [];
+            var nodes = [];
+            var labels = [];
+
+            // Center node — the scanned site
+            nodes.push('<circle cx="' + cx + '" cy="' + cy + '" r="22" fill="#1e1e24" stroke="#7ec8e3" stroke-width="2"/>');
+            labels.push('<text x="' + cx + '" y="' + (cy + 1) + '" text-anchor="middle" dominant-baseline="middle" fill="#7ec8e3" font-size="9" font-weight="700" font-family="var(--font-mono)">SITE</text>');
+
+            // Category nodes in a ring
+            var angleStep = (2 * Math.PI) / entries.length;
+            var catPositions = {};
+
+            entries.forEach(function(entry, i) {
+                var cat = entry[0];
+                var eps = entry[1];
+                var cfg = catConfig[cat] || catConfig.unclassified;
+                var angle = angleStep * i - Math.PI / 2; // start from top
+                var x = cx + Math.cos(angle) * catRadius;
+                var y = cy + Math.sin(angle) * catRadius;
+                catPositions[cat] = { x: x, y: y };
+
+                // Line from center to category
+                lines.push('<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="' + cfg.color + '" stroke-width="1.5" stroke-opacity="0.3"/>');
+
+                // Category node — size proportional to endpoint count
+                var r = Math.max(14, Math.min(28, 10 + eps.length * 2));
+                nodes.push('<circle cx="' + x + '" cy="' + y + '" r="' + r + '" fill="' + cfg.color + '18" stroke="' + cfg.color + '" stroke-width="1.5" class="api-graph-node" data-cat="' + cat + '"/>');
+
+                // Category label
+                var labelY = y + r + 12;
+                if (angle > Math.PI * 0.25 && angle < Math.PI * 0.75) labelY = y + r + 12;
+                else if (angle < -Math.PI * 0.25 || angle > Math.PI * 1.25) labelY = y - r - 5;
+
+                labels.push('<text x="' + x + '" y="' + (y + 1) + '" text-anchor="middle" dominant-baseline="middle" fill="' + cfg.color + '" font-size="8" font-weight="600" font-family="var(--font-display)">' + cfg.icon + '</text>');
+                labels.push('<text x="' + x + '" y="' + labelY + '" text-anchor="middle" fill="' + cfg.color + '" font-size="7" font-weight="500" font-family="var(--font-mono)" opacity="0.85">' + cfg.label + '</text>');
+                labels.push('<text x="' + x + '" y="' + (labelY + 10) + '" text-anchor="middle" fill="#666" font-size="6.5" font-family="var(--font-mono)">' + eps.length + ' ep</text>');
+            });
+
+            // Domain nodes — smaller, outer ring, with lines to their categories
+            var domEntries = Object.entries(domainMap).sort(function(a, b) { return b[1].calls - a[1].calls; }).slice(0, 8);
+            if (domEntries.length > 0) {
+                var domRadius = catRadius + 60;
+                var domStep = (2 * Math.PI) / Math.max(domEntries.length, 1);
+
+                domEntries.forEach(function(entry, i) {
+                    var domain = entry[0];
+                    var info = entry[1];
+                    var angle = domStep * i - Math.PI / 2 + domStep * 0.3; // offset from categories
+                    var x = cx + Math.cos(angle) * domRadius;
+                    var y = cy + Math.sin(angle) * domRadius;
+
+                    // Clamp to SVG bounds
+                    x = Math.max(50, Math.min(W - 50, x));
+                    y = Math.max(20, Math.min(H - 20, y));
+
+                    // Lines to connected categories
+                    info.cats.forEach(function(cat) {
+                        var cp = catPositions[cat];
+                        if (cp) {
+                            lines.push('<line x1="' + cp.x + '" y1="' + cp.y + '" x2="' + x + '" y2="' + y + '" stroke="#555" stroke-width="0.8" stroke-opacity="0.25" stroke-dasharray="3,3"/>');
+                        }
+                    });
+
+                    // Domain node
+                    nodes.push('<rect x="' + (x - 35) + '" y="' + (y - 8) + '" width="70" height="16" rx="4" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.1)" stroke-width="0.8"/>');
+                    // Truncate long domain names
+                    var shortDom = domain.length > 14 ? domain.substring(0, 12) + '..' : domain;
+                    labels.push('<text x="' + x + '" y="' + (y + 1) + '" text-anchor="middle" dominant-baseline="middle" fill="#888" font-size="6" font-family="var(--font-mono)">' + shortDom + '</text>');
+                });
+            }
+
+            return '<div style="margin: 0.5rem 0 0.75rem; padding: 0.5rem; background: rgba(0,0,0,0.3); border-radius: 10px; border: 1px solid rgba(255,255,255,0.04); overflow: hidden;">' +
+                '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block; max-height:380px;" xmlns="http://www.w3.org/2000/svg">' +
+                '<defs><filter id="apiGlow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>' +
+                lines.join('') +
+                nodes.join('') +
+                labels.join('') +
+                '</svg></div>';
         }
 
         // ── Third-Party Card ──────────────────────────────────────────
