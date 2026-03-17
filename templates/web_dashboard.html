@@ -615,6 +615,25 @@
         .ev-children { overflow: hidden; transition: max-height 0.2s ease; }
         .ev-children.collapsed { max-height: 0 !important; }
 
+        /* ── API View Toggle ── */
+        .api-view-toggle {
+            background: var(--surface-3);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-tertiary);
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            padding: 4px 12px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all var(--duration-fast) var(--ease-out);
+        }
+        .api-view-toggle:hover { color: var(--text-secondary); background: var(--surface-4); }
+        .api-view-toggle.active {
+            background: var(--accent-muted);
+            border-color: var(--accent);
+            color: var(--accent-text);
+        }
+
         /* ── API Graph ── */
         .api-graph-node {
             transition: r 0.2s ease, stroke-width 0.2s ease, filter 0.2s ease;
@@ -2563,8 +2582,22 @@
                         <!-- Stats will be inserted here -->
                     </div>
 
-                    <!-- Mermaid Diagram -->
-                    <div class="mermaid-container">
+                    <!-- Network Graph (radial) -->
+                    <div class="mermaid-container" id="apiNetworkGraphSection">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+                            <h3 style="margin:0;">🌐 API Network Graph</h3>
+                            <div style="display:flex; gap:4px;">
+                                <button class="api-view-toggle active" data-view="graph" onclick="toggleAPIView('graph')">Network</button>
+                                <button class="api-view-toggle" data-view="flow" onclick="toggleAPIView('flow')">Flow</button>
+                            </div>
+                        </div>
+                        <div id="apiRadialGraph">
+                            <!-- Radial network graph will be rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Mermaid Flow Diagram (toggle) -->
+                    <div class="mermaid-container" id="apiFlowSection" style="display:none;">
                         <h3>🔀 API Flow Diagram</h3>
                         <div class="mermaid-diagram" id="mermaidDiagram">
                             <!-- Mermaid diagram will be rendered here -->
@@ -11050,14 +11083,12 @@
 
         function displayAPIMap(relationshipMap) {
             const statsContainer = document.getElementById('apiStats');
-            const mermaidContainer = document.getElementById('mermaidDiagram');
             const endpointsList = document.getElementById('endpointsList');
             const dependenciesList = document.getElementById('dependenciesList');
             const redundantList = document.getElementById('redundantList');
 
             // Clear containers
             statsContainer.innerHTML = '';
-            mermaidContainer.innerHTML = '';
             endpointsList.innerHTML = '';
             dependenciesList.innerHTML = '';
             redundantList.innerHTML = '';
@@ -11105,13 +11136,37 @@
                 statsContainer.appendChild(card);
             });
 
-            // Display API Flow Diagram — custom SVG renderer (Mermaid v10 foreignObject
-            // labels render at 0×0 in this context; native SVG is more reliable + themeable)
+            // ── Radial Network Graph (using the same buildAPIGraph from the card) ──
+            const radialContainer = document.getElementById('apiRadialGraph');
+            const sem = relationshipMap.semantic_classification || {};
+            const catConfig = {
+                authentication: { icon: '🔐', color: '#ff6b6b', label: 'Auth & Identity' },
+                content:        { icon: '📝', color: '#7ec8e3', label: 'Content' },
+                user:           { icon: '👤', color: '#c9b8ff', label: 'User Data' },
+                monetization:   { icon: '💳', color: '#ff9f0a', label: 'Monetization' },
+                interaction:    { icon: '💬', color: '#68d68d', label: 'Interaction' },
+                search:         { icon: '🔍', color: '#6c9eff', label: 'Search' },
+                analytics:      { icon: '📊', color: '#ff8fa3', label: 'Analytics & Tracking' },
+                config:         { icon: '⚙️', color: '#a0a0a0', label: 'Config & Consent' },
+                feature_flags:  { icon: '🧪', color: '#f09dff', label: 'Experiments' },
+                advertising:    { icon: '📢', color: '#ffb347', label: 'Advertising' },
+                unclassified:   { icon: '📦', color: '#555',    label: 'Other' }
+            };
+            const totalEp = stats.unique_endpoints || 0;
+            const graphSVG = buildAPIGraph(sem, catConfig, totalEp);
+            if (graphSVG) {
+                radialContainer.innerHTML = graphSVG;
+            } else {
+                radialContainer.innerHTML = '<p style="color: #888;">Not enough categories to render a network graph</p>';
+            }
+
+            // ── Mermaid Flow Diagram (secondary view) ──
+            const mermaidContainer = document.getElementById('mermaidDiagram');
             if (relationshipMap.mermaid_diagram) {
                 window.mermaidCode = relationshipMap.mermaid_diagram;
                 mermaidContainer.innerHTML = renderAPIFlowSVG(relationshipMap.mermaid_diagram);
             } else {
-                mermaidContainer.innerHTML = '<p style="color: #888;">No API relationships detected</p>';
+                mermaidContainer.innerHTML = '<p style="color: #888;">No API flow diagram available</p>';
             }
 
             // Display endpoints - GROUPED BY CATEGORY!
@@ -11365,6 +11420,20 @@
                 }
             } else {
                 componentMapContainer.innerHTML += '<p style="color: #888;">No sections detected</p>';
+            }
+        }
+
+        function toggleAPIView(view) {
+            const graphSection = document.getElementById('apiNetworkGraphSection');
+            const flowSection = document.getElementById('apiFlowSection');
+            const btns = document.querySelectorAll('.api-view-toggle');
+            btns.forEach(function(b) { b.classList.toggle('active', b.dataset.view === view); });
+            if (view === 'graph') {
+                graphSection.style.display = '';
+                flowSection.style.display = 'none';
+            } else {
+                graphSection.style.display = 'none';
+                flowSection.style.display = '';
             }
         }
 
