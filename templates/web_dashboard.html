@@ -6586,40 +6586,75 @@
                 return { x: m[1], y: m[2], blur: m[3], spread: m[4] || '0', color: m[5].trim(), inset };
             }
 
-            // --- Elevation ladder: all shadows visible at once, stacked vertically ---
-            // Each shadow gets a full-width card on a light stage so the shadow is clearly visible
+            // --- Elevation ladder: dark cards with accent color, hover to exaggerate ---
             let ladderHTML = '';
             if (levels.length > 0) {
                 const sorted = [...levels].sort((a, b) => (a.blur_radius || 0) - (b.blur_radius || 0));
-                ladderHTML = `<div style="display:flex; flex-direction:column; gap:0.75rem; margin:0.75rem 0;">`;
+                // Pick an accent color from the shadow palette (most common shadow color, or fallback)
+                const accentColor = (function() {
+                    for (const lvl of sorted) {
+                        const a = parseShadow(lvl.css);
+                        if (a && a.color && !a.color.includes('0, 0, 0') && !a.color.includes('0,0,0')) return a.color;
+                    }
+                    return '#6366f1'; // indigo fallback
+                })();
+
+                ladderHTML = `<div style="display:flex; flex-direction:column; gap:0.6rem; margin:0.75rem 0;">`;
 
                 sorted.forEach((lvl, i) => {
                     const anatomy = parseShadow(lvl.css);
                     const depthLabel = i === 0 ? 'Ground' : i === sorted.length - 1 ? 'Highest' : 'Level ' + i;
-                    // Increase left margin per level to create staircase effect
-                    const indent = Math.min(i * 12, 48);
+                    const indent = Math.min(i * 10, 40);
+
+                    // Create exaggerated shadow for hover: 2x blur, 1.5x offsets
+                    const exaggeratedShadow = anatomy
+                        ? `${anatomy.inset ? 'inset ' : ''}${parseFloat(anatomy.x)*1.5}px ${parseFloat(anatomy.y)*1.5}px ${parseFloat(anatomy.blur)*2.5}px ${parseFloat(anatomy.spread)*1.5}px ${anatomy.color}`
+                        : lvl.css;
+
+                    // Intensity indicator: map blur to opacity (0-60px → 0.15-0.6)
+                    const blurVal = anatomy ? parseFloat(anatomy.blur) : 0;
+                    const intensity = Math.min(0.15 + (blurVal / 60) * 0.45, 0.6);
+                    const cardId = 'shadow-card-' + Math.random().toString(36).slice(2, 8);
 
                     ladderHTML += `
-                        <div style="margin-left:${indent}px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; overflow:hidden;">
-                            <!-- Light stage showing the actual shadow -->
-                            <div style="padding:1rem 1.25rem; background:#e8e8ec; background-image: radial-gradient(circle, #d8d8dc 1px, transparent 1px); background-size: 10px 10px; display:flex; align-items:center; gap:1rem;">
-                                <div style="width:100%; max-width:180px; height:48px; background:#fff; border-radius:8px; box-shadow:${lvl.css}; flex-shrink:0;"></div>
+                        <div style="margin-left:${indent}px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; overflow:hidden; transition:transform 0.2s;"
+                             onmouseenter="var c=document.getElementById('${cardId}');if(c){c.style.boxShadow='${exaggeratedShadow.replace(/'/g,"\\'")}';c.style.transform='translateY(-2px)';}"
+                             onmouseleave="var c=document.getElementById('${cardId}');if(c){c.style.boxShadow='${lvl.css.replace(/'/g,"\\'")}';c.style.transform='none';}">
+                            <!-- Dark stage with accent tint -->
+                            <div style="padding:0.85rem 1rem; background:#0d0d11; display:flex; align-items:center; gap:0.85rem;">
+                                <!-- Shadow specimen: dark card with accent border glow -->
+                                <div id="${cardId}" style="
+                                    width:100%; max-width:160px; height:44px;
+                                    background: linear-gradient(135deg, #1a1a22, #22222e);
+                                    border: 1px solid rgba(255,255,255,0.08);
+                                    border-radius:8px;
+                                    box-shadow:${lvl.css};
+                                    flex-shrink:0;
+                                    transition: box-shadow 0.3s ease, transform 0.2s ease;
+                                "></div>
                                 <div style="flex:1; min-width:0;">
-                                    <div style="font-size:0.72rem; color:#444; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">${lvl.name}</div>
-                                    <div style="font-size:0.62rem; color:#888; margin-top:2px;">${depthLabel} · ${lvl.count} uses</div>
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <span style="font-size:0.72rem; color:#ddd; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">${lvl.name}</span>
+                                        <span style="font-size:0.55rem; color:#555; background:rgba(255,255,255,0.06); padding:1px 5px; border-radius:3px;">${depthLabel}</span>
+                                    </div>
+                                    <div style="font-size:0.62rem; color:#666; margin-top:3px;">${lvl.count} uses · hover to exaggerate</div>
+                                </div>
+                                <!-- Intensity bar -->
+                                <div style="width:4px; height:32px; border-radius:2px; background:rgba(255,255,255,0.08); overflow:hidden; flex-shrink:0;" title="Shadow intensity">
+                                    <div style="width:100%; height:${intensity * 100}%; background:${accentColor}; border-radius:2px; margin-top:auto; position:relative; top:${(1-intensity)*100}%;"></div>
                                 </div>
                             </div>
-                            <!-- Anatomy strip (dark) -->
-                            <div style="padding:0.4rem 0.75rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+                            <!-- Anatomy strip -->
+                            <div style="padding:0.35rem 0.75rem; display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap; border-top:1px solid rgba(255,255,255,0.04);">
                                 ${anatomy ? `
-                                    <span style="font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">x ${anatomy.x}px</span>
-                                    <span style="font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">y ${anatomy.y}px</span>
-                                    <span style="font-size:0.6rem; color:#0a84ff; background:rgba(10,132,255,0.1); padding:2px 6px; border-radius:3px;">blur ${anatomy.blur}px</span>
-                                    ${anatomy.spread !== '0' ? `<span style="font-size:0.6rem; color:#ff9f0a; background:rgba(255,159,10,0.1); padding:2px 6px; border-radius:3px;">spread ${anatomy.spread}px</span>` : ''}
-                                    <span style="display:inline-flex; align-items:center; gap:3px; font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;"><span style="width:8px; height:8px; border-radius:2px; background:${anatomy.color}; border:1px solid rgba(255,255,255,0.2);"></span>${anatomy.color}</span>
-                                    ${anatomy.inset ? `<span style="font-size:0.6rem; color:#ff9f0a; background:rgba(255,159,10,0.12); padding:2px 6px; border-radius:3px; font-weight:600;">inset</span>` : ''}
-                                ` : `<span style="font-size:0.6rem; color:#666; font-family:'SF Mono',monospace;">${lvl.css}</span>`}
-                                <span style="margin-left:auto; font-size:0.58rem; color:#555;">${(lvl.selectors||[]).slice(0,2).map(s => '<code style="color:#0a84ff;">'+s+'</code>').join(' ')}</span>
+                                    <span style="font-size:0.58rem; color:#777; background:rgba(255,255,255,0.05); padding:2px 5px; border-radius:3px;">x ${anatomy.x}</span>
+                                    <span style="font-size:0.58rem; color:#777; background:rgba(255,255,255,0.05); padding:2px 5px; border-radius:3px;">y ${anatomy.y}</span>
+                                    <span style="font-size:0.58rem; color:#0a84ff; background:rgba(10,132,255,0.1); padding:2px 5px; border-radius:3px; font-weight:600;">blur ${anatomy.blur}</span>
+                                    ${anatomy.spread !== '0' ? `<span style="font-size:0.58rem; color:#ff9f0a; background:rgba(255,159,10,0.1); padding:2px 5px; border-radius:3px;">spread ${anatomy.spread}</span>` : ''}
+                                    <span style="display:inline-flex; align-items:center; gap:3px; font-size:0.58rem; color:#777; background:rgba(255,255,255,0.05); padding:2px 5px; border-radius:3px;"><span style="width:7px; height:7px; border-radius:2px; background:${anatomy.color}; border:1px solid rgba(255,255,255,0.15);"></span>${anatomy.color.length > 25 ? anatomy.color.substring(0,22)+'…' : anatomy.color}</span>
+                                    ${anatomy.inset ? `<span style="font-size:0.58rem; color:#ff9f0a; background:rgba(255,159,10,0.12); padding:2px 5px; border-radius:3px; font-weight:600;">inset</span>` : ''}
+                                ` : `<span style="font-size:0.58rem; color:#555; font-family:'SF Mono',monospace;">${lvl.css.length > 50 ? lvl.css.substring(0,48)+'…' : lvl.css}</span>`}
+                                <span style="margin-left:auto; font-size:0.55rem; color:#444;">${(lvl.selectors||[]).slice(0,2).map(s => '<code style="color:#0a84ff;">'+s+'</code>').join(' ')}</span>
                             </div>
                         </div>`;
                 });
@@ -7349,7 +7384,43 @@
 
                 // Group by role: primary first, then secondary, then other
                 const grouped = { primary: [], secondary: [], other: [] };
-                styles.forEach(s => {
+
+                // Helper: compute luminance from a CSS color string
+                function parseLuminance(color) {
+                    if (!color) return -1;
+                    const c = color.trim();
+                    if (c === 'transparent' || c === 'rgba(0, 0, 0, 0)' || c === 'none' || c === 'initial' || c === 'inherit') return -1;
+                    var m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                    if (m) return parseInt(m[1])*0.299 + parseInt(m[2])*0.587 + parseInt(m[3])*0.114;
+                    if (c.startsWith('#')) {
+                        var hex = c.replace('#','');
+                        if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+                        return parseInt(hex.substr(0,2),16)*0.299 + parseInt(hex.substr(2,2),16)*0.587 + parseInt(hex.substr(4,2),16)*0.114;
+                    }
+                    return -1;
+                }
+
+                // Filter: skip ghost buttons (transparent bg + no visible border + no shadow = just a text link)
+                const visibleStyles = styles.filter(s => {
+                    const bg = (s.bg || '').trim();
+                    const border = (s.border || '').trim();
+                    const shadow = (s.boxShadow || '').trim();
+                    const isGhostBg = !bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)' || bg === 'none';
+                    const isNoBorder = !border || border === 'none' || border === '0px none' || border.includes('0px') || border === 'initial';
+                    const isNoShadow = !shadow || shadow === 'none';
+
+                    // If it's fully transparent with no border and no shadow, it's just a text link
+                    if (isGhostBg && isNoBorder && isNoShadow) return false;
+
+                    // Check: both bg and text too similar (< 30 luminance difference)
+                    const bgLum = parseLuminance(bg);
+                    const textLum = parseLuminance(s.color);
+                    if (bgLum >= 0 && textLum >= 0 && Math.abs(bgLum - textLum) < 20) return false;
+
+                    return true;
+                });
+
+                visibleStyles.forEach(s => {
                     const r = (s.role || '').toLowerCase();
                     if (r === 'primary') grouped.primary.push(s);
                     else if (r === 'secondary') grouped.secondary.push(s);
@@ -7357,28 +7428,36 @@
                 });
                 const ordered = [...grouped.primary, ...grouped.secondary, ...grouped.other];
 
+                // Track how many were filtered
+                const filteredCount = styles.length - visibleStyles.length;
+
                 ordered.forEach(style => {
                     const ex = style.examples[0] || {};
                     const role = style.role || '';
                     const roleBadgeColor = role === 'primary' ? '#0a84ff' : role === 'secondary' ? '#a78bfa' : '#666';
 
-                    // Determine stage background: use mid-grey that contrasts with both light and dark buttons
-                    // If button bg is dark (< 40% luminance), use light stage. If light, use dark stage.
-                    const bgColor = style.bg || 'transparent';
-                    const isTransparent = bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'none';
-                    const isDarkBg = (function() {
-                        if (isTransparent) return true;
-                        const m = bgColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-                        if (m) { return (parseInt(m[1])*0.299 + parseInt(m[2])*0.587 + parseInt(m[3])*0.114) < 128; }
-                        if (bgColor.startsWith('#')) {
-                            const hex = bgColor.replace('#','');
-                            const r = parseInt(hex.substr(0,2),16), g = parseInt(hex.substr(2,2),16), b = parseInt(hex.substr(4,2),16);
-                            return (r*0.299 + g*0.587 + b*0.114) < 128;
-                        }
-                        return false;
-                    })();
-                    const stageBg = isDarkBg ? '#e8e8ec' : '#1a1a1e';
-                    const stagePattern = isDarkBg
+                    // Determine stage background based on button bg AND text luminance
+                    const bgLum = parseLuminance(style.bg);
+                    const textLum = parseLuminance(style.color);
+                    const isTransparentBg = bgLum < 0;
+
+                    // Pick stage: always maximize contrast with the button
+                    // If bg is dark or transparent → light stage
+                    // If bg is light → dark stage
+                    // Special: if bg is mid-range (100-180), pick based on text color
+                    let stageBg, stagePattern;
+                    if (isTransparentBg) {
+                        // Transparent bg: pick stage based on text color (show text clearly)
+                        stageBg = textLum > 128 ? '#1a1a1e' : '#e8e8ec';
+                    } else if (bgLum < 80) {
+                        stageBg = '#e8e8ec'; // dark button → light stage
+                    } else if (bgLum > 180) {
+                        stageBg = '#1a1a1e'; // light button → dark stage
+                    } else {
+                        // Mid-range bg: pick whatever gives more contrast
+                        stageBg = (255 - bgLum) > bgLum ? '#e8e8ec' : '#1a1a1e';
+                    }
+                    stagePattern = stageBg === '#e8e8ec'
                         ? 'background-image: radial-gradient(circle, #d0d0d4 1px, transparent 1px); background-size: 12px 12px;'
                         : 'background-image: radial-gradient(circle, #2a2a2e 1px, transparent 1px); background-size: 12px 12px;';
 
@@ -7432,6 +7511,10 @@
                             </div>
                         </div>`;
                 });
+                // Show count of filtered-out ghost buttons
+                if (filteredCount > 0) {
+                    buttonPreviewsHTML += `<div style="font-size:0.68rem; color:#555; padding:0.25rem 0; text-align:center;">${filteredCount} unstyled text link${filteredCount > 1 ? 's' : ''} hidden (no bg, border, or shadow)</div>`;
+                }
                 buttonPreviewsHTML += `</div>`;
             }
 
