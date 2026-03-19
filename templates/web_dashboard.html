@@ -6274,7 +6274,6 @@
             const selectors = Object.keys(deltas);
             const breakdown = data.detection_breakdown || {};
 
-            // Physical state capture data (from _mcp_state_capture via computed_states)
             const computedStates = data.computed_states || {};
             const hasPhysicalCapture = Object.keys(computedStates).length > 0 || (breakdown.computed_hover || 0) > 0;
 
@@ -6284,12 +6283,6 @@
             const pseudoPillsHTML = pseudoOrder
                 .filter(p => pseudoCoverage[p])
                 .map(p => `<span style="display:inline-block; padding: 0.2rem 0.55rem; background: ${pseudoColors[p]}22; color: ${pseudoColors[p]}; border-radius: 12px; font-size: 0.7rem; font-weight: 600; margin: 0.15rem;">${p} <span style="opacity:0.7;">${pseudoCoverage[p]}</span></span>`)
-                .join('');
-
-            // Type summary pills
-            const typePillsHTML = Object.entries(typeSummary)
-                .sort((a, b) => b[1] - a[1])
-                .map(([type, count]) => `<span style="display:inline-block; padding: 0.2rem 0.55rem; background: rgba(255,255,255,0.06); color: #aaa; border-radius: 12px; font-size: 0.7rem; margin: 0.15rem;">${type}: ${count}</span>`)
                 .join('');
 
             // Detection strategy breakdown
@@ -6302,104 +6295,115 @@
                 </div>
             `;
 
-            // Physical capture detail section (hover/focus deltas with actual values)
+            // Helper: render a CSS value as a visual preview (color swatch, size bar, etc.)
+            function renderValuePreview(prop, val) {
+                if (!val) return '';
+                const isColor = /^(rgb|hsl|#|transparent|rgba|hsla)/.test(val.trim()) || /^(red|blue|green|white|black|inherit)$/i.test(val.trim());
+                if (isColor && val !== 'transparent') {
+                    return `<span style="display:inline-flex; align-items:center; gap:3px;"><span style="width:12px; height:12px; border-radius:3px; background:${val}; border:1px solid rgba(255,255,255,0.2); flex-shrink:0;"></span><span style="font-size:0.64rem; color:#aaa; font-family:'SF Mono',monospace;">${val.length > 30 ? val.substring(0,28)+'…' : val}</span></span>`;
+                }
+                return `<span style="font-size:0.64rem; color:#aaa; font-family:'SF Mono',monospace;">${val.length > 40 ? val.substring(0,38)+'…' : val}</span>`;
+            }
+
+            // Physical capture: before/after split panels
             const hoverDeltas = data.physical_hover_deltas || [];
             const focusDeltas = data.physical_focus_deltas || [];
             const physicalPatterns = data.physical_patterns || [];
             let physicalHTML = '';
+
             if (hoverDeltas.length > 0 || focusDeltas.length > 0) {
-                const stateEntries = [];
+                const allDeltas = [
+                    ...hoverDeltas.map(d => ({ ...d, stateType: 'hover', stateColor: '#0a84ff' })),
+                    ...focusDeltas.map(d => ({ ...d, stateType: 'focus', stateColor: '#a855f7' }))
+                ];
 
-                // Render hover deltas
-                for (const d of hoverDeltas) {
-                    const label = d.text || d.selector || d.tag || 'Element';
-                    const changedProps = Object.keys(d.changes || {});
-                    let changeList = '';
-                    for (const prop of changedProps) {
-                        const rVal = (d.resting || {})[prop] || '';
-                        const hVal = (d.hover || {})[prop] || '';
-                        if (rVal && hVal) {
-                            changeList += `<div style="font-size:0.68rem; color:#888; margin-top:0.15rem; font-family:'SF Mono',monospace;">${prop}: <span style="color:#aaa;">${rVal}</span> <span style="color:#555;">→</span> <span style="color:#0a84ff;">${hVal}</span></div>`;
-                        }
-                    }
-                    stateEntries.push(`
-                        <div style="padding:0.5rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
-                            <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
-                                <span style="font-size:0.72rem; color:#ddd; font-weight:500;">${label}</span>
-                                <span style="font-size:0.6rem; padding:0.1rem 0.3rem; background:rgba(10,132,255,0.15); color:#0a84ff; border-radius:3px; font-weight:600; text-transform:uppercase;">hover</span>
-                                <code style="font-size:0.6rem; color:#666;">${d.selector || ''}</code>
-                            </div>
-                            ${changeList}
-                        </div>
-                    `);
-                }
-
-                // Render focus deltas
-                for (const d of focusDeltas) {
-                    const label = d.text || d.selector || d.tag || 'Element';
-                    const changedProps = Object.keys(d.changes || {});
-                    let changeList = '';
-                    for (const prop of changedProps) {
-                        const rVal = (d.resting || {})[prop] || '';
-                        const fVal = (d.focus || {})[prop] || '';
-                        if (rVal && fVal) {
-                            changeList += `<div style="font-size:0.68rem; color:#888; margin-top:0.15rem; font-family:'SF Mono',monospace;">${prop}: <span style="color:#aaa;">${rVal}</span> <span style="color:#555;">→</span> <span style="color:#a855f7;">${fVal}</span></div>`;
-                        }
-                    }
-                    stateEntries.push(`
-                        <div style="padding:0.5rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
-                            <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
-                                <span style="font-size:0.72rem; color:#ddd; font-weight:500;">${label}</span>
-                                <span style="font-size:0.6rem; padding:0.1rem 0.3rem; background:rgba(168,85,247,0.15); color:#a855f7; border-radius:3px; font-weight:600; text-transform:uppercase;">focus</span>
-                                <code style="font-size:0.6rem; color:#666;">${d.selector || ''}</code>
-                            </div>
-                            ${changeList}
-                        </div>
-                    `);
-                }
-
-                // Pattern summary
+                // Pattern summary at top
                 let patternHTML = '';
                 if (physicalPatterns.length > 0) {
-                    patternHTML = physicalPatterns.map(p =>
-                        `<div style="margin-top:0.4rem; padding:0.3rem 0.6rem; background:rgba(255,159,10,0.06); border-radius:6px; font-size:0.7rem; color:#ccc;">
-                            <strong style="color:#ff9f0a;">${p.type}</strong>: ${p.description} <span style="color:#666;">(${p.count} elements)</span>
-                        </div>`
-                    ).join('');
+                    patternHTML = `<div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem;">` +
+                        physicalPatterns.map(p =>
+                            `<span style="padding:0.25rem 0.6rem; background:rgba(255,159,10,0.08); border:1px solid rgba(255,159,10,0.15); border-radius:6px; font-size:0.7rem; color:#ccc;">
+                                <strong style="color:#ff9f0a;">${p.type}</strong> · ${p.count} elements
+                            </span>`
+                        ).join('') + `</div>`;
                 }
 
-                if (stateEntries.length > 0) {
-                    const captureToggleId = 'capture-' + Math.random().toString(36).slice(2, 8);
-                    physicalHTML = `
-                        <div style="margin-top:0.75rem;">
-                            <button onclick="var el=document.getElementById('${captureToggleId}');var open=el.style.display!=='none';el.style.display=open?'none':'block';this.querySelector('.sa').style.transform=open?'rotate(0deg)':'rotate(180deg)';" style="width:100%; background:rgba(255,159,10,0.08); border:1px solid rgba(255,159,10,0.15); border-radius:8px; padding:0.6rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; color:#ff9f0a; font-size:0.8rem; font-weight:600;">
-                                <span>🖱 Physical State Capture (${hoverDeltas.length} hover, ${focusDeltas.length} focus)</span>
-                                <span class="sa" style="display:inline-block; transform:rotate(0deg); transition:transform 0.2s;">▼</span>
-                            </button>
-                            <div id="${captureToggleId}" style="display:none; padding:0.5rem 0.75rem; background:rgba(10,10,10,0.3); border-radius:0 0 8px 8px;">
-                                <div style="font-size:0.72rem; color:#666; margin-bottom:0.5rem;">Captured by physically hovering/focusing elements with Playwright (not CSS parsing)</div>
-                                ${patternHTML}
-                                ${stateEntries.join('')}
+                // Before/after cards
+                let stateCardsHTML = allDeltas.slice(0, 8).map(d => {
+                    const label = d.text || d.selector || d.tag || 'Element';
+                    const changedProps = Object.keys(d.changes || {});
+                    const restingState = d.resting || {};
+                    const activeState = d.stateType === 'hover' ? (d.hover || {}) : (d.focus || {});
+
+                    // Build property rows as before/after pairs
+                    const propRows = changedProps.slice(0, 6).map(prop => {
+                        const rVal = restingState[prop] || '';
+                        const aVal = activeState[prop] || '';
+                        if (!rVal && !aVal) return '';
+                        return `
+                            <div style="display:grid; grid-template-columns:90px 1fr 16px 1fr; gap:4px; align-items:center; padding:3px 0; border-bottom:1px solid rgba(255,255,255,0.03);">
+                                <span style="font-size:0.62rem; color:#777; font-family:'SF Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${prop}">${prop}</span>
+                                <div style="padding:2px 6px; background:rgba(255,255,255,0.04); border-radius:4px; min-width:0; overflow:hidden;">${renderValuePreview(prop, rVal)}</div>
+                                <span style="font-size:0.7rem; color:${d.stateColor}; text-align:center;">→</span>
+                                <div style="padding:2px 6px; background:${d.stateColor}12; border:1px solid ${d.stateColor}30; border-radius:4px; min-width:0; overflow:hidden;">${renderValuePreview(prop, aVal)}</div>
+                            </div>`;
+                    }).join('');
+
+                    const moreCount = changedProps.length > 6 ? changedProps.length - 6 : 0;
+
+                    return `
+                        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px; overflow:hidden; margin-bottom:0.5rem;">
+                            <!-- Element header -->
+                            <div style="padding:0.45rem 0.65rem; display:flex; align-items:center; gap:0.4rem; border-bottom:1px solid rgba(255,255,255,0.05);">
+                                <span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:${d.stateColor}20; color:${d.stateColor}; border-radius:3px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">${d.stateType}</span>
+                                <span style="font-size:0.75rem; color:#ddd; font-weight:500;">${label.length > 30 ? label.substring(0,28) + '…' : label}</span>
+                                <span style="font-size:0.58rem; color:#555; font-family:'SF Mono',monospace; margin-left:auto;">${changedProps.length} changes</span>
                             </div>
+                            <!-- Property changes grid -->
+                            <div style="padding:0.4rem 0.65rem;">
+                                <!-- Column labels -->
+                                <div style="display:grid; grid-template-columns:90px 1fr 16px 1fr; gap:4px; padding-bottom:4px; margin-bottom:2px; border-bottom:1px solid rgba(255,255,255,0.06);">
+                                    <span style="font-size:0.55rem; color:#555; text-transform:uppercase; letter-spacing:0.05em;">Property</span>
+                                    <span style="font-size:0.55rem; color:#555; text-transform:uppercase; letter-spacing:0.05em;">Resting</span>
+                                    <span></span>
+                                    <span style="font-size:0.55rem; color:${d.stateColor}; text-transform:uppercase; letter-spacing:0.05em; opacity:0.7;">${d.stateType}</span>
+                                </div>
+                                ${propRows}
+                                ${moreCount > 0 ? `<div style="font-size:0.62rem; color:#555; padding-top:4px;">+${moreCount} more properties</div>` : ''}
+                            </div>
+                        </div>`;
+                }).join('');
+
+                const moreDeltas = allDeltas.length > 8 ? `<div style="font-size:0.72rem; color:#555; text-align:center; padding:0.3rem;">+${allDeltas.length - 8} more state changes</div>` : '';
+
+                physicalHTML = `
+                    <div style="margin-top:0.75rem;">
+                        <div style="font-weight:600; margin-bottom:0.5rem; color:#fff; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
+                            🖱 Physical State Capture
+                            <span style="font-size:0.68rem; color:#666; font-weight:400;">${hoverDeltas.length} hover · ${focusDeltas.length} focus</span>
                         </div>
-                    `;
-                }
+                        <div style="font-size:0.68rem; color:#555; margin-bottom:0.5rem;">Captured by physically hovering/focusing elements with Playwright</div>
+                        ${patternHTML}
+                        ${stateCardsHTML}
+                        ${moreDeltas}
+                    </div>
+                `;
             }
 
-            // Selector detail list — show top selectors with their state changes
+            // CSS rule details (behind toggle, more compact)
             const detailHTML = selectors.slice(0, 8).map(sel => {
                 const states = deltas[sel];
                 const stateChips = Object.entries(states).map(([pseudo, props]) => {
                     const propList = Object.entries(props).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join('; ');
                     const color = pseudoColors[pseudo] || '#888';
-                    return `<div style="margin-top: 0.4rem; padding: 0.3rem 0.5rem; background: ${color}18; border-left: 2px solid ${color}; border-radius: 0 4px 4px 0;">
-                        <span style="font-size: 0.68rem; color: ${color}; font-weight: 700; text-transform: uppercase;">${pseudo}</span>
-                        <span style="font-size: 0.68rem; color: #777; font-family: 'SF Mono', monospace; margin-left: 0.4rem;">${propList}${Object.keys(props).length > 3 ? ' +' + (Object.keys(props).length - 3) + ' more' : ''}</span>
+                    return `<div style="margin-top: 0.3rem; padding: 0.25rem 0.5rem; background: ${color}12; border-left: 2px solid ${color}; border-radius: 0 4px 4px 0;">
+                        <span style="font-size: 0.65rem; color: ${color}; font-weight: 700; text-transform: uppercase;">${pseudo}</span>
+                        <span style="font-size: 0.65rem; color: #666; font-family: 'SF Mono', monospace; margin-left: 0.35rem;">${propList}${Object.keys(props).length > 3 ? ' +' + (Object.keys(props).length - 3) : ''}</span>
                     </div>`;
                 }).join('');
 
-                return `<div style="padding: 0.7rem 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
-                    <div style="font-size: 0.78rem; color: #ddd; font-family: 'SF Mono', monospace; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sel}</div>
+                return `<div style="padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <div style="font-size: 0.72rem; color: #bbb; font-family: 'SF Mono', monospace; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sel}</div>
                     ${stateChips}
                 </div>`;
             }).join('');
@@ -6407,7 +6411,7 @@
             const detailToggleId = 'istates-' + Math.random().toString(36).slice(2, 8);
             const detailToggleHTML = detailHTML ? `
                 <div style="margin-top:0.5rem;">
-                    <button onclick="var el=document.getElementById('${detailToggleId}');var open=el.style.display!=='none';el.style.display=open?'none':'block';this.querySelector('.sa').style.transform=open?'rotate(0deg)':'rotate(180deg)';" style="width:100%; background:rgba(10,10,10,0.4); border:none; border-radius:8px; padding:0.6rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; color:#fff; font-size:0.8rem; font-weight:600;">
+                    <button onclick="var el=document.getElementById('${detailToggleId}');var open=el.style.display!=='none';el.style.display=open?'none':'block';this.querySelector('.sa').style.transform=open?'rotate(0deg)':'rotate(180deg)';" style="width:100%; background:rgba(10,10,10,0.4); border:none; border-radius:8px; padding:0.55rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; color:#fff; font-size:0.78rem; font-weight:600;">
                         <span>CSS Rule Details (${selectors.length} selectors)</span>
                         <span class="sa" style="display:inline-block; transform:rotate(0deg); transition:transform 0.2s; color:#666;">▼</span>
                     </button>
@@ -6429,9 +6433,6 @@
                 ${strategyHTML}
                 <div style="margin: 0.5rem 0 0.25rem; display: flex; flex-wrap: wrap;">
                     ${pseudoPillsHTML}
-                </div>
-                <div style="margin: 0.25rem 0 0.5rem; display: flex; flex-wrap: wrap;">
-                    ${typePillsHTML}
                 </div>
                 ${physicalHTML}
                 ${detailToggleHTML}
@@ -6573,12 +6574,10 @@
 
         function createShadowCard(icon, title, data, confidenceClass) {
             const levels = data.levels || [];
-            const previewId = 'shadow-preview-' + Math.random().toString(36).slice(2, 8);
 
             // --- Parse shadow CSS into anatomy components ---
             function parseShadow(css) {
                 if (!css) return null;
-                // Handle multi-shadow (take first)
                 const first = css.split(/,(?![^(]*\))/)[0].trim();
                 const inset = first.includes('inset');
                 const clean = first.replace('inset', '').trim();
@@ -6587,68 +6586,57 @@
                 return { x: m[1], y: m[2], blur: m[3], spread: m[4] || '0', color: m[5].trim(), inset };
             }
 
-            // --- Clean comparison strip (same-height cards, lightest → heaviest) ---
-            let comparisonHTML = '';
+            // --- Elevation ladder: all shadows visible at once, stacked vertically ---
+            // Each shadow gets a full-width card on a light stage so the shadow is clearly visible
+            let ladderHTML = '';
             if (levels.length > 0) {
                 const sorted = [...levels].sort((a, b) => (a.blur_radius || 0) - (b.blur_radius || 0));
-                comparisonHTML = `
-                <div style="display:flex; align-items:flex-start; gap:var(--space-3); flex-wrap:wrap; margin:var(--space-4) 0; padding:var(--space-4); background:var(--surface-0); border-radius:var(--radius-md);">
-                    ${sorted.map(lvl => `
-                        <div style="display:flex; flex-direction:column; align-items:center; flex:1; min-width:60px; max-width:100px;">
-                            <div style="width:60px; height:80px; background:#f4f4f4; border-radius:var(--radius-sm); box-shadow:${lvl.css}; margin-bottom:var(--space-2);"></div>
-                            <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:600; text-align:center;">${lvl.name}</div>
-                            <div style="font-size:0.6rem; color:var(--text-disabled); font-family:var(--font-mono);">${lvl.count}x</div>
-                        </div>
-                    `).join('')}
-                </div>`;
+                ladderHTML = `<div style="display:flex; flex-direction:column; gap:0.75rem; margin:0.75rem 0;">`;
+
+                sorted.forEach((lvl, i) => {
+                    const anatomy = parseShadow(lvl.css);
+                    const depthLabel = i === 0 ? 'Ground' : i === sorted.length - 1 ? 'Highest' : 'Level ' + i;
+                    // Increase left margin per level to create staircase effect
+                    const indent = Math.min(i * 12, 48);
+
+                    ladderHTML += `
+                        <div style="margin-left:${indent}px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; overflow:hidden;">
+                            <!-- Light stage showing the actual shadow -->
+                            <div style="padding:1rem 1.25rem; background:#e8e8ec; background-image: radial-gradient(circle, #d8d8dc 1px, transparent 1px); background-size: 10px 10px; display:flex; align-items:center; gap:1rem;">
+                                <div style="width:100%; max-width:180px; height:48px; background:#fff; border-radius:8px; box-shadow:${lvl.css}; flex-shrink:0;"></div>
+                                <div style="flex:1; min-width:0;">
+                                    <div style="font-size:0.72rem; color:#444; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">${lvl.name}</div>
+                                    <div style="font-size:0.62rem; color:#888; margin-top:2px;">${depthLabel} · ${lvl.count} uses</div>
+                                </div>
+                            </div>
+                            <!-- Anatomy strip (dark) -->
+                            <div style="padding:0.4rem 0.75rem; display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+                                ${anatomy ? `
+                                    <span style="font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">x ${anatomy.x}px</span>
+                                    <span style="font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">y ${anatomy.y}px</span>
+                                    <span style="font-size:0.6rem; color:#0a84ff; background:rgba(10,132,255,0.1); padding:2px 6px; border-radius:3px;">blur ${anatomy.blur}px</span>
+                                    ${anatomy.spread !== '0' ? `<span style="font-size:0.6rem; color:#ff9f0a; background:rgba(255,159,10,0.1); padding:2px 6px; border-radius:3px;">spread ${anatomy.spread}px</span>` : ''}
+                                    <span style="display:inline-flex; align-items:center; gap:3px; font-size:0.6rem; color:#888; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;"><span style="width:8px; height:8px; border-radius:2px; background:${anatomy.color}; border:1px solid rgba(255,255,255,0.2);"></span>${anatomy.color}</span>
+                                    ${anatomy.inset ? `<span style="font-size:0.6rem; color:#ff9f0a; background:rgba(255,159,10,0.12); padding:2px 6px; border-radius:3px; font-weight:600;">inset</span>` : ''}
+                                ` : `<span style="font-size:0.6rem; color:#666; font-family:'SF Mono',monospace;">${lvl.css}</span>`}
+                                <span style="margin-left:auto; font-size:0.58rem; color:#555;">${(lvl.selectors||[]).slice(0,2).map(s => '<code style="color:#0a84ff;">'+s+'</code>').join(' ')}</span>
+                            </div>
+                        </div>`;
+                });
+                ladderHTML += `</div>`;
             }
 
-            // --- Detailed list: every shadow with selectors (behind toggle) ---
-            const shadowToggleId = 'shadow-detail-' + Math.random().toString(36).slice(2, 8);
-            const detailHTML = levels.length > 0 ? `
-                <div style="margin-top: 1rem;">
-                    <button onclick="var el=document.getElementById('${shadowToggleId}');var open=el.style.display!=='none';el.style.display=open?'none':'block';this.querySelector('.sa').style.transform=open?'rotate(0deg)':'rotate(180deg)';" style="width:100%; background:rgba(10,10,10,0.4); border:none; border-radius:8px; padding:0.7rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; color:#fff; font-size:0.82rem; font-weight:600;">
-                        <span>Where they live <span style="color:#666; font-weight:400;">(${levels.length} shadows)</span></span>
-                        <span class="sa" style="display:inline-block; transform:rotate(0deg); transition:transform 0.2s; color:#666;">▼</span>
-                    </button>
-                    <div id="${shadowToggleId}" style="display:none; padding:1rem 0.75rem 0.5rem; background:rgba(10,10,10,0.25); border-radius:0 0 8px 8px;">
-                        ${levels.map(lvl => {
-                            const anatomy = parseShadow(lvl.css);
-                            return `
-                            <div style="display: flex; align-items: flex-start; gap: 0.85rem; padding: 0.6rem 0; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer;"
-                                 onmouseenter="var p=document.getElementById('${previewId}');if(p){p.style.boxShadow='${lvl.css.replace(/'/g,"\\'")}';document.getElementById('${previewId}-label').textContent='${lvl.name}';}"
-                                 onmouseleave="var p=document.getElementById('${previewId}');if(p){p.style.boxShadow='none';document.getElementById('${previewId}-label').textContent='hover to preview';}">
-                                <div style="min-width: 68px; font-size: 0.72rem; color: #0a84ff; font-weight: 600; text-transform: uppercase; padding-top: 0.15rem;">${lvl.name}</div>
-                                <div style="flex: 1; min-width: 0;">
-                                    <div style="font-family: 'SF Mono', monospace; font-size: 0.72rem; color: #ccc; word-break: break-all;">${lvl.css}</div>
-                                    ${anatomy ? `<div style="display: flex; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: wrap;">
-                                        <span style="font-size: 0.62rem; color: #888; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;">x: ${anatomy.x}px</span>
-                                        <span style="font-size: 0.62rem; color: #888; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;">y: ${anatomy.y}px</span>
-                                        <span style="font-size: 0.62rem; color: #888; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;">blur: ${anatomy.blur}px</span>
-                                        ${anatomy.spread !== '0' ? '<span style="font-size: 0.62rem; color: #888; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;">spread: '+anatomy.spread+'px</span>' : ''}
-                                        <span style="font-size: 0.62rem; color: #888; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;">${anatomy.color}</span>
-                                        ${anatomy.inset ? '<span style="font-size: 0.62rem; color: #ff9f0a; background: rgba(255,159,10,0.1); padding: 1px 5px; border-radius: 3px;">inset</span>' : ''}
-                                    </div>` : ''}
-                                    <div style="margin-top: 0.3rem; font-size: 0.72rem; color: #666;">${lvl.selectors.map(s => '<code style="background:rgba(10,132,255,0.12);color:#0a84ff;padding:0.1rem 0.35rem;border-radius:3px;font-size:0.68rem;">'+s+'</code>').join(' ')}</div>
-                                </div>
-                                <div style="font-size: 0.72rem; color: #888; white-space: nowrap;">${lvl.count} uses</div>
-                            </div>`;
-                        }).join('')}
-                    </div>
-                </div>
-            ` : '';
-
-            // --- Evidence trail (collapsible-style, shown inline) ---
+            // --- Evidence trail ---
             const trail = data.evidence_trail || {};
-            const trailHTML = `
-                <div style="margin-top: 1rem; padding: 1rem; background: rgba(10,132,255,0.07); border-left: 3px solid #0a84ff; border-radius: 6px;">
-                    <div style="font-size: 0.72rem; color: #0a84ff; font-weight: 600; margin-bottom: 0.4rem;">Evidence</div>
-                    <div style="font-size: 0.72rem; color: #777; line-height: 1.6;">
+            const trailHTML = (trail.found && trail.found.length) ? `
+                <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(10,132,255,0.07); border-left: 3px solid #0a84ff; border-radius: 6px;">
+                    <div style="font-size: 0.68rem; color: #0a84ff; font-weight: 600; margin-bottom: 0.3rem;">Evidence</div>
+                    <div style="font-size: 0.68rem; color: #777; line-height: 1.5;">
                         ${(trail.found||[]).map(f => '🔍 '+f).join('<br>')}
                         ${trail.concluded ? '<br><span style="color:#aaa;">→ '+trail.concluded+'</span>' : ''}
                     </div>
                 </div>
-            `;
+            ` : '';
 
             return `
                 <div class="metric-header">
@@ -6659,8 +6647,7 @@
                     </div>
                     <div class="confidence-badge confidence-${confidenceClass}">${data.confidence}%</div>
                 </div>
-                ${comparisonHTML}
-                ${detailHTML}
+                ${ladderHTML}
                 ${trailHTML}
             `;
         }
@@ -7353,40 +7340,96 @@
             const forms   = data.forms || [];
             const totalBtns = (counts.buttons || 0) + (counts.linkButtons || 0);
 
-            // ── Button style previews ──
-            // Each unique visual style gets a live preview swatch
+            // ── Button specimen gallery ──
+            // Each button gets its own isolated stage with a contrasting background
             let buttonPreviewsHTML = '';
             if (styles.length > 0) {
                 buttonPreviewsHTML = `<div style="font-weight:600; margin-bottom:0.6rem; color:#fff; font-size:0.92rem;">Button Styles</div>`;
-                buttonPreviewsHTML += `<div style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1.25rem;">`;
-                styles.forEach(style => {
-                    // Live preview: render an actual element with the extracted styles
+                buttonPreviewsHTML += `<div style="display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.25rem;">`;
+
+                // Group by role: primary first, then secondary, then other
+                const grouped = { primary: [], secondary: [], other: [] };
+                styles.forEach(s => {
+                    const r = (s.role || '').toLowerCase();
+                    if (r === 'primary') grouped.primary.push(s);
+                    else if (r === 'secondary') grouped.secondary.push(s);
+                    else grouped.other.push(s);
+                });
+                const ordered = [...grouped.primary, ...grouped.secondary, ...grouped.other];
+
+                ordered.forEach(style => {
                     const ex = style.examples[0] || {};
                     const role = style.role || '';
                     const roleBadgeColor = role === 'primary' ? '#0a84ff' : role === 'secondary' ? '#a78bfa' : '#666';
-                    const roleBadge = role ? `<span style="font-size:0.6rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:${roleBadgeColor}; background:${roleBadgeColor}18; border:1px solid ${roleBadgeColor}40; border-radius:3px; padding:1px 5px;">${role}</span>` : '';
+
+                    // Determine stage background: use mid-grey that contrasts with both light and dark buttons
+                    // If button bg is dark (< 40% luminance), use light stage. If light, use dark stage.
+                    const bgColor = style.bg || 'transparent';
+                    const isTransparent = bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'none';
+                    const isDarkBg = (function() {
+                        if (isTransparent) return true;
+                        const m = bgColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                        if (m) { return (parseInt(m[1])*0.299 + parseInt(m[2])*0.587 + parseInt(m[3])*0.114) < 128; }
+                        if (bgColor.startsWith('#')) {
+                            const hex = bgColor.replace('#','');
+                            const r = parseInt(hex.substr(0,2),16), g = parseInt(hex.substr(2,2),16), b = parseInt(hex.substr(4,2),16);
+                            return (r*0.299 + g*0.587 + b*0.114) < 128;
+                        }
+                        return false;
+                    })();
+                    const stageBg = isDarkBg ? '#e8e8ec' : '#1a1a1e';
+                    const stagePattern = isDarkBg
+                        ? 'background-image: radial-gradient(circle, #d0d0d4 1px, transparent 1px); background-size: 12px 12px;'
+                        : 'background-image: radial-gradient(circle, #2a2a2e 1px, transparent 1px); background-size: 12px 12px;';
+
+                    // Property strip: show key CSS values as pills
+                    const propPills = [];
+                    if (style.bg && style.bg !== 'transparent') {
+                        propPills.push(`<span style="display:inline-flex; align-items:center; gap:4px; font-size:0.62rem; color:#999; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;"><span style="width:10px; height:10px; border-radius:2px; background:${style.bg}; border:1px solid rgba(255,255,255,0.15); flex-shrink:0;"></span>bg</span>`);
+                    }
+                    if (style.color) {
+                        propPills.push(`<span style="display:inline-flex; align-items:center; gap:4px; font-size:0.62rem; color:#999; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;"><span style="width:10px; height:10px; border-radius:2px; background:${style.color}; border:1px solid rgba(255,255,255,0.15); flex-shrink:0;"></span>text</span>`);
+                    }
+                    if (style.borderRadius && style.borderRadius !== '0px') {
+                        propPills.push(`<span style="font-size:0.62rem; color:#999; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">⌒ ${style.borderRadius}</span>`);
+                    }
+                    if (style.fontSize) {
+                        propPills.push(`<span style="font-size:0.62rem; color:#999; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">T ${style.fontSize}</span>`);
+                    }
+                    if (style.fontWeight && style.fontWeight !== '400' && style.fontWeight !== 'normal') {
+                        propPills.push(`<span style="font-size:0.62rem; color:#999; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px;">W ${style.fontWeight}</span>`);
+                    }
+
                     buttonPreviewsHTML += `
-                        <div style="display:flex; flex-direction:column; align-items:center; gap:0.35rem;">
-                            ${roleBadge}
-                            <div style="
-                                background: ${style.bg};
-                                color: ${style.color};
-                                border-radius: ${style.borderRadius};
-                                padding: ${style.padding || '0.45rem 1rem'};
-                                font-size: ${style.fontSize || '0.82rem'};
-                                font-weight: ${style.fontWeight || '600'};
-                                white-space: nowrap;
-                                max-width: 140px;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                                border: ${style.border || '1px solid rgba(255,255,255,0.08)'};
-                                box-shadow: ${style.boxShadow && style.boxShadow !== 'none' ? style.boxShadow : 'none'};
-                                cursor: default;
-                                user-select: none;
-                            " title="${ex.selector || ''}">
-                                ${ex.text || 'Button'}
+                        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; overflow:hidden;">
+                            <!-- Stage: neutral contrasting background -->
+                            <div style="display:flex; align-items:center; justify-content:center; padding:1.2rem 1.5rem; background:${stageBg}; ${stagePattern} min-height:56px;">
+                                <div style="
+                                    background: ${style.bg};
+                                    color: ${style.color};
+                                    border-radius: ${style.borderRadius};
+                                    padding: ${style.padding || '0.55rem 1.25rem'};
+                                    font-size: ${style.fontSize || '0.88rem'};
+                                    font-weight: ${style.fontWeight || '600'};
+                                    white-space: nowrap;
+                                    max-width: 220px;
+                                    overflow: hidden;
+                                    text-overflow: ellipsis;
+                                    border: ${style.border || '1px solid rgba(255,255,255,0.08)'};
+                                    box-shadow: ${style.boxShadow && style.boxShadow !== 'none' ? style.boxShadow : 'none'};
+                                    cursor: default;
+                                    user-select: none;
+                                " title="${ex.selector || ''}">
+                                    ${ex.text || 'Button'}
+                                </div>
                             </div>
-                            <span style="font-size:0.72rem; color:#666;">${style.count}× used</span>
+                            <!-- Info strip -->
+                            <div style="padding:0.5rem 0.75rem; display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                                ${role ? `<span style="font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:${roleBadgeColor}; background:${roleBadgeColor}18; border:1px solid ${roleBadgeColor}40; border-radius:3px; padding:1px 6px;">${role}</span>` : ''}
+                                <span style="font-size:0.68rem; color:#888; font-weight:600;">${style.count}× used</span>
+                                <span style="flex:1;"></span>
+                                ${propPills.join('')}
+                            </div>
                         </div>`;
                 });
                 buttonPreviewsHTML += `</div>`;
@@ -7461,7 +7504,7 @@
                     ${countsRow || '<span style="color:#666;">None detected</span>'}
                 </div>
 
-                <!-- Button style live previews -->
+                <!-- Button specimen gallery -->
                 ${buttonPreviewsHTML}
 
                 <!-- Inputs -->
@@ -9307,68 +9350,137 @@
             const sticky  = details.sticky_count    || 0;
             const total   = flex + grid + abs + fixed + sticky;
 
-            // Layout type distribution
             const types = [
-                { label: 'Flexbox',   count: flex,   color: '#7ec8e3' },
-                { label: 'Grid',      count: grid,   color: '#68d68d' },
-                { label: 'Absolute',  count: abs,    color: '#ff9f0a' },
-                { label: 'Fixed',     count: fixed,  color: '#ff6b6b' },
-                { label: 'Sticky',    count: sticky, color: '#c9b8ff' }
+                { label: 'Flexbox',   count: flex,   color: '#7ec8e3', icon: '⇄' },
+                { label: 'Grid',      count: grid,   color: '#68d68d', icon: '⊞' },
+                { label: 'Absolute',  count: abs,    color: '#ff9f0a', icon: '📌' },
+                { label: 'Fixed',     count: fixed,  color: '#ff6b6b', icon: '🔒' },
+                { label: 'Sticky',    count: sticky, color: '#c9b8ff', icon: '📎' }
             ].filter(t => t.count > 0).sort((a,b) => b.count - a.count);
 
-            // Stacked bar
+            // Distribution bar (compact)
             const barParts = types.map(t => {
-                const pct = (t.count / total) * 100;
-                return `<div style="height:100%; width:${pct}%; background:${t.color};" title="${t.label}: ${t.count}"></div>`;
+                const pct = Math.max((t.count / total) * 100, 3);
+                return `<div style="height:100%; width:${pct}%; background:${t.color}; position:relative;" title="${t.label}: ${t.count}"></div>`;
             }).join('');
 
-            // Type pills
-            const pillsHTML = types.map(t => `
-                <div style="display:flex; align-items:center; gap:6px; padding:3px 0;">
-                    <div style="width:10px; height:10px; border-radius:2px; background:${t.color}; flex-shrink:0;"></div>
-                    <span style="font-size:0.75rem; color:#ccc; flex:1;">${t.label}</span>
-                    <span style="font-size:0.75rem; color:#fff; font-weight:600; font-family:'SF Mono',monospace;">${t.count}</span>
-                </div>
+            // Type legend as compact row
+            const legendHTML = types.map(t => `
+                <span style="display:inline-flex; align-items:center; gap:4px; padding:0.2rem 0.5rem; background:${t.color}15; border-radius:6px; font-size:0.7rem; margin:0.15rem;">
+                    <span style="width:8px; height:8px; border-radius:2px; background:${t.color};"></span>
+                    <span style="color:${t.color}; font-weight:600;">${t.count}</span>
+                    <span style="color:#999;">${t.label}</span>
+                </span>
             `).join('');
 
-            // Layout examples with pattern annotations
-            const allExamples = [
-                ...(details.grid_examples || []).slice(0, 2).map(g => ({ ...g, type: 'Grid', color: '#68d68d' })),
-                ...(details.flex_examples || []).slice(0, 2).map(f => ({ ...f, type: 'Flex', color: '#7ec8e3' }))
-            ];
+            // Helper: build mini SVG wireframe for a grid example
+            function buildGridDiagram(ex) {
+                const cols = (ex.columns || '').split(' ').filter(Boolean);
+                const colCount = Math.min(cols.length || 3, 6);
+                const children = Math.min(ex.child_count || colCount, 12);
+                const rows = Math.ceil(children / colCount);
+                const W = 160, H = Math.min(rows * 28 + 8, 80);
+                const gap = 3;
+                const cellW = (W - gap * (colCount + 1)) / colCount;
+                const cellH = (H - gap * (rows + 1)) / rows;
+
+                let rects = '';
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < colCount; c++) {
+                        const idx = r * colCount + c;
+                        if (idx >= children) break;
+                        const x = gap + c * (cellW + gap);
+                        const y = gap + r * (cellH + gap);
+                        rects += `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="2" fill="#68d68d" opacity="${0.25 + (idx === 0 ? 0.25 : 0)}"/>`;
+                    }
+                }
+                return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;">${rects}</svg>`;
+            }
+
+            // Helper: build mini SVG wireframe for a flex example
+            function buildFlexDiagram(ex) {
+                const dir = (ex.direction || 'row').toLowerCase();
+                const children = Math.min(ex.child_count || 3, 6);
+                const isCol = dir.includes('column');
+                const W = 160, H = isCol ? Math.min(children * 22 + 8, 80) : 44;
+                const gap = 3;
+
+                let rects = '';
+                if (isCol) {
+                    const itemH = (H - gap * (children + 1)) / children;
+                    for (let i = 0; i < children; i++) {
+                        const y = gap + i * (itemH + gap);
+                        const w = W - gap * 2 - (i % 2 === 0 ? 0 : 30);
+                        rects += `<rect x="${gap}" y="${y}" width="${w}" height="${itemH}" rx="2" fill="#7ec8e3" opacity="${0.25 + (i === 0 ? 0.2 : 0)}"/>`;
+                    }
+                } else {
+                    // Row: variable-width children
+                    const justify = (ex.justify || '').toLowerCase();
+                    const totalGap = gap * (children + 1);
+                    const availW = W - totalGap;
+                    const widths = [];
+                    for (let i = 0; i < children; i++) {
+                        widths.push(availW / children + (i === 0 ? 8 : i === children-1 ? -4 : 0));
+                    }
+                    let x = gap;
+                    if (justify.includes('center')) x = (W - widths.reduce((a,b) => a+b, 0) - gap * (children-1)) / 2;
+                    else if (justify.includes('end')) x = W - widths.reduce((a,b) => a+b, 0) - gap * (children + 1) + gap;
+                    for (let i = 0; i < children; i++) {
+                        rects += `<rect x="${x}" y="${gap}" width="${widths[i]}" height="${H - gap*2}" rx="2" fill="#7ec8e3" opacity="${0.25 + (i === 0 ? 0.2 : 0)}"/>`;
+                        x += widths[i] + gap;
+                    }
+                }
+                return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;">${rects}</svg>`;
+            }
+
+            // Layout pattern examples with mini wireframes
+            const gridExamples = (details.grid_examples || []).slice(0, 3).map(g => ({ ...g, type: 'Grid', color: '#68d68d' }));
+            const flexExamples = (details.flex_examples || []).slice(0, 3).map(f => ({ ...f, type: 'Flex', color: '#7ec8e3' }));
+            const allExamples = [...gridExamples, ...flexExamples];
+
             const examplesHTML = allExamples.length ? `
-                <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:0.5rem;">
+                <div style="margin-top:0.6rem;">
                     <div style="font-size:0.7rem; color:#888; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px;">Layout Patterns</div>
+                    <div style="display:flex; flex-direction:column; gap:0.5rem;">
                     ${allExamples.map(ex => {
                         const patternName = ex.pattern || ex.type + ' container';
-                        const details_parts = [];
+                        const diagram = ex.type === 'Grid' ? buildGridDiagram(ex) : buildFlexDiagram(ex);
+
+                        // Build description
+                        const descParts = [];
                         if (ex.columns) {
-                            const cols = ex.columns || '';
-                            const colParts = cols.split(' ').filter(Boolean);
+                            const colParts = ex.columns.split(' ').filter(Boolean);
                             const uniqueCols = [...new Set(colParts)];
-                            details_parts.push(uniqueCols.length === 1 && colParts.length > 3
-                                ? 'repeat(' + colParts.length + ', ' + uniqueCols[0] + ')'
-                                : cols.substring(0, 50));
-                            if (ex.gap && ex.gap !== 'normal') details_parts.push('gap: ' + ex.gap);
-                        } else {
-                            if (ex.direction && ex.direction !== 'row') details_parts.push(ex.direction);
-                            if (ex.justify && ex.justify !== 'normal' && ex.justify !== 'flex-start') details_parts.push(ex.justify);
-                            if (ex.align && ex.align !== 'normal' && ex.align !== 'stretch') details_parts.push(ex.align);
+                            descParts.push(uniqueCols.length === 1 && colParts.length > 1
+                                ? colParts.length + ' equal columns'
+                                : colParts.length + ' columns');
                         }
-                        return `<div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; margin-bottom:5px; border-left:3px solid ${ex.color};">
-                            <div style="display:flex; align-items:center; gap:6px; margin-bottom:3px;">
-                                <span style="font-size:0.78rem; font-weight:600; color:${ex.color};">${patternName}</span>
-                                ${ex.child_count ? '<span style="font-size:0.6rem; color:#666;">' + ex.child_count + ' children</span>' : ''}
-                            </div>
-                            <div style="font-family:\'SF Mono\',monospace; font-size:0.65rem; color:#888;">
-                                <span style="color:#666;">${ex.selector}</span>${details_parts.length ? ' — ' + details_parts.join(', ') : ''}
+                        if (ex.direction && ex.direction !== 'row') descParts.push(ex.direction);
+                        if (ex.gap && ex.gap !== 'normal' && ex.gap !== '0px') descParts.push('gap ' + ex.gap);
+                        if (ex.justify && !['normal','flex-start','start'].includes(ex.justify)) descParts.push(ex.justify);
+                        if (ex.child_count) descParts.push(ex.child_count + ' children');
+
+                        return `<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px; overflow:hidden;">
+                            <div style="display:flex; gap:0.75rem; padding:0.6rem 0.75rem; align-items:center;">
+                                <!-- Mini wireframe -->
+                                <div style="flex-shrink:0; background:rgba(0,0,0,0.3); border-radius:6px; padding:6px; display:flex; align-items:center; justify-content:center;">
+                                    ${diagram}
+                                </div>
+                                <!-- Info -->
+                                <div style="flex:1; min-width:0;">
+                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:3px;">
+                                        <span style="font-size:0.6rem; padding:1px 6px; background:${ex.color}20; color:${ex.color}; border-radius:3px; font-weight:700; text-transform:uppercase;">${ex.type}</span>
+                                        <span style="font-size:0.78rem; font-weight:600; color:#ddd;">${patternName}</span>
+                                    </div>
+                                    <div style="font-size:0.65rem; color:#777;">${descParts.join(' · ')}</div>
+                                    <code style="font-size:0.6rem; color:#555; display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ex.selector}</code>
+                                </div>
                             </div>
                         </div>`;
                     }).join('')}
+                    </div>
                 </div>
             ` : '';
-            const gridHTML = '';
-            const flexHTML = '';
 
             return `
                 <div class="metric-header">
@@ -9379,20 +9491,15 @@
                     <span class="confidence-badge confidence-${confidenceClass}">${data.confidence || 0}%</span>
                 </div>
                 <div class="metric-body">
-                    <div style="font-size: 0.78rem; color: #888; padding: 0.6rem 0.75rem; background: rgba(10,132,255,0.08); border-radius: 6px; margin-bottom: 0.75rem; line-height: 1.5;">
-                        How elements are positioned on the page. <strong style="color:#7ec8e3;">Flexbox</strong> = items in rows/columns. <strong style="color:#68d68d;">Grid</strong> = 2D table-like layouts. <strong style="color:#ff9f0a;">Absolute</strong> = pinned to exact coordinates. <strong style="color:#ff6b6b;">Fixed</strong> = stays in place when scrolling. <strong style="color:#c9b8ff;">Sticky</strong> = scrolls then sticks.
-                    </div>
-                    <!-- Stacked bar -->
-                    <div style="height:10px; border-radius:5px; overflow:hidden; display:flex; margin-bottom:0.6rem; background:rgba(255,255,255,0.05);">
+                    <!-- Distribution bar -->
+                    <div style="height:8px; border-radius:4px; overflow:hidden; display:flex; margin-bottom:0.5rem; background:rgba(255,255,255,0.05);">
                         ${barParts}
                     </div>
-
-                    <!-- Type legend -->
-                    <div style="margin-bottom:0.4rem;">
-                        ${pillsHTML}
+                    <!-- Legend -->
+                    <div style="display:flex; flex-wrap:wrap; gap:0.15rem; margin-bottom:0.4rem;">
+                        ${legendHTML}
                     </div>
-
-                    <!-- Layout pattern examples -->
+                    <!-- Layout pattern wireframes -->
                     ${examplesHTML}
                 </div>
             `;
