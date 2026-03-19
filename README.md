@@ -1,382 +1,214 @@
-# 🔍 Web Intelligence Scraper
+# Web Intelligence Scraper
 
-A comprehensive web scraping and design analysis system that extracts design systems, layout patterns, and site architecture in a way that is legible to humans and LLMs.
+A web scraping and design analysis system that extracts design systems, layout patterns, and site architecture — legible to humans and LLMs.
 
----
-
-## 🤖 FOR LLMs (Claude Code, GPT, etc.)
-
-**Looking to analyze sites programmatically?** Read the **[LLM Usage Guide](LLM_USAGE_GUIDE.md)** for:
-- API endpoints (`/api/discover-urls`, `/api/batch-analyze`)
-- Common workflows (site architecture, design systems)
-- What the scraper CAN and CANNOT do
-- Example analysis flows
+This is **not a content crawler** — it's an **evidence engine** for structural understanding.
 
 ---
 
-## 🎯 What This Tool Does
-
-This is **not a content crawler**—it's an **evidence engine** for structural understanding.
-
-**It extracts:**
-- Design systems (typography, colors, spacing, shadows)
-- Layout patterns (Grid, Flexbox, positioning)
-- Site architecture (navigation, URL patterns, templates)
-- Visual hierarchy (hero sections, CTAs, content groups)
-- Component structures (with CSS selectors)
-
-**Primary users:**
-- Designers learning from real-world sites
-- Developers extracting reusable patterns
-- LLMs (Claude Code, GPT) performing architectural analysis
-
----
-
-## 🚀 Quick Start
-
-### 1. Install Dependencies
+## Quick Start
 
 ```bash
-cd /Users/jarradjones/Desktop/Webscraper
+# Clone (include the component SDK submodule)
+git clone --recurse-submodules https://github.com/ScumbagJones/Webscraper-Site-Analyzer.git
+cd Webscraper-Site-Analyzer
+
+# Python environment (3.9+, 3.10+ recommended)
+python3 -m venv venv310
+source venv310/bin/activate
+
+# Install Python dependencies
 pip install -r requirements.txt
-playwright install chromium
+
+# Install browser binary (patchright Chromium — ~300MB download)
+python -m patchright install
+
+# Install SDK dependencies (for component mapping + contrast auditing)
+cd website-understanding-sdk && npm install && cd ..
+
+# Start the server
+./start.sh
+# Opens http://127.0.0.1:8080 automatically
 ```
 
-### 2. Install SDK Dependencies
+### Optional: Enhanced Stealth (Cloudflare bypass)
 
 ```bash
-cd website-understanding-sdk
-npm install
-cd ..
+# Requires Python 3.10+
+pip install "scrapling[fetchers]"
+scrapling install
 ```
-
-### 3. Start the Server
-
-```bash
-python3 app.py
-```
-
-Server runs at **http://localhost:8080**
 
 ---
 
-## 📡 API Endpoints
+## What It Extracts
 
-### Complete Site Analysis
-```bash
-POST /api/deep-scan
-{
-  "site_url": "https://example.com",
-  "analysis_mode": "single"  # or "smart-nav"
-}
-```
-
-**Returns:** 20+ metrics including layout, typography, colors, component map, and LLM helper suggestions.
-
-### Discover All Links
-```bash
-POST /api/discover-urls
-{"site_url": "https://example.com"}
-```
-
-**Returns:** Categorized links (navigation, articles, sections, external)
-
-### Batch Analysis
-```bash
-POST /api/batch-analyze
-{"urls": ["url1", "url2", "url3"]}  # max 5
-```
-
-**Returns:** Full analysis for multiple URLs in one request
-
-### Extract Component
-```bash
-POST /api/rip-component
-{"site_url": "...", "selector": ".nav"}
-```
-
-**Returns:** HTML + CSS blueprint for specific component
-
-### Get Computed Styles
-```bash
-POST /api/extract-styles
-{"site_url": "...", "selector": ".card", "mode": "critical"}
-```
-
-**Returns:** Real pixel values (not Tailwind classes)
+| Category | Examples | Confidence |
+|----------|----------|------------|
+| Typography | Fonts, sizes, type scale ratio | 95% avg |
+| Spacing | Scale, base unit, rhythm | 85% avg |
+| Colors | Palette, CSS variable roles | 69% avg (drops on Tailwind) |
+| Layout | Flex/Grid patterns, containers | 85% avg |
+| Visual Hierarchy | Hero, CTA, attention flow | 85% avg |
+| Shadows | Elevation levels, anatomy | 73% avg |
+| Breakpoints | Actual media queries | 88% avg |
+| Spatial Composition | Page structure, zones, whitespace | 85%+ |
+| Motion | Duration scale, easing palette | Varies |
+| Accessibility | Landmarks, headings, contrast (WCAG AA) | Varies |
+| API Relationships | Endpoints, categories, redundancy | Varies |
+| + 10 more | SEO, security, performance, DOM depth... | |
 
 ---
 
-## 🧠 Key Features
+## API Endpoints
 
-### 20+ Metric Categories
-1. Layout System (Grid/Flexbox)
-2. Typography (fonts, sizes, type scale)
-3. Color Palette (with visual previews)
-4. Spacing System (margin/padding scale)
-5. Responsive Breakpoints (actual media queries)
-6. Shadow System (elevation levels)
-7. Border Radius (rounding patterns)
-8. Z-Index Stack (layering)
-9. Animations (CSS + JS libraries)
-10. Accessibility Score
-11. Performance Metrics
-12. SEO Analysis
-13. Security Headers
-14. API Patterns
-15. CSS Tricks
-16. Interactive Elements
-17. Third-Party Integrations
-18. Visual Hierarchy
-19. Component Map (with CSS selectors)
-20. DOM Depth
-
-### LLM-Friendly Features
-- **Auto-suggestions:** Every analysis includes `llm_helper` with next steps
-- **URL discovery:** Automatic link categorization
-- **Batch analysis:** Compare multiple pages at once
-- **URL pattern detection:** Identifies templates (`/p/{slug}`)
-- **Context-specific tips:** Guidance based on page type
-
-### Special Capabilities
-- **Stealth Mode:** Bypasses bot protection (works on pi.fyi, etc.)
-- **Full-Page Screenshots:** Captures entire scrollable content
-- **Smart Nav Mode:** Auto-discovers and analyzes 3 representative pages
-- **Component Extraction:** CSS selectors for all page sections
-- **Actual Media Queries:** Shows real CSS, not inferred breakpoints
-
----
-
-## 🏗️ Architecture
-
-### Tech Stack
-- **Backend:** Python 3.9+ with Flask
-- **Browser Automation:** Playwright (Chromium)
-- **HTML Parsing:** BeautifulSoup
-- **Component Analysis:** website-understanding-sdk (Node.js bridge)
-- **Frontend:** Vanilla JavaScript
-
-### Core Files
-- `app.py` - Flask server and API routing
-- `deep_evidence_engine.py` - Main analysis orchestrator (20+ metrics)
-- `component_mapper.py` - Bridge to component detection SDK
-- `design_system_metrics.py` - Typography, colors, spacing, shadows
-- `visual_hierarchy_analyzer.py` - Hero sections, CTAs, content groups
-- `screenshot_annotator.py` - Full-page screenshots with overlays
-- `content_extractor.py` - Page type classification
-- `api_relationship_mapper.py` - API endpoint detection
-- `component_ripper.py` - HTML + CSS extraction
-
----
-
-## 🎨 Philosophy
-
-This tool treats **websites as systems, not pages**.
-
-**Core principles:**
-- Every extraction must be **verifiable** (traceable to DOM/CSS/network)
-- Every metric must be **defensible** (confidence scores based on evidence)
-- Every feature must **minimize hallucination risk** for LLM consumers
-
-**Output contract:**
-- Structured, deterministic JSON
-- No metric without traceable evidence
-- Explicit confidence scores
-- Clear failure modes
-
----
-
-## 🧩 Known Limitations
-
-**By design, this tool does NOT:**
-- ❌ Click buttons (provide direct URLs instead)
-- ❌ Handle auth walls (credentials not supported)
-- ❌ Infinite scroll (only initial page load)
-- ❌ Solve CAPTCHAs (stealth mode instead)
-- ❌ Maintain browser sessions (isolated requests)
-
-**Workarounds:**
-- Use `/api/discover-urls` to map site structure
-- Analyze specific pages with direct URLs
-- Stealth mode bypasses most bot detection
-
----
-
-## 📚 Documentation
-
-- **[LLM_USAGE_GUIDE.md](LLM_USAGE_GUIDE.md)** - Complete guide for LLMs
-- **[SYSTEM.md](SYSTEM.md)** - Engineering philosophy and workflow doctrine
-- **[claude.md](claude.md)** - Quick project context for AI agents
-- **[tasks/lessons.md](tasks/lessons.md)** - Captured corrections and patterns
-
----
-
-## 🛠️ Common Tasks
-
-### Testing the Server
+### Deep Scan (primary)
 ```bash
-# Health check
-curl http://localhost:8080/health
-
-# Analyze a site
-curl -X POST http://localhost:8080/api/deep-scan \
+curl -X POST http://127.0.0.1:8080/api/deep-scan \
   -H "Content-Type: application/json" \
-  -d '{"site_url": "https://example.com"}'
+  -d '{"site_url": "https://stripe.com", "analysis_mode": "single"}'
 ```
 
-### Debugging
-```bash
-# Check server logs
-tail -f server.log
+Analysis modes: `single` (one page) or `smart-nav` (auto-discover 3 representative pages).
 
-# View recent errors
-grep "ERROR" server.log | tail -20
-```
+### Other Endpoints
 
-### Adding New Metrics
-1. Add extraction method to `design_system_metrics.py`
-2. Call it in `deep_evidence_engine.py` → `_analyze_single_page()`
-3. Add display logic to `templates/web_dashboard.html`
-4. Document in `metric_explanations.py`
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/discover-urls` | POST | Extract and categorize all links |
+| `/api/batch-analyze` | POST | Compare up to 5 URLs |
+| `/api/rip-component` | POST | Extract HTML + CSS for a selector |
+| `/api/extract-styles` | POST | Get computed CSS values |
+| `/api/discover-components` | POST | Scan page for all detectable components |
+| `/api/health` | GET | Server health check |
+
+All POST endpoints accept `{"site_url": "..."}` as the base parameter.
 
 ---
 
-## 💡 Example Workflows
+## Output Structure
 
-### For Designers: Extract Design System
-```bash
-# 1. Analyze homepage
-POST /api/deep-scan {"site_url": "https://stripe.com"}
-
-# 2. Extract design tokens from response
-typography.fonts → ["Inter", ...]
-color_palette.palette.primary → ["#635BFF", ...]
-spacing.spacing_scale → [4, 8, 16, 24, 32, ...]
-responsive_breakpoints.media_queries → [...]
-
-# 3. Compare with another page
-POST /api/batch-analyze {"urls": ["homepage", "docs page"]}
-```
-
-### For Developers: Understand Architecture
-```bash
-# 1. Discover site structure
-POST /api/discover-urls {"site_url": "https://example.com"}
-
-# 2. Batch analyze key pages
-POST /api/batch-analyze {"urls": [discovered navigation links]}
-
-# 3. Compare component_map across pages
-# Identify consistent patterns (nav, footer)
-# Find variations (different article templates)
-```
-
-### For LLMs: Site Analysis
-```bash
-# 1. Deep scan with auto-suggestions
-POST /api/deep-scan {"site_url": "https://example.com"}
-
-# 2. Follow llm_helper.suggested_next_steps
-# Check url_patterns for templates
-# Read analysis_tips for context
-
-# 3. Batch analyze suggested URLs
-POST /api/batch-analyze {"urls": [from suggestions]}
-```
-
----
-
-## 🔧 Configuration
-
-### Environment Variables
-- `PORT` - Server port (default: 8080)
-- `DEBUG` - Debug mode (default: True)
-
-### Analysis Modes
-- `single` - Analyze one page (default)
-- `smart-nav` - Auto-discover and analyze 3 pages
-
-### Timeouts
-- Page load: 60 seconds
-- JavaScript render: 3 seconds
-- Network idle: 60 seconds
-
----
-
-## 🚨 Troubleshooting
-
-### Server Won't Start
-```bash
-# Kill existing process
-lsof -ti:8080 | xargs kill -9
-
-# Restart
-python3 app.py
-```
-
-### Bot Detection Blocking
-- Stealth mode activates automatically
-- Check logs for "🥷 Stealth mode enabled"
-- If still blocked, site may require manual access
-
-### Empty Analysis Results
-- Check `server.log` for errors
-- Verify URL is accessible in browser
-- Try with `analysis_mode: "single"` first
-
----
-
-## 📊 Output Structure
-
-Every analysis returns:
+Every deep scan returns structured evidence:
 
 ```json
 {
-  "layout": {"pattern": "...", "confidence": 95, ...},
-  "typography": {"fonts": [...], "type_scale": [...], ...},
-  "color_palette": {"palette": {"primary": [...], ...}, ...},
-  "component_map": {
-    "page_type": "home",
-    "sections": [{"type": "nav", "selector": "nav.main"}],
-    "elements": {"buttons": [...], "links": [...]}
-  },
-  "llm_helper": {
-    "discovered_links": {...},
-    "suggested_next_steps": [...],
-    "url_patterns": {...},
-    "analysis_tips": [...]
-  },
-  "meta_info": {
-    "url": "...",
-    "total_requests": 47,
-    "access_strategy": "playwright_full"
+  "success": true,
+  "evidence": {
+    "typography": {
+      "fonts": ["Inter", "system-ui"],
+      "type_scale": {"ratio": 1.25, "sizes_px": [14, 16, 20, 25, 31]},
+      "confidence": 95
+    },
+    "colors": {
+      "palette": {"primary": [...], "secondary": [...], "intentional": [...]},
+      "color_roles": {"accent": "#635BFF", "background": "#0A2540"},
+      "confidence": 85
+    },
+    "spacing_scale": {
+      "scale": [4, 8, 12, 16, 24, 32, 48, 64],
+      "base_unit": "4px",
+      "confidence": 85
+    },
+    "visual_hierarchy": {
+      "hero_section": {"detected": true, ...},
+      "primary_cta": {"detected": true, ...},
+      "confidence": 85
+    },
+    "spatial_composition": {
+      "page_structure": {"pattern_type": "Landing Page (Hero + Features)"},
+      "component_zones": [...],
+      "whitespace_analysis": {...},
+      "confidence": 85
+    },
+    "llm_helper": {
+      "suggested_next_steps": [...],
+      "url_patterns": {...},
+      "analysis_tips": [...]
+    }
   }
 }
 ```
 
 ---
 
-## 🤝 Contributing
+## Architecture
 
-This is a workflow-driven project. Before contributing:
+| Layer | Tech | Files |
+|-------|------|-------|
+| Server | Python 3.9+ / Flask | `app.py`, `start.sh` |
+| Browser | Patchright (Chromium, CDP anti-detection) | `deep_evidence_engine.py` |
+| Parsing | BeautifulSoup, lxml | Various extractors |
+| Extractors | 18 specialized modules | `extractors/` |
+| SDK Bridge | Node.js (component mapping, axe-core) | `website-understanding-sdk/` |
+| Frontend | Vanilla JS (no framework) | `templates/web_dashboard.html` |
 
-1. Read **[SYSTEM.md](SYSTEM.md)** for engineering philosophy
-2. Create a plan in **tasks/todo.md** for non-trivial changes
-3. Document lessons in **tasks/lessons.md** after corrections
-4. Ensure all metrics have verifiable evidence
-
-**Quality standards:**
-- No silent failures (always log exceptions)
-- No metric without traceable evidence
-- Confidence scores must be defensible
-- Test on 3+ real sites before shipping
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details
+### Core Files
+- `deep_evidence_engine.py` — Main orchestrator (20+ metrics)
+- `app.py` — Flask server and API routing
+- `extractors/` — 18 extraction modules (typography, colors, layout, etc.)
+- `spatial_composition_analyzer.py` — Page structure and zones
+- `component_ripper.py` — HTML + CSS component extraction
+- `templates/web_dashboard.html` — Dashboard UI
 
 ---
 
-*This scraper is not a toy, crawler, or black box. It is a workflow-driven evidence system designed to survive contact with real websites and real LLM usage.*
+## Running
+
+```bash
+# Development (auto-reload, opens browser)
+./start.sh
+
+# Production (gunicorn, 2 workers, 300s timeout)
+./start.sh production
+
+# Direct Python (no venv activation, no port check)
+python3 app.py
+```
+
+Server binds to `127.0.0.1:8080` (localhost only).
+
+---
+
+## Known Limitations
+
+**Works best with:** Semantic CSS (BEM, SMACSS), marketing sites, documentation sites, e-commerce.
+
+**Works with caveats:** Utility-first CSS (Tailwind) — detects values but loses semantic names. Color confidence drops to ~25%.
+
+**Does not work with:** Closed Shadow DOM, aggressive bot protection (Cloudflare Turnstile, PerimeterX), auth-gated pages, infinite scroll content.
+
+**Graceful degradation (MRI mode):** When Playwright is blocked, falls back to HTTP + BeautifulSoup (~70% accuracy).
+
+---
+
+## Troubleshooting
+
+**Port 8080 in use:**
+```bash
+lsof -ti:8080 | xargs kill -9
+```
+
+**Browser not installed:**
+```bash
+python -m patchright install
+```
+
+**Bot detection blocking scans:** Stealth mode activates automatically. If still blocked, install Scrapling (see Optional setup above).
+
+**Missing contrast auditing:** Ensure axe-core is installed:
+```bash
+npm install axe-core --prefix ./website-understanding-sdk
+```
+
+---
+
+## Philosophy
+
+This tool treats websites as systems, not pages.
+
+- Every extraction must be **verifiable** (traceable to DOM/CSS/network)
+- Every metric must be **defensible** (confidence scores based on evidence)
+- No metric exists without traceable evidence
+- Low confidence is displayed honestly, not hidden
+
+For the full engineering doctrine, see `CLAUDE.md`.

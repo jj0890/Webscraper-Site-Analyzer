@@ -18,4 +18,4 @@ browser_sessions/
 !static/**/*.png
 server.pid
 .DS_Store
-website-understanding-sdk/
+website-understanding-sdk/node_modules/

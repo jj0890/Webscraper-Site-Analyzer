@@ -1,0 +1,3 @@
+[submodule "website-understanding-sdk"]
+	path = website-understanding-sdk
+	url = https://github.com/ShoryaDs7/website-understanding-sdk.git
