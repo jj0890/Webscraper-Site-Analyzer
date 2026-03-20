@@ -58,7 +58,7 @@ FOCUS_EXTRACTORS = {
     'layout': {
         'layout', 'dom_depth', 'site_architecture', 'interactive_elements', 'accessibility',
         'visual_hierarchy', 'spatial_composition', 'component_map', 'content_extraction',
-        'responsive_breakpoints', 'z_index_stack',
+        'responsive_breakpoints', 'z_index_stack', 'visual_patterns',
         'meta_info', 'llm_helper', 'architecture_diagrams',
     },
     'design': {
@@ -1239,6 +1239,66 @@ class DeepEvidenceEngine:
             print("\n🗺️  Analyzing component structure...")
             component_mapper = ComponentMapper()
             evidence['component_map'] = component_mapper.analyze_page(html_content)
+
+        # Visual Pattern Discovery (lightweight, no screenshots — runs on already-open page)
+        if _should_extract('visual_patterns'):
+            print("\n🎨 Discovering visual patterns...")
+            try:
+                from component_discovery_js import COMPONENT_DISCOVERY_JS
+                raw_patterns = await page.evaluate(COMPONENT_DISCOVERY_JS)
+                component_list = raw_patterns.get('components', [])
+                viewport = raw_patterns.get('viewport', {'width': 1920, 'height': 1080})
+
+                # Generate human-readable descriptions from preview data
+                for comp in component_list:
+                    p = comp.get('preview', {})
+                    parts = []
+                    if p.get('headings', 0) > 0:
+                        parts.append(f"{p['headings']} heading{'s' if p['headings'] > 1 else ''}")
+                    if p.get('imgs', 0) > 0:
+                        parts.append(f"{p['imgs']} image{'s' if p['imgs'] > 1 else ''}")
+                    if p.get('links', 0) > 0:
+                        parts.append(f"{p['links']} link{'s' if p['links'] > 1 else ''}")
+                    if p.get('buttons', 0) > 0:
+                        parts.append(f"{p['buttons']} button{'s' if p['buttons'] > 1 else ''}")
+                    if p.get('inputs', 0) > 0:
+                        parts.append(f"{p['inputs']} input{'s' if p['inputs'] > 1 else ''}")
+                    comp['description'] = ', '.join(parts) if parts else f"{p.get('children', 0)} child elements"
+                    comp['layout_label'] = comp.get('layout', 'block').capitalize()
+
+                # Build category summary
+                categories = {}
+                for comp in component_list:
+                    cat = comp['category']
+                    categories[cat] = categories.get(cat, 0) + 1
+
+                cat_labels = {
+                    'navigation': 'navigation bar', 'hero': 'hero section',
+                    'content_grid': 'content grid', 'footer': 'footer',
+                    'section': 'content section', 'sidebar': 'sidebar',
+                    'form': 'form', 'media': 'media player', 'block': 'content block'
+                }
+                summary_parts = []
+                for cat, count in categories.items():
+                    label = cat_labels.get(cat, cat)
+                    summary_parts.append(f"{count} {label}{'s' if count > 1 else ''}")
+
+                evidence['visual_patterns'] = {
+                    'components': component_list,
+                    'viewport': viewport,
+                    'total': len(component_list),
+                    'summary': f"Found {len(component_list)} patterns: " + ", ".join(summary_parts),
+                    'confidence': min(95, 50 + len(component_list) * 5),
+                    'pattern': f"{len(component_list)} visual patterns discovered"
+                }
+                print(f"   Found {len(component_list)} visual patterns")
+            except Exception as e:
+                print(f"   ⚠️ Visual pattern discovery failed: {e}")
+                evidence['visual_patterns'] = {
+                    'components': [], 'viewport': {}, 'total': 0,
+                    'summary': 'Discovery failed', 'confidence': 0,
+                    'pattern': 'Visual pattern discovery failed'
+                }
 
         # Extract all links for LLM guidance
         print("\n🔗 Discovering navigation links...")

@@ -1500,19 +1500,223 @@
             padding: var(--space-4);
         }
 
-        /* ── Content Extraction Tab ── */
-        .content-extraction-container {
+        /* ── Pattern Library Tab (replaces Content Extraction) ── */
+        .content-extraction-container,
+        .pattern-library-container {
             max-width: 1440px;
             margin: 0 auto;
         }
 
-        .content-extraction-header h2 {
+        .content-extraction-header h2,
+        .pattern-library-header h2 {
             font-family: var(--font-display);
             font-size: var(--text-2xl);
             font-weight: 700;
             margin-bottom: var(--space-2);
             color: var(--text-primary);
         }
+
+        .pattern-category-bar {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
+            padding: 0.5rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--surface-0);
+        }
+
+        .pattern-category-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.03);
+            color: #888;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+
+        .pattern-category-pill:hover {
+            border-color: rgba(255,255,255,0.15);
+            color: #bbb;
+        }
+
+        .pattern-category-pill.active {
+            background: rgba(10,132,255,0.12);
+            border-color: rgba(10,132,255,0.3);
+            color: #0a84ff;
+        }
+
+        .pattern-category-pill .pill-count {
+            font-size: 0.65rem;
+            background: rgba(255,255,255,0.08);
+            padding: 1px 5px;
+            border-radius: 8px;
+            color: #666;
+        }
+
+        .pattern-category-pill.active .pill-count {
+            background: rgba(10,132,255,0.2);
+            color: #0a84ff;
+        }
+
+        .pattern-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .pattern-card {
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .pattern-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(10,132,255,0.25);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+
+        .pattern-card-thumb {
+            width: 100%;
+            aspect-ratio: 16/9;
+            overflow: hidden;
+            background: #0a0a0e;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .pattern-card-thumb img,
+        .pattern-card-thumb canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .pattern-card-thumb .thumb-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: #444;
+            font-size: 0.75rem;
+        }
+
+        .pattern-card-thumb .thumb-placeholder .thumb-icon {
+            font-size: 2rem;
+            opacity: 0.5;
+        }
+
+        .pattern-card-body {
+            padding: 1rem 1.15rem;
+        }
+
+        .pattern-card-label {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #eee;
+            margin-bottom: 0.35rem;
+            line-height: 1.3;
+        }
+
+        .pattern-card-desc {
+            font-size: 0.78rem;
+            color: #777;
+            margin-bottom: 0.65rem;
+            line-height: 1.4;
+        }
+
+        .pattern-card-meta {
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.65rem;
+        }
+
+        .pattern-meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.65rem;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        .pattern-card-interaction {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.6rem;
+            background: rgba(99,102,241,0.08);
+            border-radius: 6px;
+            margin-bottom: 0.65rem;
+            font-size: 0.68rem;
+            color: #a78bfa;
+        }
+
+        .pattern-card-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.25rem;
+        }
+
+        .pattern-rip-btn {
+            flex: 1;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid rgba(10,132,255,0.3);
+            background: rgba(10,132,255,0.1);
+            color: #0a84ff;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .pattern-rip-btn:hover {
+            background: rgba(10,132,255,0.2);
+            border-color: rgba(10,132,255,0.5);
+        }
+
+        .pattern-figma-btn {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid rgba(167,139,250,0.3);
+            background: rgba(167,139,250,0.08);
+            color: #a78bfa;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .pattern-figma-btn:hover {
+            background: rgba(167,139,250,0.18);
+            border-color: rgba(167,139,250,0.5);
+        }
+
+        .dev-details-body { display: none; }
+        #devDetails.expanded .dev-details-body { display: block; }
 
         .classification-section,
         .inventory-section,
@@ -2356,7 +2560,7 @@
             <div class="tabs">
                 <div class="tab active" data-tab="extraction">Extraction Results</div>
                 <div class="tab" data-tab="hierarchy">Visual Hierarchy</div>
-                <div class="tab" data-tab="content">Content Extraction</div>
+                <div class="tab" data-tab="content">Pattern Library</div>
                 <div class="tab" data-tab="componentmap">Component Map</div>
                 <div class="tab" data-tab="apimap">API Map</div>
                 <div class="tab" data-tab="debug">Debug View</div>
@@ -2504,54 +2708,41 @@
                 </div>
             </div>
 
-            <!-- Content Extraction Tab -->
+            <!-- Pattern Library Tab (replaces Content Extraction) -->
             <div class="tab-content" id="contentTab">
-                <div class="content-extraction-container">
-                    <div class="content-extraction-header">
-                        <h2>📄 Content Extraction</h2>
-                        <p style="color: #888; margin-bottom: 0.75rem;">Intelligent classification, inventory, and sampling</p>
+                <div class="pattern-library-container">
+                    <div class="pattern-library-header">
+                        <h2>🧩 Visual Pattern Library</h2>
+                        <p style="color: #888; margin-bottom: 0.5rem;">Every distinct UI pattern on this page — click any to extract</p>
                     </div>
 
-                    <!-- Plain-Language Summary (filled by JS) -->
-                    <div id="contentSummaryBanner" style="display:none; margin-bottom: 2rem; padding: 1.25rem 1.5rem; background: linear-gradient(135deg, rgba(10,132,255,0.08), rgba(52,211,153,0.06)); border-radius: 12px; border: 1px solid rgba(10,132,255,0.15);"></div>
+                    <!-- Summary Banner -->
+                    <div id="patternSummaryBanner" style="display:none; margin-bottom: 1.5rem; padding: 1rem 1.25rem; background: linear-gradient(135deg, rgba(10,132,255,0.08), rgba(99,102,241,0.06)); border-radius: 12px; border: 1px solid rgba(10,132,255,0.15);"></div>
 
-                    <!-- Page Classification -->
-                    <div class="classification-section">
-                        <h3>🏷️ Page Classification</h3>
-                        <div id="pageClassification"></div>
+                    <!-- Category Filter Bar -->
+                    <div id="patternCategoryFilter" class="pattern-category-bar" style="display:none;"></div>
+
+                    <!-- Pattern Grid -->
+                    <div id="patternGrid" class="pattern-grid"></div>
+
+                    <!-- Developer Details (collapsible, raw content_extraction data for LLMs) -->
+                    <div id="devDetails" style="display:none; margin-top: 2rem;">
+                        <div class="dev-details-toggle" onclick="this.parentElement.classList.toggle('expanded'); this.querySelector('.toggle-arrow').textContent = this.parentElement.classList.contains('expanded') ? '▼' : '▶';" style="cursor:pointer; display:flex; align-items:center; gap:0.5rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:0.75rem;">
+                            <span class="toggle-arrow" style="color:#555; font-size:0.7rem;">▶</span>
+                            <span style="color:#666; font-size:0.8rem; font-weight:600;">Developer Details (Raw Extraction Data)</span>
+                        </div>
+                        <div class="dev-details-body" style="display:none;">
+                            <div id="pageClassification"></div>
+                            <div id="contentInventory" style="margin-top:1rem;"></div>
+                            <div id="contentSamples" style="margin-top:1rem;"></div>
+                            <div id="extractionStrategy" style="margin-top:1rem;"></div>
+                            <div id="excludedElements" style="margin-top:1rem;"></div>
+                            <div id="semanticAnalysis" style="margin-top:1rem;"></div>
+                        </div>
                     </div>
-
-                    <!-- Content Inventory -->
-                    <div class="inventory-section">
-                        <h3>📊 Content Inventory</h3>
-                        <div id="contentInventory"></div>
-                    </div>
-
-                    <!-- Content Samples -->
-                    <div class="samples-section">
-                        <h3>🎯 Sample Content (Representative Examples)</h3>
-                        <div id="contentSamples"></div>
-                    </div>
-
-                    <!-- Extraction Strategy -->
-                    <div class="strategy-section">
-                        <h3>🔧 Extraction Strategy</h3>
-                        <div id="extractionStrategy"></div>
-                    </div>
-
-                    <!-- Component Ripper Bridge -->
-                    <div id="ripperBridge" style="display:none; margin-bottom: var(--space-12); padding: 1.5rem; background: var(--surface-2); border-radius: 12px; border: 1px solid var(--border-accent);"></div>
-
-                    <!-- Excluded Elements + DOM Quality — combined bottom section -->
-                    <div class="excluded-section">
-                        <h3>🚫 Noise Filtering</h3>
-                        <div id="excludedElements"></div>
-                    </div>
-
-                    <div class="semantic-section">
-                        <h3>📐 Semantic HTML Quality</h3>
-                        <div id="semanticAnalysis"></div>
-                    </div>
+                    <!-- Ripper Bridge (legacy, hidden) -->
+                    <div id="ripperBridge" style="display:none;"></div>
+                    <div id="contentSummaryBanner" style="display:none;"></div>
                 </div>
             </div>
 
@@ -4213,10 +4404,10 @@
                 }
             });
 
-            // ── Content Extraction tab ──
+            // ── Pattern Library tab (replaces Content Extraction) ──
             injectPageSelector('contentTab', evidence, function(label, pageData) {
-                if (pageData && pageData.content_extraction) {
-                    displayContentExtraction(pageData.content_extraction);
+                if (pageData && (pageData.visual_patterns || pageData.content_extraction)) {
+                    displayPatternLibrary(pageData);
                 } else if (_isMRIPage(pageData)) {
                     showMRIPlaceholder('contentTab');
                 }
@@ -4569,9 +4760,9 @@
                 showMRIPlaceholder('hierarchyTab');
             }
 
-            // Display Content Extraction
-            if (evidence.content_extraction) {
-                displayContentExtraction(evidence.content_extraction);
+            // Display Pattern Library (replaces Content Extraction)
+            if (evidence.visual_patterns || evidence.content_extraction) {
+                displayPatternLibrary(evidence);
             } else if (isMRI) {
                 showMRIPlaceholder('contentTab');
             }
@@ -4604,6 +4795,279 @@
                 showMRIPlaceholder('analyticsTab');
             }
         }
+
+        // ══════════════════════════════════════════════
+        // PATTERN LIBRARY — replaces Content Extraction
+        // ══════════════════════════════════════════════
+
+        function displayPatternLibrary(evidence) {
+            var vp = evidence.visual_patterns || {};
+            var components = vp.components || [];
+            var viewport = vp.viewport || { width: 1920, height: 1080 };
+            var ce = evidence.content_extraction || {};
+            var vh = evidence.visual_hierarchy || {};
+            var sc = evidence.spatial_composition || {};
+            var is = evidence.interaction_states || {};
+            var screenshot = evidence.screenshot || {};
+            var screenshotBase64 = screenshot.screenshot_base64 || '';
+
+            // ── Category config ──
+            var catConfig = {
+                navigation: { icon: '🧭', label: 'Navigation & Menus', color: '#0a84ff' },
+                hero:       { icon: '🎯', label: 'Hero & Banner', color: '#ff9f0a' },
+                content_grid: { icon: '▦', label: 'Grids & Cards', color: '#34d399' },
+                form:       { icon: '📝', label: 'Forms & Inputs', color: '#f472b6' },
+                media:      { icon: '🎵', label: 'Media', color: '#c084fc' },
+                section:    { icon: '📑', label: 'Sections', color: '#60a5fa' },
+                block:      { icon: '🧱', label: 'Content Blocks', color: '#9ca3af' },
+                footer:     { icon: '⬇', label: 'Footer', color: '#6b7280' },
+                sidebar:    { icon: '◨', label: 'Sidebar', color: '#fbbf24' }
+            };
+
+            // ── Enrich patterns with interaction data ──
+            var stateDeltas = is.state_deltas || {};
+            components.forEach(function(comp) {
+                comp.has_interaction = false;
+                comp.interaction_props = [];
+
+                // Check if any state_delta selector matches this component
+                Object.keys(stateDeltas).forEach(function(sel) {
+                    if (comp.selector && (sel.includes(comp.selector) || comp.selector.includes(sel.split(':')[0]))) {
+                        var delta = stateDeltas[sel];
+                        if (delta.hover) {
+                            comp.has_interaction = true;
+                            comp.interaction_props = comp.interaction_props.concat(Object.keys(delta.hover));
+                        }
+                    }
+                });
+
+                // Check VH region states
+                var regionStates = (vh.region_states || []);
+                regionStates.forEach(function(rs) {
+                    if (rs.selector && comp.selector && rs.selector === comp.selector && rs.has_state_change) {
+                        comp.has_interaction = true;
+                        if (rs.hover_delta) {
+                            comp.interaction_props = comp.interaction_props.concat(
+                                Object.keys(rs.hover_delta).filter(function(k) { return rs.hover_delta[k]; })
+                            );
+                        }
+                    }
+                });
+
+                // Dedupe interaction props
+                comp.interaction_props = [...new Set(comp.interaction_props)];
+            });
+
+            // ── Summary banner ──
+            var banner = document.getElementById('patternSummaryBanner');
+            var pageType = ce.page_type || '';
+            var ptLabel = {
+                landingPage: 'Landing Page', singleArticle: 'Article', blogListing: 'Blog',
+                productListing: 'Product Listing', audioStream: 'Audio Stream',
+                contentGrid: 'Content Grid', gallery: 'Gallery', documentation: 'Documentation'
+            }[pageType] || pageType.replace(/([A-Z])/g, ' $1').trim() || 'Page';
+
+            if (components.length > 0) {
+                var interactiveCount = components.filter(function(c) { return c.has_interaction; }).length;
+                var bannerParts = [
+                    '<strong style="color:#0a84ff;">' + components.length + ' visual patterns</strong> found on this ' + ptLabel + '.'
+                ];
+                if (interactiveCount > 0) {
+                    bannerParts.push('<strong style="color:#a78bfa;">' + interactiveCount + '</strong> have interactive states (hover/focus).');
+                }
+                bannerParts.push('Click <strong style="color:#34d399;">Rip This</strong> to extract any pattern\'s code.');
+                banner.style.display = 'block';
+                banner.innerHTML = '<div style="font-size:0.9rem; color:#ccc; line-height:1.7;">' + bannerParts.join(' ') + '</div>';
+            } else {
+                banner.style.display = 'block';
+                banner.innerHTML = '<div style="font-size:0.9rem; color:#888;">No visual patterns discovered. This may be a minimal page or the content loaded dynamically after the scan window.</div>';
+            }
+
+            // ── Category filter bar ──
+            var filterBar = document.getElementById('patternCategoryFilter');
+            var catCounts = {};
+            components.forEach(function(c) {
+                catCounts[c.category] = (catCounts[c.category] || 0) + 1;
+            });
+
+            if (Object.keys(catCounts).length > 1) {
+                var filterHTML = '<div class="pattern-category-pill active" data-filter="all" onclick="filterPatterns(\'all\')">All <span class="pill-count">' + components.length + '</span></div>';
+                Object.keys(catCounts).forEach(function(cat) {
+                    var cfg = catConfig[cat] || { icon: '•', label: cat, color: '#888' };
+                    filterHTML += '<div class="pattern-category-pill" data-filter="' + cat + '" onclick="filterPatterns(\'' + cat + '\')">' + cfg.icon + ' ' + cfg.label + ' <span class="pill-count">' + catCounts[cat] + '</span></div>';
+                });
+                filterBar.innerHTML = filterHTML;
+                filterBar.style.display = 'flex';
+            } else {
+                filterBar.style.display = 'none';
+            }
+
+            // ── Pattern grid ──
+            var grid = document.getElementById('patternGrid');
+            var gridHTML = '';
+
+            components.forEach(function(comp, idx) {
+                var cfg = catConfig[comp.category] || { icon: '•', label: comp.category, color: '#888' };
+                var p = comp.preview || {};
+
+                // Build description
+                var desc = comp.description || '';
+                if (!desc) {
+                    var dParts = [];
+                    if (p.headings > 0) dParts.push(p.headings + ' heading' + (p.headings > 1 ? 's' : ''));
+                    if (p.imgs > 0) dParts.push(p.imgs + ' image' + (p.imgs > 1 ? 's' : ''));
+                    if (p.links > 0) dParts.push(p.links + ' link' + (p.links > 1 ? 's' : ''));
+                    if (p.buttons > 0) dParts.push(p.buttons + ' button' + (p.buttons > 1 ? 's' : ''));
+                    desc = dParts.length > 0 ? dParts.join(', ') : p.children + ' child elements';
+                }
+
+                // Layout + dimensions
+                var dims = comp.bounds ? (comp.bounds.width + '×' + comp.bounds.height + 'px') : '';
+                var layoutLabel = comp.layout_label || (comp.layout === 'flex' ? 'Flex' : comp.layout === 'grid' ? 'Grid' : 'Block');
+
+                // Interaction indicator
+                var interactionHTML = '';
+                if (comp.has_interaction && comp.interaction_props.length > 0) {
+                    var propPills = comp.interaction_props.slice(0, 4).map(function(prop) {
+                        var propColor = prop.includes('color') || prop.includes('Color') ? '#60a5fa' :
+                                       prop.includes('transform') ? '#c084fc' :
+                                       prop.includes('shadow') || prop.includes('Shadow') ? '#34d399' :
+                                       prop.includes('border') ? '#fbbf24' : '#a78bfa';
+                        return '<span style="color:' + propColor + ';">' + prop + '</span>';
+                    }).join(', ');
+                    var moreCount = comp.interaction_props.length > 4 ? ' +' + (comp.interaction_props.length - 4) : '';
+                    interactionHTML = '<div class="pattern-card-interaction">⚡ Hover: ' + propPills + moreCount + '</div>';
+                }
+
+                // Thumbnail: try to crop from full-page screenshot via data attributes
+                var thumbHTML = '';
+                if (screenshotBase64 && comp.bounds) {
+                    thumbHTML = '<canvas class="pattern-thumb-canvas" data-idx="' + idx + '" data-top="' + comp.bounds.top + '" data-left="' + comp.bounds.left + '" data-width="' + comp.bounds.width + '" data-height="' + comp.bounds.height + '"></canvas>';
+                } else {
+                    thumbHTML = '<div class="thumb-placeholder"><span class="thumb-icon">' + cfg.icon + '</span><span>' + comp.label + '</span></div>';
+                }
+
+                // Encode selector for ripper link
+                var encodedSel = encodeURIComponent(comp.selector);
+                var siteUrl = (evidence.meta_info || {}).url || '';
+                var encodedUrl = encodeURIComponent(siteUrl);
+
+                gridHTML += '<div class="pattern-card" data-category="' + comp.category + '">' +
+                    '<div class="pattern-card-thumb">' + thumbHTML + '</div>' +
+                    '<div class="pattern-card-body">' +
+                        '<div class="pattern-card-label">' + comp.label + '</div>' +
+                        '<div class="pattern-card-desc">' + desc + '</div>' +
+                        '<div class="pattern-card-meta">' +
+                            '<span class="pattern-meta-pill" style="background:' + cfg.color + '18; color:' + cfg.color + ';">' + cfg.icon + ' ' + cfg.label + '</span>' +
+                            '<span class="pattern-meta-pill" style="background:rgba(255,255,255,0.06); color:#888;">' + layoutLabel + '</span>' +
+                            (dims ? '<span class="pattern-meta-pill" style="background:rgba(255,255,255,0.06); color:#666;">' + dims + '</span>' : '') +
+                        '</div>' +
+                        interactionHTML +
+                        '<div class="pattern-card-actions">' +
+                            '<a class="pattern-rip-btn" href="/ripper" onclick="sessionStorage.setItem(\'prefill_selector\',\'' + comp.selector.replace(/'/g, "\\'") + '\');sessionStorage.setItem(\'prefill_url\',\'' + siteUrl.replace(/'/g, "\\'") + '\');">⚡ Rip This</a>' +
+                            '<a class="pattern-figma-btn" href="/ripper" onclick="sessionStorage.setItem(\'prefill_selector\',\'' + comp.selector.replace(/'/g, "\\'") + '\');sessionStorage.setItem(\'prefill_url\',\'' + siteUrl.replace(/'/g, "\\'") + '\');sessionStorage.setItem(\'prefill_format\',\'figma\');">◆ Figma</a>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+            });
+
+            grid.innerHTML = gridHTML;
+
+            // ── Crop thumbnails from full-page screenshot using Canvas ──
+            if (screenshotBase64) {
+                var ssImg = new Image();
+                ssImg.onload = function() {
+                    var canvases = grid.querySelectorAll('.pattern-thumb-canvas');
+                    var imgW = ssImg.naturalWidth;
+                    var imgH = ssImg.naturalHeight;
+                    // The screenshot is full-page, so scale is imgW / viewport.width
+                    var scaleX = imgW / viewport.width;
+                    // For full-page screenshot, we need the total page height
+                    // viewport.height is just the visible area, but the screenshot captures the full page
+                    // So scaleY = scaleX (uniform scaling)
+                    var scaleY = scaleX;
+
+                    canvases.forEach(function(canvas) {
+                        var top = parseFloat(canvas.dataset.top);
+                        var left = parseFloat(canvas.dataset.left);
+                        var w = parseFloat(canvas.dataset.width);
+                        var h = parseFloat(canvas.dataset.height);
+
+                        // Source coordinates in the screenshot image
+                        var sx = Math.max(0, left * scaleX);
+                        var sy = Math.max(0, top * scaleY);
+                        var sw = Math.min(w * scaleX, imgW - sx);
+                        var sh = Math.min(h * scaleY, imgH - sy);
+
+                        if (sw <= 0 || sh <= 0 || sy >= imgH) {
+                            // Element is outside screenshot bounds — show placeholder
+                            var parent = canvas.parentElement;
+                            canvas.remove();
+                            var cfg2 = catConfig[canvas.closest('.pattern-card').dataset.category] || { icon: '•' };
+                            parent.innerHTML = '<div class="thumb-placeholder"><span class="thumb-icon">' + cfg2.icon + '</span><span>Below fold</span></div>';
+                            return;
+                        }
+
+                        // Set canvas size to match the card thumbnail area
+                        var cardWidth = canvas.parentElement.offsetWidth || 380;
+                        var cardHeight = Math.round(cardWidth * 9 / 16);
+                        canvas.width = cardWidth * 2; // 2x for retina
+                        canvas.height = cardHeight * 2;
+                        canvas.style.width = '100%';
+                        canvas.style.height = '100%';
+
+                        var ctx = canvas.getContext('2d');
+                        ctx.imageSmoothingEnabled = true;
+                        ctx.imageSmoothingQuality = 'high';
+
+                        // Draw the cropped region, fitting it to the canvas
+                        // If the source region is very tall (like a hero), we show the top portion
+                        var srcAspect = sw / sh;
+                        var destAspect = canvas.width / canvas.height;
+
+                        if (srcAspect > destAspect) {
+                            // Source is wider — fit height, crop sides
+                            var drawH = canvas.height;
+                            var drawW = drawH * srcAspect;
+                            ctx.drawImage(ssImg, sx, sy, sw, sh, (canvas.width - drawW) / 2, 0, drawW, drawH);
+                        } else {
+                            // Source is taller — fit width, show top portion
+                            var drawW2 = canvas.width;
+                            var drawH2 = drawW2 / srcAspect;
+                            ctx.drawImage(ssImg, sx, sy, sw, sh, 0, 0, drawW2, drawH2);
+                        }
+                    });
+                };
+                ssImg.src = 'data:image/png;base64,' + screenshotBase64;
+            }
+
+            // ── Developer Details: populate old content extraction data ──
+            var devDetails = document.getElementById('devDetails');
+            if (ce && ce.page_type) {
+                devDetails.style.display = 'block';
+                displayContentExtraction(ce);
+            }
+        }
+
+        // Category filter function
+        function filterPatterns(category) {
+            var pills = document.querySelectorAll('.pattern-category-pill');
+            pills.forEach(function(p) {
+                p.classList.toggle('active', p.dataset.filter === category);
+            });
+            var cards = document.querySelectorAll('.pattern-card');
+            cards.forEach(function(card) {
+                if (category === 'all' || card.dataset.category === category) {
+                    card.style.display = '';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        // ══════════════════════════════════════════════
+        // LEGACY: displayContentExtraction (kept for Developer Details panel)
+        // ══════════════════════════════════════════════
 
         function displayContentExtraction(extraction) {
             // Build plain-language summary banner
