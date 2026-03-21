@@ -60,11 +60,13 @@ COMPONENT_DISCOVERY_JS = '''() => {
             const hasLogo = !!el.querySelector('img, svg, [class*="logo"], [class*="brand"]');
             const hasSearch = !!el.querySelector('input[type="search"], [class*="search"]');
             const hasDropdown = !!el.querySelector('[class*="dropdown"], [class*="menu"], ul ul, [aria-expanded]');
+            const hasBurger = !!el.querySelector('[class*="hamburger"], [class*="burger"], [class*="menu-toggle"], [class*="nav-toggle"], [class*="mobile-menu"], [class*="menu-icon"], [class*="menu-btn"], [aria-label*="menu" i], [aria-label*="Menu" i], button svg line, button svg path[d*="M3"], [class*="sandwich"]');
             const parts = [];
             if (hasLogo) parts.push('Logo');
             if (linkCount > 0) parts.push(linkCount + ' links');
             if (hasSearch) parts.push('Search');
-            if (hasDropdown) parts.push('Dropdowns');
+            if (hasBurger) parts.push('Burger Menu');
+            if (hasDropdown && !hasBurger) parts.push('Dropdowns');
             const detail = parts.length > 0 ? ' — ' + parts.join(', ') : '';
             // Distinguish sticky/fixed nav
             const isSticky = s.position === 'fixed' || s.position === 'sticky';
