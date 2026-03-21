@@ -669,13 +669,24 @@ def generate_figma_markdown(
     # --- Build tokens section ---
     tokens_text = _build_tokens_section(blueprint, translated, computed)
 
+    # --- Dimensions ---
+    box = blueprint.get('boxModel', {})
+    width = box.get('width', computed.get('width', ''))
+    height = box.get('height', computed.get('height', ''))
+    dims_line = ''
+    if width or height:
+        dims_line = f'\nsize: {width} × {height}'
+
+    # --- Build nested JSX from actual source HTML ---
+    children_jsx = _build_children_jsx(blueprint)
+
     # --- Assemble markdown ---
     md = f"""---
 component: {name}
 source: {url}
 selector: {selector}
 semantic: {root_tag} / {_infer_role(blueprint)}
-confidence: {confidence}
+confidence: {confidence}{dims_line}
 ---
 
 ## {name}
@@ -683,7 +694,7 @@ confidence: {confidence}
 ### Structure
 ```jsx
 <{root_tag} className="{class_string}">
-  {_build_children_jsx(blueprint)}
+{children_jsx}
 </{root_tag}>
 ```
 
@@ -732,32 +743,112 @@ def _infer_role(blueprint: dict) -> str:
 
 
 def _build_children_jsx(blueprint: dict) -> str:
-    """Build a simplified children representation for the JSX block."""
-    anatomy = blueprint.get('anatomy', {})
-    zones = anatomy.get('zones', {})
-    children = anatomy.get('child_summary', [])
-    if not isinstance(children, list):
-        children = []
-
-    if not children:
-        source = blueprint.get('source', {}).get('sourceHTML', '')
-        # Extract text content as a simple representation
-        text_match = re.search(r'>([^<]{1,60})<', source)
-        if text_match:
-            return text_match.group(1).strip()
+    """Build nested JSX from the component's actual source HTML."""
+    source_html = blueprint.get('source', {}).get('sourceHTML', '')
+    if not source_html:
         return '{children}'
 
-    parts = []
-    for child in children[:5]:  # Limit to 5 children
-        role = child.get('role', 'element')
-        tag = child.get('tag', 'div')
-        text = child.get('text', '')[:40]
-        if text:
-            parts.append(f'  <{tag}>{text}</{tag}>')
-        else:
-            parts.append(f'  <{tag} /> {{/* {role} */}}')
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(source_html, 'html.parser')
+        root = soup.find()
+        if not root:
+            return '{children}'
+        # Build JSX for children of the root (root itself is handled by the caller)
+        lines = []
+        _render_jsx_children(root, lines, depth=1, max_depth=4, max_siblings=8)
+        return '\n'.join(lines) if lines else '{children}'
+    except Exception:
+        return '{children}'
 
-    return '\n'.join(parts) if parts else '{children}'
+
+def _render_jsx_children(el, lines, depth, max_depth, max_siblings):
+    """Recursively render child elements as JSX with className props."""
+    indent = '  ' * depth
+    children = [c for c in el.children if getattr(c, 'name', None)]
+
+    if not children:
+        # Leaf node — show text content
+        text = el.get_text(strip=True)[:60]
+        if text:
+            lines.append(f'{indent}{text}')
+        return
+
+    rendered = 0
+    for child in children:
+        if rendered >= max_siblings:
+            remaining = len(children) - rendered
+            lines.append(f'{indent}{{/* +{remaining} more elements */}}')
+            break
+
+        tag = child.name
+        # Skip script, style, noscript, template
+        if tag in ('script', 'style', 'noscript', 'template', 'link', 'meta'):
+            continue
+
+        # Build props
+        props = []
+        classes = child.get('class', [])
+        if classes:
+            class_str = ' '.join(classes)
+            # Truncate very long class lists but keep meaningful ones
+            if len(class_str) > 120:
+                # Keep first ~100 chars worth of classes
+                kept = []
+                length = 0
+                for cls in classes:
+                    if length + len(cls) > 100:
+                        kept.append('...')
+                        break
+                    kept.append(cls)
+                    length += len(cls) + 1
+                class_str = ' '.join(kept)
+            props.append(f'className="{class_str}"')
+
+        # Meaningful attributes
+        href = child.get('href')
+        if href and tag == 'a':
+            href_short = href if len(href) <= 50 else href[:47] + '...'
+            props.append(f'href="{href_short}"')
+
+        src = child.get('src') or child.get('srcset', '').split(' ')[0] if child.get('srcset') else child.get('src')
+        if src and tag == 'img':
+            alt = child.get('alt', '')
+            props.append(f'alt="{alt[:40]}"')
+
+        aria_label = child.get('aria-label')
+        if aria_label:
+            props.append(f'aria-label="{aria_label[:30]}"')
+
+        role = child.get('role')
+        if role:
+            props.append(f'role="{role}"')
+
+        prop_str = ' ' + ' '.join(props) if props else ''
+
+        # Check if this is a leaf or has children
+        child_elements = [c for c in child.children if getattr(c, 'name', None)]
+        text = child.get_text(strip=True)[:50]
+
+        if tag == 'img':
+            lines.append(f'{indent}<img{prop_str} />')
+        elif tag == 'svg':
+            lines.append(f'{indent}<svg{prop_str} /> {{/* icon */}}')
+        elif not child_elements and text:
+            lines.append(f'{indent}<{tag}{prop_str}>{text}</{tag}>')
+        elif not child_elements:
+            lines.append(f'{indent}<{tag}{prop_str} />')
+        elif depth < max_depth:
+            lines.append(f'{indent}<{tag}{prop_str}>')
+            _render_jsx_children(child, lines, depth + 1, max_depth, max_siblings)
+            lines.append(f'{indent}</{tag}>')
+        else:
+            # Max depth — summarize
+            n_children = len(child_elements)
+            summary = f'{text[:30]}' if text else f'{n_children} children'
+            lines.append(f'{indent}<{tag}{prop_str}>{summary}</{tag}>')
+
+        rendered += 1
 
 
 def _build_states_table(states: dict, translator: TailwindTranslator) -> str:
