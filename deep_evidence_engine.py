@@ -1276,7 +1276,14 @@ class DeepEvidenceEngine:
                     'navigation': 'navigation bar', 'hero': 'hero section',
                     'content_grid': 'content grid', 'footer': 'footer',
                     'section': 'content section', 'sidebar': 'sidebar',
-                    'form': 'form', 'media': 'media player', 'block': 'content block'
+                    'form': 'form', 'media': 'media player', 'block': 'content block',
+                    'accordion': 'accordion', 'tabs': 'tab group', 'modal': 'modal',
+                    'breadcrumb': 'breadcrumb', 'table': 'data table',
+                    'carousel': 'carousel', 'pricing': 'pricing section',
+                    'timeline': 'timeline', 'alert': 'alert', 'stepper': 'stepper',
+                    'marquee': 'marquee', 'testimonial': 'testimonial',
+                    'cta': 'call-to-action', 'split_content': 'split content',
+                    'newsletter': 'newsletter signup', 'social_proof': 'social proof'
                 }
                 summary_parts = []
                 for cat, count in categories.items():
