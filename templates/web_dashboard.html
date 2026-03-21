@@ -4398,7 +4398,7 @@
             // ── Visual Hierarchy tab ──
             injectPageSelector('hierarchyTab', evidence, function(label, pageData) {
                 if (pageData && pageData.visual_hierarchy && pageData.screenshot) {
-                    displayVisualHierarchy(pageData.visual_hierarchy, pageData.screenshot);
+                    displayVisualHierarchy(pageData.visual_hierarchy, pageData.screenshot, pageData.visual_patterns);
                 } else if (_isMRIPage(pageData)) {
                     showMRIPlaceholder('hierarchyTab');
                 }
@@ -4755,7 +4755,7 @@
 
             // Display Visual Hierarchy
             if (evidence.visual_hierarchy && evidence.screenshot) {
-                displayVisualHierarchy(evidence.visual_hierarchy, evidence.screenshot);
+                displayVisualHierarchy(evidence.visual_hierarchy, evidence.screenshot, evidence.visual_patterns);
             } else if (isMRI) {
                 showMRIPlaceholder('hierarchyTab');
             }
@@ -11200,7 +11200,7 @@
             }
         }
 
-        function displayVisualHierarchy(hierarchy, screenshot) {
+        function displayVisualHierarchy(hierarchy, screenshot, visualPatterns) {
             const screenshotView = document.getElementById('screenshotView');
             const originalContainer = document.getElementById('originalScreenshot');
             const overlay = document.getElementById('regionOverlay');
@@ -11252,7 +11252,7 @@
                 _vhScale  = img.getBoundingClientRect().width / _vhPageW;
 
                 // Build regions from the data we have
-                _vhRegions = buildRegions(hierarchy);
+                _vhRegions = buildRegions(hierarchy, visualPatterns);
 
                 // Size the SVG to match the rendered image exactly
                 const displayedH = img.getBoundingClientRect().height;
@@ -11288,39 +11288,81 @@
         }
 
         // ── Build the regions array from hierarchy data ───────────────────
-        function deriveSemanticLabel(el, i) {
-            const tag = (el.tag || '').toLowerCase();
-            const text = (el.text || '').trim().substring(0, 25);
-            const cls = (el.className || '').toLowerCase();
-            const role = (el.role || '').toLowerCase();
 
-            // Tag-based semantic labels
+        // Cross-reference: find the best matching classifier component for a VH element
+        function findClassifierMatch(el, classifierComponents) {
+            if (!classifierComponents || !classifierComponents.length || !el.rect) return null;
+            var bestMatch = null;
+            var bestIoU = 0;
+            for (var ci = 0; ci < classifierComponents.length; ci++) {
+                var comp = classifierComponents[ci];
+                var cb = comp.bounds;
+                if (!cb) continue;
+                // Compute IoU (intersection over union) between VH element rect and classifier bounds
+                var xA = Math.max(el.rect.left, cb.left);
+                var yA = Math.max(el.rect.top, cb.top);
+                var xB = Math.min(el.rect.left + el.rect.width, cb.left + cb.width);
+                var yB = Math.min(el.rect.top + el.rect.height, cb.top + cb.height);
+                var inter = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+                if (inter === 0) continue;
+                var areaA = el.rect.width * el.rect.height;
+                var areaB = cb.width * cb.height;
+                var union = areaA + areaB - inter;
+                var iou = union > 0 ? inter / union : 0;
+                // Also check containment (VH element inside classifier region)
+                var containment = areaA > 0 ? inter / areaA : 0;
+                var score = Math.max(iou, containment * 0.8);
+                if (score > bestIoU && score > 0.25) {
+                    bestIoU = score;
+                    bestMatch = comp;
+                }
+            }
+            return bestMatch;
+        }
+
+        function deriveSemanticLabel(el, i, classifierComponents) {
+            var tag = (el.tag || '').toLowerCase();
+            var text = (el.text || '').trim().substring(0, 25);
+            var cls = (el.className || '').toLowerCase();
+            var role = (el.role || '').toLowerCase();
+
+            // First: try to match against the classifier's richer labels
+            var match = findClassifierMatch(el, classifierComponents);
+            if (match) {
+                return match.label;
+            }
+
+            // Fallback: tag-based semantic labels (improved)
             if (/^h[1-6]$/.test(tag))       return tag.toUpperCase() + (text ? ': "' + text + '"' : '');
-            if (tag === 'nav' || role === 'navigation') return 'Navigation';
+            if (tag === 'nav' || role === 'navigation') return 'Navigation Bar';
             if (tag === 'img')              return 'Image' + (el.alt ? ': ' + el.alt.substring(0, 20) : '');
             if (tag === 'button')           return 'Button' + (text ? ': "' + text + '"' : '');
             if (tag === 'a' && (cls.includes('btn') || cls.includes('cta') || cls.includes('button')))
-                                            return 'Link button: "' + text + '"';
-            if (tag === 'video')            return 'Video player';
-            if (tag === 'audio')            return 'Audio player';
-            if (tag === 'header')           return 'Header';
+                                            return 'CTA Link: "' + text + '"';
+            if (tag === 'video')            return 'Video Player';
+            if (tag === 'audio')            return 'Audio Player';
+            if (tag === 'header')           return 'Page Header';
             if (tag === 'footer')           return 'Footer';
-            if (tag === 'main' || role === 'main') return 'Main content';
-            if (tag === 'section')          return 'Section' + (text ? ': "' + text + '"' : '');
-            if (tag === 'article')          return 'Article' + (text ? ': "' + text + '"' : '');
+            if (tag === 'main' || role === 'main') return 'Main Content';
+            if (tag === 'section')          return text ? '"' + text + '"' : 'Content Section';
+            if (tag === 'article')          return text ? 'Article: "' + text + '"' : 'Article';
             if (tag === 'form')             return 'Form';
+            if (tag === 'p')               return text ? 'Text: "' + text + '"' : 'Paragraph';
+            if (tag === 'svg')             return 'Icon / Graphic';
+            if (tag === 'li')              return text ? 'List Item: "' + text + '"' : 'List Item';
 
             // Size-based context
             if (el.rect) {
-                if (el.rect.width > 600 && el.rect.height > 300) return 'Hero region';
-                if (el.rect.width > 400 && el.rect.height < 80)  return 'Banner';
+                if (el.rect.width > 600 && el.rect.height > 300) return 'Hero Region';
+                if (el.rect.width > 400 && el.rect.height < 80)  return 'Banner Strip';
             }
 
-            // Fallback: rank + text preview
-            return '#' + (i + 1) + (text ? ' — "' + text + '"' : '');
+            // Fallback: text preview or rank
+            if (text) return '"' + text + '"';
+            return 'Element #' + (i + 1);
         }
 
-        function buildRegions(hierarchy) {
+        function buildRegions(hierarchy, visualPatterns) {
             if (!hierarchy) return [];
             const regions = [];
 
@@ -11329,6 +11371,7 @@
             const vpH = (hierarchy.viewport && hierarchy.viewport.height) || 1080;
             const regionStates = hierarchy.region_states || [];
             const weightMap = hierarchy.visual_weight_map || [];
+            const classifierComps = (visualPatterns && visualPatterns.components) || [];
 
             // Rank-based heat gradient: #1 hottest → #10 coolest
             // HSL hue: 0 (red) → 30 (orange) → 50 (gold) → 200 (blue) → 260 (purple)
@@ -11375,7 +11418,7 @@
                     label = '🧭 Navigation';
                 } else {
                     color = rankColor(rank - 1, weightMap.length);
-                    label = deriveSemanticLabel(el, i);
+                    label = deriveSemanticLabel(el, i, classifierComps);
                 }
 
                 const sel = el.id ? `#${el.id}` : (el.className ? `.${el.className.split(' ')[0]}` : el.tag);
