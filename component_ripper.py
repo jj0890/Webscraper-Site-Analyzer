@@ -630,12 +630,15 @@ class ComponentRipper:
         }
 
     def _attach_figma_output(self, blueprint: Dict):
-        """Generate Figma-compatible markdown and attach to blueprint."""
+        """Generate all Figma output formats and attach to blueprint."""
         try:
-            from component_translator import TailwindTranslator, generate_figma_markdown
+            from component_translator import (TailwindTranslator, generate_figma_markdown,
+                                              generate_figma_prompt, generate_figma_html)
             translator = TailwindTranslator()
             states = blueprint.get('interactive_states', {})
             blueprint['figma_markdown'] = generate_figma_markdown(blueprint, states, translator)
+            blueprint['figma_prompt'] = generate_figma_prompt(blueprint, states, translator)
+            blueprint['figma_html'] = generate_figma_html(blueprint)
         except Exception as e:
             import traceback
             logging.getLogger(__name__).error(f"Figma output failed: {traceback.format_exc()}")

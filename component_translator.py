@@ -711,6 +711,436 @@ confidence: {confidence}{dims_line}
 
 
 # ---------------------------------------------------------------------------
+# Figma AI Prompt Generator (for Figma Make / AI)
+# ---------------------------------------------------------------------------
+
+def generate_figma_prompt(blueprint: dict, states: dict, translator: TailwindTranslator) -> str:
+    """Generate a natural-language prompt for Figma AI to build the component.
+
+    Describes the component visually: layout, dimensions, colors, typography,
+    spacing, children, and interactions — in terms a designer would use.
+    """
+    name = blueprint.get('semantic_name', 'Component')
+    box = blueprint.get('boxModel', {})
+    computed = blueprint.get('computedStyles', {})
+    layout = blueprint.get('layout', {})
+    source_html = blueprint.get('source', {}).get('sourceHTML', '')
+
+    # Dimensions
+    width = box.get('width', computed.get('width', 'auto'))
+    height = box.get('height', computed.get('height', 'auto'))
+
+    # Layout type
+    display = computed.get('display', layout.get('type', 'block'))
+    direction = layout.get('direction', computed.get('flexDirection', ''))
+    gap = layout.get('gap', computed.get('gap', ''))
+    columns = layout.get('columns', '')
+    align = computed.get('alignItems', '')
+    justify = computed.get('justifyContent', '')
+
+    layout_desc = ''
+    if 'flex' in display:
+        dir_word = 'horizontal' if direction != 'column' else 'vertical'
+        layout_desc = f'{dir_word} flex layout'
+        if gap:
+            layout_desc += f', {gap} gap'
+        if align:
+            layout_desc += f', items {align}'
+        if justify:
+            layout_desc += f', {justify}'
+    elif 'grid' in display:
+        if columns:
+            col_count = len(columns.split()) if columns else 1
+            layout_desc = f'{col_count}-column grid layout'
+        else:
+            layout_desc = 'grid layout'
+        if gap:
+            layout_desc += f', {gap} gap'
+    else:
+        layout_desc = 'block layout'
+
+    # Colors
+    bg = computed.get('backgroundColor', '')
+    fg = computed.get('color', '')
+    color_desc = ''
+    if bg and bg not in ('rgba(0, 0, 0, 0)', 'transparent'):
+        color_desc += f'Background: {bg}. '
+    if fg:
+        color_desc += f'Text: {fg}. '
+
+    # Typography
+    font_size = computed.get('fontSize', '')
+    font_weight = computed.get('fontWeight', '')
+    font_family = computed.get('fontFamily', '')
+    typo_desc = ''
+    if font_family:
+        typo_desc += font_family.split(',')[0].strip().strip('"\'') + ', '
+    if font_size:
+        typo_desc += f'{font_size}, '
+    if font_weight and font_weight not in ('400', 'normal'):
+        weight_names = {'100': 'thin', '200': 'extra-light', '300': 'light',
+                        '500': 'medium', '600': 'semibold', '700': 'bold',
+                        '800': 'extra-bold', '900': 'black'}
+        typo_desc += weight_names.get(font_weight, f'weight {font_weight}') + ', '
+    typo_desc = typo_desc.rstrip(', ')
+
+    # Spacing
+    padding = computed.get('padding', '')
+    if not padding:
+        pt = computed.get('paddingTop', '0')
+        pr = computed.get('paddingRight', '0')
+        pb = computed.get('paddingBottom', '0')
+        pl = computed.get('paddingLeft', '0')
+        if pt == pr == pb == pl and pt != '0':
+            padding = pt
+        elif pt != '0' or pr != '0' or pb != '0' or pl != '0':
+            padding = f'{pt} {pr} {pb} {pl}'
+
+    # Border / radius
+    radius = computed.get('borderRadius', '')
+    border = computed.get('borderWidth', '')
+
+    # Parse children from HTML
+    children_desc = _describe_children_for_prompt(source_html)
+
+    # Interactive states
+    hover_desc = ''
+    root_states = (states or {}).get('root') or {}
+    if root_states.get('hover_delta'):
+        changes = []
+        for prop, val in root_states['hover_delta'].items():
+            prop_name = re.sub(r'([A-Z])', r' \1', prop).lower().strip()
+            changes.append(f'{prop_name} changes to {val}')
+        hover_desc = 'On hover: ' + '; '.join(changes[:4]) + '.'
+
+    child_states = (states or {}).get('children', [])
+    child_hover_desc = ''
+    if child_states:
+        for cs in child_states[:3]:
+            text = cs.get('text', cs.get('selector', ''))[:20]
+            if cs.get('hover_delta'):
+                n = len(cs['hover_delta'])
+                child_hover_desc += f' "{text}" has {n} hover changes.'
+
+    # Assemble the prompt
+    lines = [f'Create a {name} component.']
+    lines.append(f'Size: {width} wide × {height} tall.')
+    lines.append(f'Layout: {layout_desc}.')
+
+    if color_desc:
+        lines.append(color_desc.strip())
+    if typo_desc:
+        lines.append(f'Typography: {typo_desc}.')
+    if padding and padding != '0':
+        lines.append(f'Padding: {padding}.')
+    if radius and radius != '0px':
+        lines.append(f'Border radius: {radius}.')
+
+    lines.append('')
+    lines.append('Contents:')
+    lines.append(children_desc)
+
+    if hover_desc or child_hover_desc:
+        lines.append('')
+        lines.append('Interactions:')
+        if hover_desc:
+            lines.append(hover_desc)
+        if child_hover_desc:
+            lines.append(child_hover_desc.strip())
+
+    return '\n'.join(lines)
+
+
+def _describe_children_for_prompt(html: str) -> str:
+    """Parse HTML and describe children in natural language for Figma AI."""
+    if not html:
+        return '(empty)'
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        root = soup.find()
+        if not root:
+            return '(empty)'
+        lines = []
+        _describe_element(root, lines, depth=0, max_depth=3)
+        return '\n'.join(lines) if lines else '(empty)'
+    except Exception:
+        return '(could not parse children)'
+
+
+def _extract_style_hints(classes: str) -> list:
+    """Extract visual styling hints from CSS class names."""
+    hints = []
+    # Background color
+    bg = re.search(r'bg-(\S+)', classes)
+    if bg and bg.group(1) not in ('transparent',):
+        hints.append(f'bg: {bg.group(1)}')
+    # Text color
+    tc = re.search(r'(?:^|\s)text-((?:pp-|zinc-|gray-|slate-|neutral-|stone-|red-|orange-|amber-|yellow-|lime-|green-|emerald-|teal-|cyan-|sky-|blue-|indigo-|violet-|purple-|fuchsia-|pink-|rose-|white|black)\S*)', classes)
+    if tc:
+        hints.append(f'text: {tc.group(1)}')
+    # Sizing
+    w = re.search(r'w-\[?(\d+(?:px|rem)?)\]?', classes)
+    h = re.search(r'h-\[?(\d+(?:px|rem)?)\]?', classes)
+    if w:
+        hints.append(f'w: {w.group(1)}')
+    if h:
+        hints.append(f'h: {h.group(1)}')
+    # Hover
+    hover = re.search(r'hover:(\S+)', classes)
+    if hover:
+        hints.append(f'hover: {hover.group(1)}')
+    # Uppercase
+    if 'uppercase' in classes:
+        hints.append('uppercase')
+    # Rounded
+    if 'rounded-full' in classes:
+        hints.append('pill shape')
+    elif 'rounded' in classes:
+        hints.append('rounded')
+    return hints
+
+
+def _describe_element(el, lines, depth, max_depth):
+    """Recursively describe an element in natural language."""
+    indent = '  ' * depth
+    tag = el.name
+    if not tag or tag in ('script', 'style', 'noscript', 'template', 'link', 'meta'):
+        return
+
+    classes = ' '.join(el.get('class', []))
+    children = [c for c in el.children if getattr(c, 'name', None)]
+    text = el.get_text(strip=True)[:60]
+
+    # Describe the element visually
+    desc = ''
+    if tag == 'img':
+        alt = el.get('alt', 'image')
+        w_cls = re.search(r'w-\[?(\d+(?:px)?)\]?', classes)
+        h_cls = re.search(r'h-\[?(\d+(?:px)?)\]?', classes)
+        size = ''
+        if w_cls and h_cls:
+            size = f' ({w_cls.group(1)}×{h_cls.group(1)})'
+        desc = f'Image: "{alt}"{size}'
+    elif tag == 'svg':
+        label = el.get('aria-label', '')
+        desc = f'Icon: {label}' if label else 'Icon (SVG)'
+    elif tag == 'a':
+        href = el.get('href', '')
+        link_text = text[:30] if text else href[:30]
+        # Extract visual styling
+        style_parts = _extract_style_hints(classes)
+        style_hint = f' [{", ".join(style_parts)}]' if style_parts else ''
+        desc = f'Link: "{link_text}"{style_hint}'
+    elif tag == 'button':
+        label = el.get('aria-label', text[:30])
+        style_parts = _extract_style_hints(classes)
+        style_hint = f' [{", ".join(style_parts)}]' if style_parts else ''
+        desc = f'Button: "{label}"{style_hint}'
+    elif tag == 'input':
+        input_type = el.get('type', 'text')
+        placeholder = el.get('placeholder', '')
+        desc = f'Input ({input_type}): "{placeholder}"'
+    elif tag == 'nav':
+        link_count = len(el.find_all('a'))
+        desc = f'Navigation bar with {link_count} links'
+    elif tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+        desc = f'Heading ({tag}): "{text[:50]}"'
+    elif tag == 'p':
+        desc = f'Paragraph: "{text[:50]}"'
+    elif tag in ('ul', 'ol'):
+        items = len(el.find_all('li', recursive=False))
+        desc = f'List with {items} items'
+    elif tag == 'span' and text and not children:
+        desc = f'Text: "{text[:40]}"'
+    elif tag in ('div', 'section', 'header', 'footer', 'main', 'aside'):
+        # Describe by layout classes
+        layout = ''
+        if 'flex' in classes:
+            if 'flex-col' in classes:
+                layout = 'vertical flex container'
+            else:
+                layout = 'horizontal flex container'
+        elif 'grid' in classes:
+            col_match = re.search(r'grid-cols-(\d+)', classes)
+            if col_match:
+                layout = f'{col_match.group(1)}-column grid'
+            else:
+                layout = 'grid container'
+        else:
+            layout = 'container'
+
+        style_hints = _extract_style_hints(classes)
+        hint = f' [{", ".join(style_hints)}]' if style_hints else ''
+        n_kids = len(children)
+        desc = f'{layout}{hint}'
+        if not children and text:
+            desc += f' — "{text[:30]}"'
+        elif n_kids > 0:
+            desc += f' with {n_kids} children'
+    else:
+        if text and not children:
+            desc = f'<{tag}>: "{text[:40]}"'
+        elif children:
+            desc = f'<{tag}> with {len(children)} children'
+        else:
+            return
+
+    if not desc:
+        return
+
+    if depth == 0:
+        # Skip describing the root — caller handles that
+        for child in children:
+            _describe_element(child, lines, depth + 1, max_depth)
+        return
+
+    lines.append(f'{indent}- {desc}')
+
+    if depth < max_depth and children:
+        for child in children[:8]:
+            _describe_element(child, lines, depth + 1, max_depth)
+
+
+# ---------------------------------------------------------------------------
+# Self-contained HTML Generator (for html.to.design Figma plugin)
+# ---------------------------------------------------------------------------
+
+def generate_figma_html(blueprint: dict) -> str:
+    """Generate a self-contained HTML file from a component blueprint.
+
+    The HTML includes inline styles extracted from computedStyles, making it
+    importable via the html.to.design Figma plugin. Uses the actual source
+    HTML but adds computed styles as inline style attributes for elements
+    that rely on external stylesheets.
+    """
+    source_html = blueprint.get('source', {}).get('sourceHTML', '')
+    computed = blueprint.get('computedStyles', {})
+    name = blueprint.get('semantic_name', 'Component')
+    url = blueprint.get('metadata', {}).get('url', '')
+    box = blueprint.get('boxModel', {})
+    width = box.get('width', computed.get('width', '1920px'))
+    height = box.get('height', computed.get('height', 'auto'))
+
+    if not source_html:
+        return '<html><body><p>No source HTML available</p></body></html>'
+
+    # Build inline root styles from computed values
+    root_styles = []
+    style_props = [
+        ('display', 'display'), ('flex-direction', 'flexDirection'),
+        ('align-items', 'alignItems'), ('justify-content', 'justifyContent'),
+        ('gap', 'gap'), ('padding', 'padding'),
+        ('padding-top', 'paddingTop'), ('padding-right', 'paddingRight'),
+        ('padding-bottom', 'paddingBottom'), ('padding-left', 'paddingLeft'),
+        ('background-color', 'backgroundColor'), ('color', 'color'),
+        ('font-family', 'fontFamily'), ('font-size', 'fontSize'),
+        ('font-weight', 'fontWeight'), ('line-height', 'lineHeight'),
+        ('letter-spacing', 'letterSpacing'), ('border-radius', 'borderRadius'),
+        ('border', 'border'), ('box-shadow', 'boxShadow'),
+    ]
+    for css_prop, js_prop in style_props:
+        val = computed.get(js_prop, '')
+        if val and val not in ('none', 'normal', '0px', 'rgba(0, 0, 0, 0)', 'transparent', '0'):
+            root_styles.append(f'{css_prop}: {val}')
+
+    root_style_str = '; '.join(root_styles)
+
+    # Inject inline style on root element
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(source_html, 'html.parser')
+        root = soup.find()
+        if root:
+            existing = root.get('style', '')
+            root['style'] = (existing + '; ' + root_style_str).strip('; ')
+            source_html = str(root)
+    except Exception:
+        pass
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} — ripped from {url}</title>
+<style>
+  /* Reset */
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }}
+
+  /* Component container */
+  .ripped-component {{
+    width: {width};
+    max-width: 100vw;
+    min-height: {height};
+    overflow: hidden;
+    position: relative;
+  }}
+
+  /* Preserve Tailwind utility classes commonly used */
+  .flex {{ display: flex; }}
+  .flex-col {{ flex-direction: column; }}
+  .flex-row {{ flex-direction: row; }}
+  .items-center {{ align-items: center; }}
+  .justify-center {{ justify-content: center; }}
+  .justify-between {{ justify-content: space-between; }}
+  .justify-end {{ justify-content: flex-end; }}
+  .hidden {{ display: none; }}
+  .relative {{ position: relative; }}
+  .absolute {{ position: absolute; }}
+  .w-full {{ width: 100%; }}
+  .h-full {{ height: 100%; }}
+  .grid {{ display: grid; }}
+  .uppercase {{ text-transform: uppercase; }}
+  .transition {{ transition: all 0.2s ease; }}
+  .transition-colors {{ transition: color 0.2s ease, background-color 0.2s ease; }}
+  .overflow-hidden {{ overflow: hidden; }}
+  .text-center {{ text-align: center; }}
+  .font-bold {{ font-weight: 700; }}
+  .font-semibold {{ font-weight: 600; }}
+  .font-medium {{ font-weight: 500; }}
+  .cursor-pointer {{ cursor: pointer; }}
+  .rounded {{ border-radius: 0.25rem; }}
+  .rounded-full {{ border-radius: 9999px; }}
+
+  /* Spacing utilities */
+  .p-1 {{ padding: 0.25rem; }} .p-2 {{ padding: 0.5rem; }} .p-3 {{ padding: 0.75rem; }}
+  .p-4 {{ padding: 1rem; }} .p-6 {{ padding: 1.5rem; }} .p-8 {{ padding: 2rem; }}
+  .px-3 {{ padding-left: 0.75rem; padding-right: 0.75rem; }}
+  .px-4 {{ padding-left: 1rem; padding-right: 1rem; }}
+  .px-6 {{ padding-left: 1.5rem; padding-right: 1.5rem; }}
+  .py-2 {{ padding-top: 0.5rem; padding-bottom: 0.5rem; }}
+  .py-3 {{ padding-top: 0.75rem; padding-bottom: 0.75rem; }}
+  .py-6 {{ padding-top: 1.5rem; padding-bottom: 1.5rem; }}
+  .m-0 {{ margin: 0; }}
+  .mx-auto {{ margin-left: auto; margin-right: auto; }}
+  .gap-1 {{ gap: 0.25rem; }} .gap-2 {{ gap: 0.5rem; }} .gap-3 {{ gap: 0.75rem; }}
+  .gap-4 {{ gap: 1rem; }} .gap-6 {{ gap: 1.5rem; }}
+  .space-x-3 > * + * {{ margin-left: 0.75rem; }}
+  .space-x-6 > * + * {{ margin-left: 1.5rem; }}
+
+  /* Size utilities */
+  .w-6 {{ width: 1.5rem; }} .h-6 {{ height: 1.5rem; }}
+  .w-8 {{ width: 2rem; }} .h-8 {{ height: 2rem; }}
+  .h-16 {{ height: 4rem; }}
+
+  /* Images */
+  img {{ max-width: 100%; height: auto; display: block; }}
+  svg {{ display: inline-block; }}
+</style>
+</head>
+<body>
+<div class="ripped-component">
+{source_html}
+</div>
+<!-- Ripped from {url} by Web Intelligence Scanner -->
+</body>
+</html>"""
+    return html
+
+
+# ---------------------------------------------------------------------------
 # Figma output helpers
 # ---------------------------------------------------------------------------
 
