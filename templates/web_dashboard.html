@@ -4925,7 +4925,7 @@
                 var dims = comp.bounds ? (comp.bounds.width + '×' + comp.bounds.height + 'px') : '';
                 var layoutLabel = comp.layout_label || (comp.layout === 'flex' ? 'Flex' : comp.layout === 'grid' ? 'Grid' : 'Block');
 
-                // Interaction indicator
+                // Interaction indicator with motionwind translations
                 var interactionHTML = '';
                 if (comp.has_interaction && comp.interaction_props.length > 0) {
                     var propPills = comp.interaction_props.slice(0, 4).map(function(prop) {
@@ -4936,7 +4936,23 @@
                         return '<span style="color:' + propColor + ';">' + prop + '</span>';
                     }).join(', ');
                     var moreCount = comp.interaction_props.length > 4 ? ' +' + (comp.interaction_props.length - 4) : '';
-                    interactionHTML = '<div class="pattern-card-interaction">⚡ Hover: ' + propPills + moreCount + '</div>';
+                    // Generate motionwind equivalents for interaction props
+                    var mwInteraction = comp.interaction_props.slice(0, 3).map(function(prop) {
+                        var mw = mwHoverDelta(prop, '', '');
+                        if (!mw) {
+                            // Generic mapping for property names without values
+                            var p = prop.toLowerCase();
+                            if (p.includes('opacity')) return 'animate-hover:opacity-*';
+                            if (p.includes('transform') || p.includes('scale')) return 'animate-hover:scale-*';
+                            if (p.includes('background')) return 'animate-hover:bg-*';
+                            if (p.includes('color') && !p.includes('background') && !p.includes('border')) return 'animate-hover:text-*';
+                        }
+                        return mw;
+                    }).filter(Boolean);
+                    var mwLine = mwInteraction.length > 0
+                        ? '<div style="display:flex; gap:0.3rem; flex-wrap:wrap; margin-top:0.3rem;">' + mwInteraction.map(function(c) { return mwPill(c); }).join('') + '</div>'
+                        : '';
+                    interactionHTML = '<div class="pattern-card-interaction">⚡ Hover: ' + propPills + moreCount + mwLine + '</div>';
                 }
 
                 // Thumbnail: try to crop from full-page screenshot via data attributes
@@ -6815,6 +6831,23 @@
 
                     const moreCount = changedProps.length > 6 ? changedProps.length - 6 : 0;
 
+                    // Motionwind translation for this element's state changes
+                    const mwClasses = [];
+                    const cssOnlyProps = [];
+                    changedProps.forEach(prop => {
+                        const toVal = activeState[prop] || '';
+                        const mwCls = mwHoverDelta(prop, restingState[prop] || '', toVal);
+                        if (mwCls) mwClasses.push(mwCls);
+                        else cssOnlyProps.push(prop.replace(/([A-Z])/g, '-$1').toLowerCase());
+                    });
+                    const mwLine = mwClasses.length > 0
+                        ? `<div style="padding:0.35rem 0.65rem; background:rgba(167,139,250,0.06); border-top:1px solid rgba(167,139,250,0.1); display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
+                              <span style="font-size:0.55rem; color:#a78bfa; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; flex-shrink:0;">motionwind</span>
+                              ${mwClasses.map(c => mwPill(c)).join(' ')}
+                              ${cssOnlyProps.length > 0 ? '<span style="font-size:0.55rem; color:#555; font-style:italic;">+ CSS: ' + cssOnlyProps.slice(0,3).join(', ') + '</span>' : ''}
+                           </div>`
+                        : '';
+
                     return `
                         <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px; overflow:hidden; margin-bottom:0.5rem;">
                             <!-- Element header -->
@@ -6835,6 +6868,7 @@
                                 ${propRows}
                                 ${moreCount > 0 ? `<div style="font-size:0.62rem; color:#555; padding-top:4px;">+${moreCount} more properties</div>` : ''}
                             </div>
+                            ${mwLine}
                         </div>`;
                 }).join('');
 
@@ -10052,6 +10086,73 @@
             `;
         }
 
+        // ── Motionwind Translation Layer ─────────────────────────────────
+        // Translates extracted CSS motion values into motionwind utility classes
+        // Reference: https://motionwind.xyz/docs
+
+        function mwEasing(cssValue) {
+            var v = (cssValue || '').trim().toLowerCase();
+            if (v === 'ease')        return 'animate-ease';
+            if (v === 'ease-in')     return 'animate-ease-in';
+            if (v === 'ease-out')    return 'animate-ease-out';
+            if (v === 'ease-in-out') return 'animate-ease-in-out';
+            if (v === 'linear')      return 'animate-linear';
+            // Spring-like curves (overshoot)
+            var m = v.match(/cubic-bezier\(\s*([\d.]+)\s*,\s*([\d.-]+)\s*,\s*([\d.]+)\s*,\s*([\d.-]+)\s*\)/);
+            if (m) {
+                var y1 = parseFloat(m[2]), y2 = parseFloat(m[4]);
+                if (y1 > 1 || y2 > 1.1) return 'animate-spring';
+                return 'animate-[cubic-bezier(' + m[1] + ',' + m[2] + ',' + m[3] + ',' + m[4] + ')]';
+            }
+            if (v.startsWith('steps')) return null; // no motionwind equivalent
+            return null;
+        }
+
+        function mwDuration(ms) {
+            if (!ms || ms <= 0) return null;
+            var rounded = Math.round(ms / 50) * 50; // snap to nearest 50
+            if (rounded < 50) rounded = 50;
+            return 'animate-duration-' + rounded;
+        }
+
+        function mwHoverDelta(prop, fromVal, toVal) {
+            var p = (prop || '').toLowerCase();
+            if (p === 'opacity' || p.includes('opacity')) {
+                var oVal = parseFloat(toVal);
+                if (!isNaN(oVal)) return 'animate-hover:opacity-' + Math.round(oVal * 100);
+            }
+            if (p === 'transform' || p.includes('transform')) {
+                if (toVal && toVal.includes('scale')) {
+                    var sm = toVal.match(/scale\(([\d.]+)\)/);
+                    if (sm) return 'animate-hover:scale-' + Math.round(parseFloat(sm[1]) * 100);
+                }
+                if (toVal && toVal.includes('translateX')) {
+                    var tx = toVal.match(/translateX\((-?\d+)/);
+                    if (tx) return 'animate-hover:x-' + tx[1];
+                }
+                if (toVal && toVal.includes('translateY')) {
+                    var ty = toVal.match(/translateY\((-?\d+)/);
+                    if (ty) return 'animate-hover:y-' + ty[1];
+                }
+                if (toVal && toVal.includes('rotate')) {
+                    var rm = toVal.match(/rotate\((-?\d+)/);
+                    if (rm) return 'animate-hover:rotate-' + rm[1];
+                }
+            }
+            if (p === 'backgroundcolor' || p === 'background-color' || p === 'background') {
+                if (toVal) return 'animate-hover:bg-[' + toVal.replace(/\s/g,'') + ']';
+            }
+            if (p === 'color' && !p.includes('background') && !p.includes('border')) {
+                if (toVal) return 'animate-hover:text-[' + toVal.replace(/\s/g,'') + ']';
+            }
+            return null; // not translatable
+        }
+
+        function mwPill(mwClass) {
+            if (!mwClass) return '';
+            return '<code style="font-family:\'SF Mono\',monospace; font-size:0.58rem; color:#c9b8ff; background:rgba(167,139,250,0.10); border:1px solid rgba(167,139,250,0.20); padding:1px 5px; border-radius:3px; white-space:nowrap;">' + mwClass + '</code>';
+        }
+
         // ── Motion Tokens Card ──────────────────────────────────────────
         function createMotionTokensCard(icon, title, data, confidenceClass) {
             if (data.error || data.pattern === 'Analysis Failed') {
@@ -10088,6 +10189,7 @@
                     ${tierEntries.map(([name, tier]) => {
                         const pct = Math.max(8, ((tier.count || 0) / maxTierCount) * 100);
                         const color = tierColors[name] || '#888';
+                        const mwDur = mwDuration(tier.ms);
                         return `
                         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
                             <div style="min-width: 60px; font-size: 0.72rem; color: ${color}; font-weight: 600; text-transform: capitalize;">${name}</div>
@@ -10096,6 +10198,7 @@
                             </div>
                             <div style="min-width: 50px; font-size: 0.7rem; color: #aaa; font-family: 'SF Mono', monospace; text-align: right;">${tier.ms || 0}ms</div>
                             <div style="min-width: 30px; font-size: 0.68rem; color: #666; text-align: right;">${tier.count || 0}x</div>
+                            ${mwDur ? `<div style="min-width: 0;">${mwPill(mwDur)}</div>` : ''}
                         </div>`;
                     }).join('')}
                 </div>
@@ -10165,6 +10268,7 @@
                         const knownAs  = c.known_as || '';
                         const uc = easingUseCase(c.value);
                         const desc = easingDescription(c.value);
+                        const mwEas = mwEasing(c.value);
                         const ucChip = uc
                             ? `<span style="flex-shrink:0; font-size:0.62rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:${uc.color}; background:${uc.color}18; border:1px solid ${uc.color}30; border-radius:4px; padding:1px 5px;">${uc.label}</span>`
                             : '';
@@ -10175,6 +10279,7 @@
                                     <div style="font-size: 0.82rem; color: var(--text-primary); font-weight: 500;">${desc.short}</div>
                                     <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap;">
                                         <span style="font-family: var(--font-mono); font-size: 0.65rem; color: #c9b8ff; word-break: break-all;">${c.value || ''}</span>
+                                        ${mwEas ? mwPill(mwEas) : ''}
                                         ${roleName ? '<span style="font-size: 0.6rem; color: #0a84ff; text-transform: capitalize;">' + roleName + '</span>' : ''}
                                         ${knownAs && knownAs !== (c.value || '').trim().toLowerCase() ? '<span style="font-size: 0.6rem; color: #666;">' + knownAs + '</span>' : ''}
                                     </div>
