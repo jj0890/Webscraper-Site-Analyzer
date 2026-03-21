@@ -54,44 +54,77 @@ COMPONENT_DISCOVERY_JS = '''() => {
         const cn = ((typeof el.className === 'string') ? el.className : '').toLowerCase();
         const s = window.getComputedStyle(el);
 
-        // Navigation
+        // ── Navigation / Header ──
         if (tag === 'nav' || tag === 'header' || role === 'navigation' || role === 'banner') {
             const linkCount = el.querySelectorAll('a').length;
-            return { category: 'navigation', label: linkCount > 0 ? 'Navigation (' + linkCount + ' links)' : 'Header', priority: 90 };
+            const hasLogo = !!el.querySelector('img, svg, [class*="logo"], [class*="brand"]');
+            const hasSearch = !!el.querySelector('input[type="search"], [class*="search"]');
+            const hasDropdown = !!el.querySelector('[class*="dropdown"], [class*="menu"], ul ul, [aria-expanded]');
+            const parts = [];
+            if (hasLogo) parts.push('Logo');
+            if (linkCount > 0) parts.push(linkCount + ' links');
+            if (hasSearch) parts.push('Search');
+            if (hasDropdown) parts.push('Dropdowns');
+            const detail = parts.length > 0 ? ' — ' + parts.join(', ') : '';
+            // Distinguish sticky/fixed nav
+            const isSticky = s.position === 'fixed' || s.position === 'sticky';
+            const prefix = isSticky ? 'Sticky Navbar' : (rect.height < 120 ? 'Navbar' : 'Header');
+            return { category: 'navigation', label: prefix + detail, priority: 90 };
         }
 
-        // Footer
+        // ── Footer ──
         if (tag === 'footer' || role === 'contentinfo') {
             const linkCount = el.querySelectorAll('a').length;
-            return { category: 'footer', label: linkCount > 0 ? 'Footer (' + linkCount + ' links)' : 'Footer', priority: 70 };
+            const cols = Array.from(el.children).filter(c => {
+                const cr = c.getBoundingClientRect();
+                return cr.width > 100 && cr.height > 40;
+            }).length;
+            const detail = [];
+            if (cols >= 3) detail.push(cols + '-column');
+            if (linkCount > 0) detail.push(linkCount + ' links');
+            return { category: 'footer', label: 'Footer' + (detail.length ? ' — ' + detail.join(', ') : ''), priority: 70 };
         }
 
-        // Hero — large section near top with imagery, but NOT the whole page
+        // ── Hero — large section near top with imagery ──
         if (rect.top < vh * 0.5 && rect.height > vh * 0.3 && rect.height < vh * 1.5) {
             const hasImg = el.querySelectorAll('img, video, picture').length > 0;
             const hasCTA = el.querySelectorAll('button, a[href]').length > 0;
             const bgImg = s.backgroundImage !== 'none';
             const links = el.querySelectorAll('a').length;
             if ((hasImg || bgImg || hasCTA) && links < 30) {
-                return { category: 'hero', label: 'Hero Section', priority: 85 };
+                const headingEl = el.querySelector('h1, h2');
+                const heading = headingEl ? headingEl.textContent.trim().substring(0, 50) : null;
+                const hasBg = bgImg || !!el.querySelector('video');
+                const label = heading
+                    ? 'Hero — "' + heading + '"'
+                    : hasBg ? 'Hero Banner' : 'Hero Section';
+                return { category: 'hero', label: label, priority: 85 };
             }
         }
 
-        // Form
+        // ── Form ──
         if (tag === 'form' || el.querySelector('form')) {
             const inputCount = el.querySelectorAll('input, textarea, select').length;
             if (inputCount > 0) {
-                return { category: 'form', label: 'Form (' + inputCount + ' fields)', priority: 75 };
+                const hasEmail = !!el.querySelector('input[type="email"], input[name*="email"]');
+                const hasPassword = !!el.querySelector('input[type="password"]');
+                const hasSubmit = !!el.querySelector('button[type="submit"], input[type="submit"]');
+                const formType = hasPassword ? 'Login Form' :
+                                 hasEmail && inputCount <= 2 ? 'Email Signup' :
+                                 inputCount > 5 ? 'Long Form' : 'Form';
+                return { category: 'form', label: formType + ' (' + inputCount + ' fields)', priority: 75 };
             }
         }
 
-        // Media/Player
+        // ── Media/Player ──
         if (cn.includes('player') || cn.includes('audio') || cn.includes('video') ||
             el.querySelector('audio, video, [class*="player"]')) {
-            return { category: 'media', label: 'Media Player', priority: 80 };
+            const hasVideo = !!el.querySelector('video');
+            const hasAudio = !!el.querySelector('audio');
+            return { category: 'media', label: hasVideo ? 'Video Player' : hasAudio ? 'Audio Player' : 'Media Player', priority: 80 };
         }
 
-        // Content grid — find repeating children
+        // ── Repeating children — smart grid classification ──
         const kids = Array.from(el.children).filter(c => {
             const cr = c.getBoundingClientRect();
             return cr.width > 40 && cr.height > 20;
@@ -112,42 +145,127 @@ COMPONENT_DISCOVERY_JS = '''() => {
                 const ref = sig(group[0]);
                 const matching = group.filter(el2 => sig(el2) === ref);
                 if (matching.length >= 3) {
-                    const hasImgs = !!matching[0].querySelector('img, picture');
-                    const hasHeadings = !!matching[0].querySelector('h1,h2,h3,h4');
-                    const itemType = hasImgs && hasHeadings ? 'Card' :
-                                     hasImgs ? 'Image' :
-                                     hasHeadings ? 'Text' : 'Item';
+                    const sample = matching[0];
+                    const hasImgs = !!sample.querySelector('img, picture');
+                    const hasHeadings = !!sample.querySelector('h1,h2,h3,h4');
+                    const hasLinks = !!sample.querySelector('a');
+                    const hasParagraphs = !!sample.querySelector('p');
+                    const sampleText = (sample.textContent || '').trim();
+                    const avgTextLen = sampleText.length / Math.max(1, matching.length);
+                    const isInline = s.display.includes('flex') && s.flexDirection !== 'column';
+                    const isGridLayout = s.display.includes('grid');
+                    const itemR = sample.getBoundingClientRect();
+                    const isSmallItem = itemR.height < 80 && itemR.width < 200;
+                    const isOnlyImgs = hasImgs && !hasHeadings && !hasParagraphs && avgTextLen < 30;
+
+                    // ── Classify the repeating pattern ──
+                    var gridLabel, gridCategory;
+
+                    if (isSmallItem && !hasImgs && !hasHeadings && avgTextLen < 50) {
+                        // Small repeating items with little content = stats, pills, or tags
+                        gridLabel = matching.length + ' Metric Stats';
+                        gridCategory = 'content_grid';
+                    } else if (isOnlyImgs && isInline && !hasHeadings) {
+                        // Row of images with no text = logo bar or image strip
+                        gridLabel = matching.length + '-Logo Strip';
+                        gridCategory = 'content_grid';
+                    } else if (hasImgs && hasHeadings && hasParagraphs) {
+                        // Full cards: image + heading + description
+                        gridLabel = matching.length + ' Feature Cards';
+                        gridCategory = 'content_grid';
+                    } else if (hasImgs && hasHeadings) {
+                        // Cards with image + title (no body text)
+                        gridLabel = matching.length + ' Product Cards';
+                        gridCategory = 'content_grid';
+                    } else if (hasImgs && hasLinks && !hasHeadings) {
+                        // Linked images = gallery or portfolio
+                        gridLabel = matching.length + '-Image Gallery';
+                        gridCategory = 'content_grid';
+                    } else if (hasHeadings && hasParagraphs && !hasImgs) {
+                        // Text-only with heading + body = feature list
+                        gridLabel = matching.length + ' Feature List';
+                        gridCategory = 'content_grid';
+                    } else if (hasHeadings && !hasImgs) {
+                        // Headings only = link list or menu group
+                        gridLabel = matching.length + ' Link Group';
+                        gridCategory = 'content_grid';
+                    } else if (hasImgs && !hasHeadings && !hasLinks) {
+                        // Images only, no links = testimonial logos or icons
+                        gridLabel = matching.length + ' Icon/Logo Row';
+                        gridCategory = 'content_grid';
+                    } else {
+                        // Fallback — describe what's inside
+                        const parts = [];
+                        if (hasImgs) parts.push('images');
+                        if (hasHeadings) parts.push('headings');
+                        if (hasLinks) parts.push('links');
+                        gridLabel = matching.length + ' Repeating Blocks' + (parts.length ? ' (' + parts.join('+') + ')' : '');
+                        gridCategory = 'content_grid';
+                    }
+
                     return {
-                        category: 'content_grid',
-                        label: matching.length + '-Item ' + itemType + ' Grid',
+                        category: gridCategory,
+                        label: gridLabel,
                         priority: 80,
-                        meta: { itemCount: matching.length, hasImages: hasImgs, hasHeadings: hasHeadings }
+                        meta: { itemCount: matching.length, hasImages: hasImgs, hasHeadings: hasHeadings, layout: isGridLayout ? 'grid' : isInline ? 'row' : 'stack' }
                     };
                 }
             }
         }
 
-        // Generic section
+        // ── Testimonial / Quote ──
+        if (el.querySelector('blockquote, [class*="testimonial"], [class*="quote"]') ||
+            cn.includes('testimonial') || cn.includes('quote')) {
+            return { category: 'section', label: 'Testimonial', priority: 65 };
+        }
+
+        // ── CTA / Banner strip ──
+        if (rect.height < 200 && rect.width > vw * 0.7) {
+            const btns = el.querySelectorAll('button, a[href]').length;
+            const headingEl = el.querySelector('h1, h2, h3, h4');
+            if (btns >= 1 && headingEl) {
+                return { category: 'section', label: 'CTA Banner — "' + headingEl.textContent.trim().substring(0, 40) + '"', priority: 65 };
+            }
+        }
+
+        // ── Generic section ──
         if (tag === 'section' || tag === 'main' || tag === 'article' ||
             role === 'main' || role === 'region') {
             const headingEl = el.querySelector('h1, h2, h3');
-            const heading = headingEl ? headingEl.textContent.trim().substring(0, 60) : null;
-            const label = heading ? 'Section: "' + heading + '"' : 'Content Section';
+            const heading = headingEl ? headingEl.textContent.trim().substring(0, 50) : null;
+            const imgCount = el.querySelectorAll('img, picture').length;
+            const linkCount = el.querySelectorAll('a').length;
+            // Try to give a useful descriptor
+            if (tag === 'article') {
+                return { category: 'section', label: heading ? 'Article — "' + heading + '"' : 'Article', priority: 55 };
+            }
+            const detail = [];
+            if (imgCount > 3) detail.push(imgCount + ' images');
+            if (linkCount > 5) detail.push(linkCount + ' links');
+            const suffix = detail.length ? ' (' + detail.join(', ') + ')' : '';
+            const label = heading ? '"' + heading + '"' + suffix : 'Content Section' + suffix;
             return { category: 'section', label: label, priority: 50 };
         }
 
-        // Aside / sidebar
+        // ── Aside / sidebar ──
         if (tag === 'aside' || role === 'complementary') {
-            return { category: 'sidebar', label: 'Sidebar', priority: 60 };
+            const headingEl = el.querySelector('h2, h3, h4');
+            const heading = headingEl ? headingEl.textContent.trim().substring(0, 40) : null;
+            return { category: 'sidebar', label: heading ? 'Sidebar — "' + heading + '"' : 'Sidebar', priority: 60 };
         }
 
-        // Large div with significant content
+        // ── Large div fallback ──
         if (rect.width > vw * 0.5 && rect.height > 100 && kids.length >= 2) {
             const headingEl = el.querySelector('h1, h2, h3, h4');
-            const heading = headingEl ? headingEl.textContent.trim().substring(0, 60) : null;
+            const heading = headingEl ? headingEl.textContent.trim().substring(0, 50) : null;
+            const imgCount = el.querySelectorAll('img, picture').length;
+            // Smarter fallback label
+            if (imgCount > 5 && !heading) {
+                return { category: 'block', label: 'Image Gallery (' + imgCount + ' images)', priority: 35 };
+            }
             return {
                 category: 'block',
-                label: heading ? 'Block: "' + heading + '"' : 'Content Block',
+                label: heading ? '"' + heading + '"' : 'Content Block',
                 priority: 30
             };
         }
