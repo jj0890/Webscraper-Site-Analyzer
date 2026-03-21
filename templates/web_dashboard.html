@@ -1590,7 +1590,7 @@
 
         .pattern-card-thumb {
             width: 100%;
-            aspect-ratio: 16/9;
+            min-height: 120px;
             overflow: hidden;
             background: #0a0a0e;
             position: relative;
@@ -4996,11 +4996,7 @@
                     var canvases = grid.querySelectorAll('.pattern-thumb-canvas');
                     var imgW = ssImg.naturalWidth;
                     var imgH = ssImg.naturalHeight;
-                    // The screenshot is full-page, so scale is imgW / viewport.width
                     var scaleX = imgW / viewport.width;
-                    // For full-page screenshot, we need the total page height
-                    // viewport.height is just the visible area, but the screenshot captures the full page
-                    // So scaleY = scaleX (uniform scaling)
                     var scaleY = scaleX;
 
                     canvases.forEach(function(canvas) {
@@ -5009,49 +5005,70 @@
                         var w = parseFloat(canvas.dataset.width);
                         var h = parseFloat(canvas.dataset.height);
 
+                        // Clamp left to viewport (elements reporting left > viewport are off-screen)
+                        if (left > viewport.width) left = 0;
+
                         // Source coordinates in the screenshot image
                         var sx = Math.max(0, left * scaleX);
                         var sy = Math.max(0, top * scaleY);
                         var sw = Math.min(w * scaleX, imgW - sx);
                         var sh = Math.min(h * scaleY, imgH - sy);
 
+                        // For very tall elements (>3x viewport), only show top portion
+                        var maxSrcH = viewport.height * 2 * scaleY;
+                        if (sh > maxSrcH) sh = maxSrcH;
+
                         if (sw <= 0 || sh <= 0 || sy >= imgH) {
-                            // Element is outside screenshot bounds — show placeholder
                             var parent = canvas.parentElement;
+                            var card = canvas.closest('.pattern-card');
                             canvas.remove();
-                            var cfg2 = catConfig[canvas.closest('.pattern-card').dataset.category] || { icon: '•' };
+                            var cfg2 = catConfig[(card || {}).dataset ? card.dataset.category : ''] || { icon: '•' };
                             parent.innerHTML = '<div class="thumb-placeholder"><span class="thumb-icon">' + cfg2.icon + '</span><span>Below fold</span></div>';
                             return;
                         }
 
-                        // Set canvas size to match the card thumbnail area
+                        // Contain-fit: show entire element, pad with dark bg
+                        var srcAspect = sw / sh;
                         var cardWidth = canvas.parentElement.offsetWidth || 380;
-                        var cardHeight = Math.round(cardWidth * 9 / 16);
-                        canvas.width = cardWidth * 2; // 2x for retina
+
+                        // Canvas height adapts to content, clamped for sanity
+                        var cardHeight = Math.round(cardWidth / Math.max(1.2, Math.min(srcAspect, 3)));
+                        cardHeight = Math.max(140, Math.min(cardHeight, 380));
+
+                        canvas.width = cardWidth * 2;
                         canvas.height = cardHeight * 2;
                         canvas.style.width = '100%';
-                        canvas.style.height = '100%';
+                        canvas.style.height = cardHeight + 'px';
+                        canvas.parentElement.style.aspectRatio = 'auto';
+                        canvas.parentElement.style.height = 'auto';
 
                         var ctx = canvas.getContext('2d');
                         ctx.imageSmoothingEnabled = true;
                         ctx.imageSmoothingQuality = 'high';
 
-                        // Draw the cropped region, fitting it to the canvas
-                        // If the source region is very tall (like a hero), we show the top portion
-                        var srcAspect = sw / sh;
+                        // Fill with dark background
+                        ctx.fillStyle = '#0a0a0e';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                        // Contain-fit: scale to fit entirely inside canvas
                         var destAspect = canvas.width / canvas.height;
+                        var drawW, drawH, drawX, drawY;
 
                         if (srcAspect > destAspect) {
-                            // Source is wider — fit height, crop sides
-                            var drawH = canvas.height;
-                            var drawW = drawH * srcAspect;
-                            ctx.drawImage(ssImg, sx, sy, sw, sh, (canvas.width - drawW) / 2, 0, drawW, drawH);
+                            // Source wider — fit to width, center vertically
+                            drawW = canvas.width;
+                            drawH = canvas.width / srcAspect;
+                            drawX = 0;
+                            drawY = (canvas.height - drawH) / 2;
                         } else {
-                            // Source is taller — fit width, show top portion
-                            var drawW2 = canvas.width;
-                            var drawH2 = drawW2 / srcAspect;
-                            ctx.drawImage(ssImg, sx, sy, sw, sh, 0, 0, drawW2, drawH2);
+                            // Source taller — fit to height, show top portion
+                            drawH = canvas.height;
+                            drawW = canvas.height * srcAspect;
+                            drawX = (canvas.width - drawW) / 2;
+                            drawY = 0;
                         }
+
+                        ctx.drawImage(ssImg, sx, sy, sw, sh, drawX, drawY, drawW, drawH);
                     });
                 };
                 ssImg.src = 'data:image/png;base64,' + screenshotBase64;

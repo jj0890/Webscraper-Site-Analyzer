@@ -168,6 +168,14 @@ COMPONENT_DISCOVERY_JS = '''() => {
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
 
+        // Skip mega-elements (entire page wrappers) — not useful as patterns
+        const absTop = rect.top + window.scrollY;
+        const totalH = rect.height;
+        if (totalH > vh * 3 && rect.width > vw * 0.9) continue;
+
+        // Skip off-screen elements (left beyond viewport)
+        if (rect.left > vw) continue;
+
         const s = window.getComputedStyle(el);
         if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
 
