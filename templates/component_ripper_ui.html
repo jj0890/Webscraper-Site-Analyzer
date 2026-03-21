@@ -1242,14 +1242,85 @@
 
         function ripDiscoveredFigma(selector, event) {
             event.stopPropagation();
-            const url = document.getElementById('urlInput').value;
-            setMode('targeted');
-            document.getElementById('selectorInput').value = selector;
-            document.getElementById('includeStates').checked = true;
-            document.getElementById('figmaOutput').checked = true;
+            var url = document.getElementById('urlInput').value;
+            showFigmaExportModal(url, selector);
+        }
 
-            // Trigger rip
-            ripComponent();
+        function showFigmaExportModal(siteUrl, selector) {
+            var figmaUrl = window.location.origin + '/api/figma-html?url=' + encodeURIComponent(siteUrl) + '&selector=' + encodeURIComponent(selector);
+
+            var overlay = document.createElement('div');
+            overlay.id = 'figma-export-overlay';
+            overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10000; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);';
+            overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+            var modal = document.createElement('div');
+            modal.style.cssText = 'background:#1a1a2e; border:1px solid rgba(162,89,255,0.3); border-radius:14px; width:520px; max-width:90vw; overflow:hidden; box-shadow:0 24px 48px rgba(0,0,0,0.5);';
+            modal.innerHTML = `
+                <div style="padding:1.25rem 1.5rem; border-bottom:1px solid rgba(162,89,255,0.15); display:flex; align-items:center; justify-content:space-between;">
+                    <div style="font-weight:700; color:#c9b8ff; font-size:1rem;">◆ Export to Figma</div>
+                    <button onclick="this.closest('#figma-export-overlay').remove()" style="background:none; border:none; color:#666; font-size:1.2rem; cursor:pointer;">✕</button>
+                </div>
+                <div style="padding:1.25rem 1.5rem;">
+                    <div style="margin-bottom:1.25rem;">
+                        <div style="font-weight:600; color:#e2e8f0; font-size:0.88rem; margin-bottom:0.3rem;">🔗 html.to.design Plugin</div>
+                        <div style="color:#888; font-size:0.75rem; margin-bottom:0.6rem;">Paste URL into the Figma plugin → imports as editable frames</div>
+                        <div style="display:flex; gap:0.5rem;">
+                            <input readonly value="${figmaUrl}" style="flex:1; background:#0d0d1a; border:1px solid rgba(162,89,255,0.25); border-radius:6px; padding:0.5rem 0.75rem; color:#c9b8ff; font-family:'SF Mono',monospace; font-size:0.72rem; outline:none;" onclick="this.select()">
+                            <button onclick="navigator.clipboard.writeText('${figmaUrl}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)" style="padding:0.5rem 1rem; background:rgba(162,89,255,0.15); border:1px solid rgba(162,89,255,0.4); border-radius:6px; color:#c9b8ff; cursor:pointer; font-weight:600; font-size:0.78rem; white-space:nowrap;">Copy</button>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:1.25rem;">
+                        <div style="font-weight:600; color:#e2e8f0; font-size:0.88rem; margin-bottom:0.3rem;">🤖 Figma Make AI</div>
+                        <div style="color:#888; font-size:0.75rem; margin-bottom:0.6rem;">Copy prompt → paste into Figma AI → it builds the component</div>
+                        <button id="figma-ai-btn-ripper" onclick="copyFigmaPromptRipper(this, '${siteUrl}', '${selector}')" style="width:100%; padding:0.5rem 1rem; background:rgba(162,89,255,0.1); border:1px solid rgba(162,89,255,0.25); border-radius:6px; color:#c9b8ff; cursor:pointer; font-size:0.78rem;">Copy AI Prompt (fetches live)</button>
+                    </div>
+                    <div>
+                        <div style="font-weight:600; color:#e2e8f0; font-size:0.88rem; margin-bottom:0.3rem;">📄 Download HTML</div>
+                        <div style="color:#888; font-size:0.75rem; margin-bottom:0.6rem;">Self-contained HTML with inline styles</div>
+                        <button onclick="window.open('/api/figma-html?url=${encodeURIComponent(siteUrl)}&selector=${encodeURIComponent(selector)}','_blank')" style="width:100%; padding:0.5rem 1rem; background:rgba(162,89,255,0.1); border:1px solid rgba(162,89,255,0.25); border-radius:6px; color:#c9b8ff; cursor:pointer; font-size:0.78rem;">Open in New Tab ↗</button>
+                    </div>
+                </div>
+                <div style="padding:0.75rem 1.5rem; border-top:1px solid rgba(162,89,255,0.1); text-align:center;">
+                    <span style="font-size:0.68rem; color:#555;">Component: <code style="color:#888;">${selector}</code></span>
+                </div>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+        }
+
+        function copyFigmaPromptRipper(btn, siteUrl, selector) {
+            btn.textContent = 'Fetching...';
+            btn.disabled = true;
+            fetch('/api/rip-component', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    site_url: siteUrl,
+                    selector: selector,
+                    output_format: 'figma',
+                    include_states: true
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                var prompt = (data.blueprint || {}).figma_prompt || 'No prompt generated';
+                navigator.clipboard.writeText(prompt);
+                btn.textContent = 'Copied to clipboard!';
+                btn.style.background = 'rgba(52,211,153,0.15)';
+                btn.style.color = '#34d399';
+                setTimeout(() => {
+                    btn.textContent = 'Copy AI Prompt';
+                    btn.style.background = 'rgba(162,89,255,0.1)';
+                    btn.style.color = '#c9b8ff';
+                    btn.disabled = false;
+                }, 2000);
+            })
+            .catch(err => {
+                btn.textContent = 'Failed — try Rip Blueprint instead';
+                btn.disabled = false;
+            });
         }
 
         async function extractComputedStyles(url, selector) {
@@ -1611,24 +1682,46 @@
                 html += `</div>`;
             }
 
-            // Figma-ready Markdown
-            if (data.figma_markdown) {
+            // Figma Export Panel (unified)
+            if (data.figma_markdown || data.figma_prompt || data.figma_html) {
+                var figmaUrl = '/api/figma-html?url=' + encodeURIComponent(data.metadata?.url || document.getElementById('urlInput').value) + '&selector=' + encodeURIComponent(data.metadata?.selector || document.getElementById('selectorInput').value);
+                var fullFigmaUrl = window.location.origin + figmaUrl;
+
                 html += `
-                    <div class="code-block" style="margin-top:1rem; border-color:rgba(162,89,255,0.3);">
-                        <div class="code-header" style="background:rgba(162,89,255,0.1);">
-                            <span class="code-label" style="color:#c9b8ff;">◆ Figma-Ready Output</span>
-                            <button class="copy-btn" onclick="copyCode(this, \`${escapeCode(data.figma_markdown)}\`)" style="color:#c9b8ff; border-color:rgba(162,89,255,0.3);">Copy</button>
+                    <div style="margin-top:1.25rem; border:1px solid rgba(162,89,255,0.3); border-radius:10px; overflow:hidden;">
+                        <div style="background:rgba(162,89,255,0.08); padding:0.75rem 1rem; display:flex; align-items:center; justify-content:space-between;">
+                            <span style="font-weight:600; color:#c9b8ff; font-size:0.9rem;">◆ Figma Export</span>
+                            <span style="font-size:0.72rem; color:#666;">3 formats available</span>
                         </div>
-                        <div class="code-content" style="white-space:pre-wrap; font-size:0.78rem; max-height:400px; overflow-y:auto;">${data.figma_markdown.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; border-top:1px solid rgba(162,89,255,0.15);">
+                            <!-- 1. html.to.design URL -->
+                            <div style="padding:1rem; border-right:1px solid rgba(162,89,255,0.15);">
+                                <div style="font-weight:600; color:#e2e8f0; font-size:0.82rem; margin-bottom:0.35rem;">🔗 html.to.design</div>
+                                <div style="color:#888; font-size:0.72rem; margin-bottom:0.65rem;">Paste URL into Figma plugin → imports as editable frames</div>
+                                <button class="copy-btn" onclick="copyCode(this, '${fullFigmaUrl}')" style="width:100%; padding:0.45rem 0.75rem; background:rgba(162,89,255,0.12); border:1px solid rgba(162,89,255,0.3); border-radius:6px; color:#c9b8ff; cursor:pointer; font-size:0.78rem; font-weight:500;">Copy URL</button>
+                                <div style="margin-top:0.4rem; text-align:center;">
+                                    <a href="${figmaUrl}" target="_blank" style="font-size:0.68rem; color:#888; text-decoration:none;">Preview in browser ↗</a>
+                                </div>
+                            </div>
+                            <!-- 2. AI Prompt -->
+                            <div style="padding:1rem; border-right:1px solid rgba(162,89,255,0.15);">
+                                <div style="font-weight:600; color:#e2e8f0; font-size:0.82rem; margin-bottom:0.35rem;">🤖 Figma AI Prompt</div>
+                                <div style="color:#888; font-size:0.72rem; margin-bottom:0.65rem;">Paste into Figma Make → AI builds the component</div>
+                                ${data.figma_prompt ? `<button class="copy-btn" onclick="copyCode(this, \`${escapeCode(data.figma_prompt)}\`)" style="width:100%; padding:0.45rem 0.75rem; background:rgba(162,89,255,0.12); border:1px solid rgba(162,89,255,0.3); border-radius:6px; color:#c9b8ff; cursor:pointer; font-size:0.78rem; font-weight:500;">Copy Prompt</button>` : '<span style="color:#555; font-size:0.72rem;">Not available</span>'}
+                            </div>
+                            <!-- 3. Download HTML -->
+                            <div style="padding:1rem;">
+                                <div style="font-weight:600; color:#e2e8f0; font-size:0.82rem; margin-bottom:0.35rem;">📄 Self-Contained HTML</div>
+                                <div style="color:#888; font-size:0.72rem; margin-bottom:0.65rem;">Download HTML with inline styles for local use</div>
+                                ${data.figma_html ? `<button class="copy-btn" onclick="downloadHtml('${name}', \`${escapeCode(data.figma_html)}\`)" style="width:100%; padding:0.45rem 0.75rem; background:rgba(162,89,255,0.12); border:1px solid rgba(162,89,255,0.3); border-radius:6px; color:#c9b8ff; cursor:pointer; font-size:0.78rem; font-weight:500;">Download .html</button>` : '<span style="color:#555; font-size:0.72rem;">Not available</span>'}
+                            </div>
+                        </div>
                     </div>
                 `;
             }
 
             // Download buttons
             html += `<div class="download-bar">`;
-            if (data.figma_markdown) {
-                html += `<button class="btn-download btn-download-secondary" onclick="downloadFigma('${name}', ${JSON.stringify(JSON.stringify(data.figma_markdown))})" style="background:rgba(162,89,255,0.1); border-color:rgba(162,89,255,0.3); color:#c9b8ff;">Download Figma Markdown</button>`;
-            }
             if (data.markdown) {
                 html += `<button class="btn-download btn-download-secondary" onclick="downloadMarkdown('${name}', ${JSON.stringify(JSON.stringify(data.markdown))})">Download Markdown Docs</button>`;
             }
@@ -1672,6 +1765,18 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = `${name.toLowerCase()}-figma.md`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadHtml(name, htmlStr) {
+            const blob = new Blob([htmlStr], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${name.toLowerCase()}-figma.html`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);

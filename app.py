@@ -324,6 +324,35 @@ def discover_components():
         }), 500
 
 
+@app.route('/api/figma-html', methods=['GET'])
+def figma_html():
+    """
+    Serve a ripped component as self-contained HTML for html.to.design import.
+
+    Usage: http://localhost:8080/api/figma-html?url=https://pigeonsandplanes.com&selector=header
+
+    Paste this URL directly into the html.to.design Figma plugin "Web" tab.
+    """
+    site_url = request.args.get('url')
+    selector = request.args.get('selector', 'header')
+
+    if not site_url:
+        return '<html><body><p>Usage: /api/figma-html?url=https://example.com&selector=header</p></body></html>', 400
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return f'<html><body><p>Error: {url_error}</p></body></html>', 400
+
+    try:
+        ripper = ComponentRipper(site_url, selector)
+        blueprint = run_async(ripper.rip(include_states=True, output_format='figma'))
+        html = blueprint.get('figma_html', '<html><body><p>No HTML generated</p></body></html>')
+        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except Exception as e:
+        logger.error(f"Figma HTML generation failed: {e}", exc_info=True)
+        return f'<html><body><p>Error: {e}</p></body></html>', 500
+
+
 @app.route('/api/rip-component/cross-site', methods=['POST'])
 def rip_component_cross_site():
     """
