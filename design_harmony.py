@@ -297,6 +297,83 @@ def detect_color_consistency(colors: List[str]) -> Dict:
     }
 
 
+def detect_layout_consistency(gaps: List[float], paddings: List[float],
+                              spacing_result: Dict) -> Dict:
+    """Check if flex/grid gaps and padding values follow the same base unit as spacing.
+
+    Args:
+        gaps: List of gap values in px from flex/grid containers
+        paddings: List of padding values in px from layout containers
+        spacing_result: Result from detect_spacing_scale (to get the base unit)
+
+    Returns:
+        {
+            'gap_adherence': float or None,   # fraction of gaps on-grid
+            'padding_adherence': float or None,
+            'gaps_on_grid': int,
+            'total_gaps': int,
+            'paddings_on_grid': int,
+            'total_paddings': int,
+            'confidence_boost': int,   # 0-10 for spatial_composition
+            'off_grid_gaps': list,     # gap values that break the grid
+        }
+    """
+    base_unit = spacing_result.get('base_unit')
+    if not base_unit:
+        # No base unit detected — can't validate
+        return {'gap_adherence': None, 'padding_adherence': None,
+                'gaps_on_grid': 0, 'total_gaps': len(gaps),
+                'paddings_on_grid': 0, 'total_paddings': len(paddings),
+                'confidence_boost': 0, 'off_grid_gaps': []}
+
+    # Check gaps against base unit
+    unique_gaps = sorted(set(g for g in gaps if g > 0))
+    gaps_on = 0
+    off_grid = []
+    for g in unique_gaps:
+        remainder = g % base_unit
+        if remainder <= 1.5 or abs(remainder - base_unit) <= 1.5:
+            gaps_on += 1
+        else:
+            off_grid.append(g)
+
+    gap_adherence = gaps_on / len(unique_gaps) if unique_gaps else None
+
+    # Check paddings against base unit
+    unique_pads = sorted(set(p for p in paddings if p > 0))
+    pads_on = 0
+    for p in unique_pads:
+        remainder = p % base_unit
+        if remainder <= 1.5 or abs(remainder - base_unit) <= 1.5:
+            pads_on += 1
+
+    pad_adherence = pads_on / len(unique_pads) if unique_pads else None
+
+    # Confidence boost for spatial_composition
+    boost = 0
+    total_checked = len(unique_gaps) + len(unique_pads)
+    total_on = gaps_on + pads_on
+    if total_checked >= 5:
+        overall = total_on / total_checked
+        if overall >= 0.8:
+            boost = 10
+        elif overall >= 0.6:
+            boost = 5
+        elif overall >= 0.4:
+            boost = 2
+
+    return {
+        'gap_adherence': round(gap_adherence, 3) if gap_adherence is not None else None,
+        'padding_adherence': round(pad_adherence, 3) if pad_adherence is not None else None,
+        'gaps_on_grid': gaps_on,
+        'total_gaps': len(unique_gaps),
+        'paddings_on_grid': pads_on,
+        'total_paddings': len(unique_pads),
+        'confidence_boost': boost,
+        'off_grid_gaps': off_grid[:10],
+    }
+
+
 def analyze_harmony(evidence: Dict) -> Dict:
     """Main entry point — analyze all extracted evidence for mathematical harmony.
 
@@ -404,10 +481,21 @@ def analyze_harmony(evidence: Dict) -> Dict:
         elif isinstance(palette, list):
             color_list.extend(str(v) for v in palette)
 
+    # Extract layout gaps and paddings from spatial composition
+    spatial = evidence.get('spatial_composition', {})
+    layout_gaps = []
+    layout_paddings = []
+    if isinstance(spatial, dict):
+        ch = spatial.get('container_hierarchy', {})
+        if isinstance(ch, dict):
+            layout_gaps = ch.get('all_gaps', [])
+            layout_paddings = ch.get('all_paddings', [])
+
     # Run detectors
     type_result = detect_type_scale(font_sizes)
     spacing_result = detect_spacing_scale(spacing_values)
     color_result = detect_color_consistency(color_list)
+    layout_result = detect_layout_consistency(layout_gaps, layout_paddings, spacing_result)
 
     # Build summary
     parts = []
@@ -420,19 +508,30 @@ def analyze_harmony(evidence: Dict) -> Dict:
                      f"({spacing_result['adherence']:.0%} adherence)")
         if spacing_result['uses_ratio']:
             parts.append(f"Spacing ratio: {spacing_result['ratio']}")
+    if layout_result['gap_adherence'] is not None:
+        parts.append(f"Layout gaps: {layout_result['gap_adherence']:.0%} on-grid "
+                     f"({layout_result['gaps_on_grid']}/{layout_result['total_gaps']})")
+    if layout_result['padding_adherence'] is not None:
+        parts.append(f"Padding: {layout_result['padding_adherence']:.0%} on-grid")
     if color_result['has_tonal_system']:
         parts.append(f"Color: {color_result['tonal_groups']} tonal families detected")
 
     summary = '; '.join(parts) if parts else 'No mathematical scale detected'
 
+    # Combine spacing + layout boosts (cap at 15)
+    combined_spacing_boost = min(15, spacing_result['confidence_boost'] +
+                                     layout_result['confidence_boost'])
+
     return {
         'typography': type_result,
         'spacing': spacing_result,
+        'layout': layout_result,
         'color': color_result,
         'confidence_adjustments': {
             'typography': type_result['confidence_boost'],
-            'spacing_scale': spacing_result['confidence_boost'],
+            'spacing_scale': combined_spacing_boost,
             'colors': color_result['confidence_boost'],
+            'spatial_composition': layout_result['confidence_boost'],
         },
         'summary': summary,
     }
@@ -464,6 +563,7 @@ def apply_confidence_boosts(evidence: Dict, harmony: Dict) -> None:
     evidence['design_harmony'] = {
         'type_scale': harmony['typography'],
         'spacing_grid': harmony['spacing'],
+        'layout_consistency': harmony['layout'],
         'color_system': harmony['color'],
         'summary': harmony['summary'],
     }

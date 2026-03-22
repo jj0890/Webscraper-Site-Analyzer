@@ -151,6 +151,13 @@ class SpatialCompositionAnalyzer:
                         alignItems: styles.alignItems,
                         gridTemplateColumns: styles.gridTemplateColumns,
                         gridTemplateRows: styles.gridTemplateRows,
+                        gap: styles.gap,
+                        rowGap: styles.rowGap,
+                        columnGap: styles.columnGap,
+                        paddingTop: parseFloat(styles.paddingTop) || 0,
+                        paddingRight: parseFloat(styles.paddingRight) || 0,
+                        paddingBottom: parseFloat(styles.paddingBottom) || 0,
+                        paddingLeft: parseFloat(styles.paddingLeft) || 0,
                         textAlign: styles.textAlign,
                         backgroundColor: styles.backgroundColor,
                         backgroundImage: styles.backgroundImage,
@@ -760,6 +767,37 @@ class SpatialCompositionAnalyzer:
         flex_containers = [c for c in containers if c['styles']['display'] == 'flex']
         grid_containers = [c for c in containers if c['styles']['display'] == 'grid']
 
+        # Extract all gap and padding values for harmony analysis
+        all_gaps = []
+        all_paddings = []
+        for c in containers:
+            s = c.get('styles', {})
+            gap_str = s.get('gap', '')
+            if gap_str and gap_str != 'normal' and gap_str != '0px':
+                try:
+                    # gap can be "16px" or "16px 24px" (row col)
+                    for part in str(gap_str).split():
+                        val = float(part.replace('px', ''))
+                        if val > 0:
+                            all_gaps.append(val)
+                except (ValueError, AttributeError):
+                    pass
+            # Collect row/column gaps too
+            for gk in ('rowGap', 'columnGap'):
+                gv = s.get(gk, '')
+                if gv and gv != 'normal' and gv != '0px':
+                    try:
+                        val = float(str(gv).replace('px', ''))
+                        if val > 0:
+                            all_gaps.append(val)
+                    except (ValueError, AttributeError):
+                        pass
+            # Collect padding values
+            for pk in ('paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft'):
+                pv = s.get(pk, 0)
+                if isinstance(pv, (int, float)) and pv > 0:
+                    all_paddings.append(pv)
+
         return {
             'flex_containers': {
                 'count': len(flex_containers),
@@ -767,9 +805,10 @@ class SpatialCompositionAnalyzer:
                     {
                         'tag': c['tag'],
                         'direction': c['styles']['flexDirection'],
-                        'children': len(c['children'])
+                        'children': len(c['children']),
+                        'gap': c['styles'].get('gap', 'none'),
                     }
-                    for c in flex_containers[:3]
+                    for c in flex_containers[:5]
                 ]
             },
             'grid_containers': {
@@ -778,12 +817,15 @@ class SpatialCompositionAnalyzer:
                     {
                         'tag': c['tag'],
                         'columns': c['styles']['gridTemplateColumns'],
-                        'children': len(c['children'])
+                        'children': len(c['children']),
+                        'gap': c['styles'].get('gap', 'none'),
                     }
-                    for c in grid_containers[:3]
+                    for c in grid_containers[:5]
                 ]
             },
-            'total_layout_containers': len(containers)
+            'total_layout_containers': len(containers),
+            'all_gaps': sorted(set(all_gaps)),
+            'all_paddings': sorted(set(all_paddings)),
         }
 
     def _detect_layout_grid(self, elements: List[Dict]) -> Dict:
