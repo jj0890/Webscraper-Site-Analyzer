@@ -57,6 +57,7 @@ except ImportError:
 FOCUS_EXTRACTORS = {
     'layout': {
         'layout', 'dom_depth', 'site_architecture', 'interactive_elements', 'accessibility',
+        'accessibility_tree',
         'visual_hierarchy', 'spatial_composition', 'component_map', 'content_extraction',
         'responsive_breakpoints', 'z_index_stack', 'visual_patterns',
         'meta_info', 'llm_helper', 'architecture_diagrams',
@@ -65,17 +66,17 @@ FOCUS_EXTRACTORS = {
         'typography', 'colors', 'css_tricks', 'animations',
         'spacing_scale', 'responsive_breakpoints', 'shadow_system',
         'z_index_stack', 'border_radius_scale',
-        'motion_tokens',
+        'motion_tokens', 'accessibility_tree',
         'meta_info', 'llm_helper',
     },
     'interaction': {
         'animations', 'interactive_elements', 'interaction_states', 'css_tricks', 'api_patterns',
-        'motion_tokens', 'cdp_animations', 'contrast_a11y',
+        'motion_tokens', 'cdp_animations', 'contrast_a11y', 'accessibility_tree',
         'meta_info', 'llm_helper',
     },
     'architecture': {
         'site_architecture', 'api_patterns', 'performance', 'security', 'seo', 'third_party',
-        'content_extraction', 'component_map', 'architecture_diagrams',
+        'content_extraction', 'component_map', 'architecture_diagrams', 'accessibility_tree',
         'meta_info', 'llm_helper',
     },
     'full': None,
@@ -1984,17 +1985,27 @@ class DeepEvidenceEngine:
 
     def _summarize_typography(self, evidence: Dict) -> str:
         """Generate plain English summary for typography"""
-        sizes = len(evidence.get('font_sizes', []))
-        families = evidence.get('font_families', [])
+        typo = evidence.get('typography', {})
+        if not isinstance(typo, dict):
+            return "Typography analysis incomplete."
+
+        families = typo.get('font_families', typo.get('details', {}).get('all_fonts', []))
+        sizes = typo.get('font_sizes', typo.get('details', {}).get('all_sizes', []))
 
         if not families:
             return "Typography analysis incomplete."
 
-        primary_family = families[0].get('name', 'Unknown') if families else 'Unknown'
+        # font_families can be list of strings or list of dicts
+        if isinstance(families[0], dict):
+            primary_family = families[0].get('name', 'Unknown')
+        else:
+            # Raw CSS font-family string — extract first font name
+            primary_family = str(families[0]).split(',')[0].strip().replace('"', '').replace("'", '')
 
-        if sizes <= 3:
+        size_count = len(sizes)
+        if size_count <= 3:
             size_desc = "limited text sizes (may feel monotonous)"
-        elif sizes <= 6:
+        elif size_count <= 6:
             size_desc = "a balanced range of text sizes"
         else:
             size_desc = "many text sizes (may feel inconsistent)"
@@ -2635,11 +2646,45 @@ class DeepEvidenceEngine:
         # OLD: Keep for backwards compatibility
         type_scale = self._calculate_type_scale(typo_data)
 
+        # Fix key name: JS returns 'all_fonts', not 'font_families'
+        all_fonts = typo_data.get('all_fonts', [])
+        all_sizes = typo_data.get('all_sizes', [])
+        all_weights = typo_data.get('all_weights', [])
+
+        # Build enriched type_scale dict (was bare float)
+        type_scale_dict = None
+        if type_scale is not None:
+            heading_sizes = []
+            for h in typo_data.get('headings', []):
+                try:
+                    heading_sizes.append(float(h['fontSize'].replace('px', '')))
+                except (ValueError, KeyError, TypeError):
+                    pass
+            size_floats = []
+            for s in all_sizes:
+                try:
+                    size_floats.append(float(str(s).replace('px', '')))
+                except (ValueError, TypeError):
+                    pass
+            type_scale_dict = {
+                'ratio': type_scale,
+                'sizes_px': sorted(set(size_floats)),
+                'heading_sizes_px': sorted(set(heading_sizes), reverse=True),
+            }
+
+        # Confidence: based on actual data found
+        font_bonus = min(30, len(all_fonts) * 10)
+        size_bonus = min(15, len(all_sizes) * 2)
+        scale_bonus = 15 if type_scale else 0
+
         result = {
             'pattern': self._determine_typo_pattern(typo_data),
-            'confidence': min(95, 50 + len(typo_data.get('font_families', [])) * 10 + (15 if type_scale else 0)),
+            'confidence': min(95, 40 + font_bonus + size_bonus + scale_bonus),
             'details': typo_data,
-            'type_scale': type_scale,
+            'type_scale': type_scale_dict if type_scale_dict else type_scale,
+            'font_families': all_fonts,
+            'font_sizes': all_sizes,
+            'font_weights': all_weights,
             'code_snippets': self._generate_typo_snippets(typo_data)
         }
 
@@ -4216,8 +4261,14 @@ class DeepEvidenceEngine:
             return 60
 
     def _determine_typo_pattern(self, data):
-        primary_font = data['body']['fontFamily'].split(',')[0].strip().replace('"', '')
-        return f"{primary_font}"
+        body = data.get('body', {})
+        font_family = body.get('fontFamily') or ''
+        if not font_family:
+            # Fallback: try first font from all_fonts
+            all_fonts = data.get('all_fonts', [])
+            font_family = all_fonts[0] if all_fonts else 'Unknown'
+        primary_font = font_family.split(',')[0].strip().replace('"', '').replace("'", '')
+        return primary_font or 'Unknown'
 
     def _calculate_type_scale(self, data):
         if not data['headings'] or len(data['headings']) < 2:
@@ -4368,7 +4419,11 @@ class DeepEvidenceEngine:
         return None
 
     def _generate_typo_snippets(self, data):
-        return f"body {{\n  font-family: {data['body']['fontFamily']};\n  font-size: {data['body']['fontSize']};\n  line-height: {data['body']['lineHeight']};\n}}"
+        body = data.get('body', {})
+        font_family = body.get('fontFamily', 'system-ui') or 'system-ui'
+        font_size = body.get('fontSize', '16px') or '16px'
+        line_height = body.get('lineHeight', '1.5') or '1.5'
+        return f"body {{\n  font-family: {font_family};\n  font-size: {font_size};\n  line-height: {line_height};\n}}"
 
     def _generate_color_snippets(self, palette):
         return ":root {\n  " + "\n  ".join([f"--color-{i}: {c};" for i, c in enumerate(palette['primary'][:3])]) + "\n}"

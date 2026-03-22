@@ -4581,7 +4581,7 @@
                     let detailHTML = '';
                     // Typography: show font families
                     if (metric.key === 'typography' && data.details) {
-                        const families = data.details.font_families || [];
+                        const families = data.font_families || data.details.all_fonts || data.details.font_families || [];
                         if (families.length > 0) {
                             detailHTML = `<div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 4px;">${families.slice(0, 4).map(f => `<span style="font-size: 0.7rem; padding: 2px 6px; background: rgba(255,255,255,0.06); border-radius: 3px; color: #ccc;">${f}</span>`).join('')}</div>`;
                         }

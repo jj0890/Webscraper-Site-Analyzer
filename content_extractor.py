@@ -32,7 +32,9 @@ class PageType(Enum):
     AUDIO_STREAM = "audioStream"
     SHOW_ARCHIVE = "showArchive"
     PODCAST_LISTING = "podcastListing"
-    CONTENT_GRID = "contentGrid"       # Generic repeating content (magazine, gallery, portfolio)
+    RADIO_STATION = "radioStation"      # Live streaming radio (NTS, LYL, Rinse)
+    MUSIC_BLOG = "musicBlog"            # Editorial music/culture site (PAP, Pitchfork)
+    CONTENT_GRID = "contentGrid"        # Generic repeating content (magazine, gallery, portfolio)
     GALLERY = "gallery"                 # Image-dominant grid
     LANDING_PAGE = "landingPage"
     UNKNOWN = "unknown"
@@ -131,6 +133,50 @@ class IntelligentContentExtractor:
             // Determine type based on counts
             const signals = [];
 
+            // ── Music / Radio detection (must run BEFORE generic article check) ──
+            // Radio station indicators: live stream, schedule, player controls
+            const radioIndicators = document.querySelectorAll(
+                'audio, [data-player], [data-stream], .player, .live-player, ' +
+                '.stream, .broadcast, .livestream, .radio, [data-radio], ' +
+                '#player, .player-bar, .now-playing, .on-air, .live-indicator, ' +
+                '[class*="player"], [class*="stream"], [class*="broadcast"], [class*="live"]'
+            );
+            const scheduleIndicators = document.querySelectorAll(
+                '.schedule, [data-schedule], .timetable, .programming, ' +
+                '.airtime, .show-grid, [class*="schedule"], [class*="timetable"]'
+            );
+            // Music blog indicators: editorial about music
+            const musicIndicators = document.querySelectorAll(
+                '.album, .release, .tracklist, .review, [class*="album"], ' +
+                '[class*="track"], [class*="artist"], [class*="genre"], [class*="release"], ' +
+                '[class*="music"], [class*="listen"], [class*="mix"]'
+            );
+
+            const isRadioStation = radioIndicators.length >= 2 && (
+                scheduleIndicators.length > 0 || radioIndicators.length >= 5
+            );
+            const isMusicSite = musicIndicators.length >= 3;
+
+            if (isRadioStation) {
+                signals.push({
+                    type: 'radioStation',
+                    count: radioIndicators.length,
+                    confidence: 0.9,
+                    reasoning: `Live radio/streaming platform: ${radioIndicators.length} player/stream elements` +
+                        (scheduleIndicators.length > 0 ? `, ${scheduleIndicators.length} schedule elements` : '')
+                });
+            }
+
+            if (isMusicSite && articles.length > 3 && !isRadioStation) {
+                // Music blog: has articles AND music-specific content
+                signals.push({
+                    type: 'musicBlog',
+                    count: articles.length,
+                    confidence: 0.88,
+                    reasoning: `Music/culture editorial: ${articles.length} articles with ${musicIndicators.length} music elements`
+                });
+            }
+
             if (products.length > 5) {
                 signals.push({
                     type: 'productListing',
@@ -147,7 +193,8 @@ class IntelligentContentExtractor:
                 });
             }
 
-            if (articles.length > 3) {
+            // Only fire blogListing if no music/radio signal already dominates
+            if (articles.length > 3 && !isRadioStation && !isMusicSite) {
                 signals.push({
                     type: 'blogListing',
                     count: articles.length,
@@ -387,6 +434,41 @@ class IntelligentContentExtractor:
                     addToCartButtons: document.querySelectorAll('[class*="add-to-cart"], button[data-cart]').length,
                     filters: document.querySelectorAll('.filter, [role="checkbox"]').length,
                     categories: document.querySelectorAll('.category, [data-category]').length
+                };
+            }""")
+
+        elif page_type == PageType.RADIO_STATION:
+            return await self.page.evaluate("""() => {
+                const players = document.querySelectorAll('audio, [data-player], [data-stream], .player, [class*="player"]');
+                const shows = document.querySelectorAll('article, .show, [class*="show"], [class*="broadcast"], [class*="program"]');
+                const schedule = document.querySelectorAll('.schedule, [class*="schedule"], .timetable, [class*="timetable"]');
+                const liveIndicators = document.querySelectorAll('.live, .on-air, [class*="live"], .now-playing');
+                const channels = document.querySelectorAll('[class*="channel"], [class*="station"]');
+                return {
+                    players: players.length,
+                    shows: shows.length,
+                    schedule_elements: schedule.length,
+                    live_indicators: liveIndicators.length,
+                    channels: channels.length,
+                    has_live_stream: players.length > 0 && liveIndicators.length > 0,
+                    total_links: document.querySelectorAll('a').length,
+                    images: document.querySelectorAll('img').length,
+                };
+            }""")
+
+        elif page_type == PageType.MUSIC_BLOG:
+            return await self.page.evaluate("""() => {
+                const articles = Array.from(document.querySelectorAll('article, .post'));
+                const sampled = articles.slice(0, 20);
+                return {
+                    articles: articles.length,
+                    with_images: sampled.filter(a => a.querySelector('img, picture')).length,
+                    with_headings: sampled.filter(a => a.querySelector('h1, h2, h3, h4, [class*="title"]')).length,
+                    with_links: sampled.filter(a => a.querySelector('a')).length,
+                    artists: document.querySelectorAll('[class*="artist"], [class*="dj"], [class*="host"], [class*="author"]').length,
+                    genres: document.querySelectorAll('[class*="genre"], [class*="tag"], [class*="category"]').length,
+                    music_elements: document.querySelectorAll('[class*="album"], [class*="track"], [class*="release"], [class*="listen"], [class*="mix"]').length,
+                    audio_players: document.querySelectorAll('audio, [class*="player"]').length,
                 };
             }""")
 
@@ -852,6 +934,31 @@ class IntelligentContentExtractor:
                     '✅ Consistent show card structure',
                     '✅ Audio playback elements detected',
                     '⚠️ Some metadata may load dynamically'
+                ]
+            },
+            PageType.RADIO_STATION: {
+                'primary_selector': 'audio, [data-player], [class*="player"], [class*="stream"]',
+                'fallback_selector': '[class*="broadcast"], [class*="live"], [class*="show"]',
+                'confidence': 'high',
+                'reasoning': 'Live radio/streaming platform with player controls, schedule, and show grid',
+                'fields_extracted': ['players', 'shows', 'schedule', 'channels', 'live_status'],
+                'validation': [
+                    '✅ Audio player/stream elements detected',
+                    '✅ Schedule or programming grid found',
+                    '⚠️ Live stream content is dynamic (initial state only)'
+                ],
+                'scaling_note': 'Radio platforms are stateful — live content requires WebSocket/polling. Shows and schedule are crawlable.'
+            },
+            PageType.MUSIC_BLOG: {
+                'primary_selector': 'article, .post',
+                'fallback_selector': '[class*="artist"], [class*="release"]',
+                'confidence': 'high',
+                'reasoning': 'Music/culture editorial with articles and music-specific elements (artists, genres, releases)',
+                'fields_extracted': ['title', 'artist', 'genre', 'images', 'audio'],
+                'validation': [
+                    '✅ Uses semantic <article> tags',
+                    '✅ Music-specific metadata (artists, genres, releases)',
+                    '⚠️ Some content may be embeds (Spotify, SoundCloud)'
                 ]
             },
             PageType.PODCAST_LISTING: {
