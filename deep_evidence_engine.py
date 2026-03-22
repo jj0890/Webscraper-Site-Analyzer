@@ -1373,6 +1373,15 @@ class DeepEvidenceEngine:
         if _should_extract('architecture_diagrams'):
             evidence['architecture_diagrams'] = self._generate_architecture_diagrams(url, evidence)
 
+        # Design Harmony — detect mathematical scales, boost confidence
+        try:
+            from design_harmony import analyze_harmony, apply_confidence_boosts
+            harmony = analyze_harmony(evidence)
+            apply_confidence_boosts(evidence, harmony)
+            print(f"   🎵 Design harmony: {harmony.get('summary', 'none')}")
+        except Exception as e:
+            print(f"   ⚠️  Design harmony analysis failed: {e}")
+
         # LLM Helper - Suggest next steps for deeper analysis
         evidence['llm_helper'] = self._generate_llm_suggestions(
             url,
