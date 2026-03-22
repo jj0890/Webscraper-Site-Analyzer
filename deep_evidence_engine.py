@@ -2171,6 +2171,29 @@ class DeepEvidenceEngine:
                 'headers': dict(resp.headers)
             }))
 
+            # CDP-level WebSocket detection (page.on('request') misses WS upgrades)
+            self.websocket_connections = []
+            try:
+                cdp = await page.context.new_cdp_session(page)
+                await cdp.send('Network.enable')
+
+                def _on_ws_created(params):
+                    self.websocket_connections.append({
+                        'url': params.get('url', ''),
+                        'initiator': params.get('initiator', {}).get('url', ''),
+                    })
+                    # Also add to network_requests so API pattern detection sees it
+                    self.network_requests.append({
+                        'url': params.get('url', ''),
+                        'method': 'WS',
+                        'resource_type': 'websocket',
+                        'headers': {},
+                    })
+
+                cdp.on('Network.webSocketCreated', _on_ws_created)
+            except Exception as e:
+                print(f"      ⚠️  CDP WebSocket listener failed: {str(e)[:80]}")
+
             # Load page with increased timeout and better wait strategy
             print(f"\n🌐 Loading {self.url}...")
             access_strategy = 'playwright_full'
@@ -2191,6 +2214,11 @@ class DeepEvidenceEngine:
                 try:
                     # Fallback to domcontentloaded (faster, works for heavy sites)
                     response = await page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
+
+                    # Wait for SPA hydration + JS-triggered API calls
+                    import asyncio as _aio
+                    await _aio.sleep(4)
+                    print(f"      ✅ Waited 4s for SPA hydration after domcontentloaded")
 
                     # Check for bot protection
                     if response and response.status in [403, 401]:
@@ -3388,7 +3416,8 @@ class DeepEvidenceEngine:
         """Analyze API request patterns with relationship mapping"""
         print("   📡 Analyzing API patterns...")
 
-        api_requests = [r for r in self.network_requests if r['resource_type'] in ['xhr', 'fetch']]
+        api_requests = [r for r in self.network_requests
+                        if r.get('resource_type') in ['xhr', 'fetch', 'websocket']]
 
         patterns = {
             'rest_apis': [],
@@ -3397,9 +3426,21 @@ class DeepEvidenceEngine:
             'total_api_calls': len(api_requests)
         }
 
+        # Also add any CDP-captured WebSocket connections
+        ws_urls = set()
+        for ws in getattr(self, 'websocket_connections', []):
+            ws_url = ws.get('url', '')
+            if ws_url:
+                ws_urls.add(ws_url)
+                patterns['websockets'].append(ws_url)
+
         for req in api_requests:
-            url = req['url']
-            if 'graphql' in url.lower():
+            url = req.get('url', '')
+            if url in ws_urls:
+                continue  # Already counted from CDP
+            if req.get('resource_type') == 'websocket':
+                patterns['websockets'].append(url)
+            elif 'graphql' in url.lower():
                 patterns['graphql'].append(url)
             elif 'ws://' in url or 'wss://' in url:
                 patterns['websockets'].append(url)
@@ -3877,35 +3918,148 @@ class DeepEvidenceEngine:
         }
 
     def _analyze_third_party(self):
-        """Detect third-party services"""
+        """Detect third-party services from network requests"""
         print("   🔌 Detecting third-party integrations...")
 
-        third_party = {
-            'analytics': [],
-            'fonts': [],
-            'cdns': [],
-            'advertising': []
+        # Comprehensive vendor detection patterns
+        VENDORS = {
+            'analytics': {
+                'google-analytics': 'Google Analytics',
+                'gtag': 'Google Tag Manager',
+                'googletagmanager': 'Google Tag Manager',
+                'segment.': 'Segment',
+                'segment.io': 'Segment',
+                'mixpanel': 'Mixpanel',
+                'amplitude': 'Amplitude',
+                'plausible.io': 'Plausible',
+                'fathom': 'Fathom',
+                'matomo': 'Matomo',
+                'hotjar': 'Hotjar',
+                'fullstory': 'FullStory',
+                'heap-analytics': 'Heap',
+                'heapanalytics': 'Heap',
+                'posthog': 'PostHog',
+                'rudderstack': 'RudderStack',
+                'clarity.ms': 'Microsoft Clarity',
+                'mouseflow': 'Mouseflow',
+                'logrocket': 'LogRocket',
+                'newrelic': 'New Relic',
+                'datadog': 'Datadog',
+                'sentry.io': 'Sentry',
+                'bugsnag': 'Bugsnag',
+            },
+            'fonts': {
+                'fonts.googleapis': 'Google Fonts',
+                'fonts.gstatic': 'Google Fonts CDN',
+                'typekit': 'Adobe Fonts (Typekit)',
+                'use.typekit': 'Adobe Fonts',
+                'cloud.typography': 'Hoefler (Cloud.typography)',
+                'fonts.shopify': 'Shopify Fonts',
+                'fast.fonts.net': 'Monotype',
+            },
+            'cdns': {
+                'cloudflare': 'Cloudflare',
+                'fastly': 'Fastly',
+                'cloudfront': 'CloudFront (AWS)',
+                'jsdelivr': 'jsDelivr',
+                'unpkg': 'unpkg',
+                'cdnjs': 'cdnjs',
+                'akamai': 'Akamai',
+                'bunnycdn': 'Bunny CDN',
+                'bunny.net': 'Bunny CDN',
+                'keycdn': 'KeyCDN',
+                'stackpath': 'StackPath',
+                'imgix': 'imgix',
+                'vercel': 'Vercel Edge',
+            },
+            'advertising': {
+                'doubleclick': 'Google Ads',
+                'googlesyndication': 'Google AdSense',
+                'googleadservices': 'Google Ads',
+                'facebook.com/tr': 'Meta Pixel',
+                'connect.facebook': 'Meta SDK',
+                'ads-twitter': 'Twitter Ads',
+                'analytics.twitter': 'Twitter Analytics',
+                'snap.licdn': 'LinkedIn Insight',
+                'tiktok': 'TikTok Pixel',
+                'criteo': 'Criteo',
+                'outbrain': 'Outbrain',
+                'taboola': 'Taboola',
+            },
+            'cms': {
+                'contentful': 'Contentful',
+                'prismic': 'Prismic',
+                'sanity.io': 'Sanity',
+                'strapi': 'Strapi',
+                'wordpress': 'WordPress',
+                'wp-json': 'WordPress REST API',
+                'shopify': 'Shopify',
+                'squarespace': 'Squarespace',
+                'webflow': 'Webflow',
+                'ghost': 'Ghost CMS',
+                'datocms': 'DatoCMS',
+                'storyblok': 'Storyblok',
+            },
+            'media': {
+                'youtube': 'YouTube',
+                'vimeo': 'Vimeo',
+                'soundcloud': 'SoundCloud',
+                'spotify': 'Spotify',
+                'bandcamp': 'Bandcamp',
+                'mixcloud': 'Mixcloud',
+                'mux.com': 'Mux Video',
+                'cloudinary': 'Cloudinary',
+                'uploadcare': 'Uploadcare',
+            },
+            'auth': {
+                'auth0': 'Auth0',
+                'clerk': 'Clerk',
+                'supabase': 'Supabase Auth',
+                'firebase': 'Firebase',
+                'accounts.google': 'Google OAuth',
+            },
+            'payments': {
+                'stripe.com': 'Stripe',
+                'js.stripe': 'Stripe.js',
+                'paypal': 'PayPal',
+                'square': 'Square',
+            },
         }
 
-        for req in self.network_requests:
-            url = req['url']
+        third_party = {}
+        seen_vendors = set()  # dedupe
 
-            # Analytics
-            if any(x in url for x in ['google-analytics', 'gtag', 'segment.', 'mixpanel']):
-                third_party['analytics'].append(url)
+        for category, patterns in VENDORS.items():
+            matches = []
+            for req in self.network_requests:
+                url = req.get('url', '')
+                for pattern, vendor_name in patterns.items():
+                    if pattern in url and vendor_name not in seen_vendors:
+                        seen_vendors.add(vendor_name)
+                        matches.append({
+                            'vendor': vendor_name,
+                            'url': url[:200],
+                        })
+            third_party[category] = matches
 
-            # Fonts
-            if any(x in url for x in ['fonts.googleapis', 'typekit', 'fonts.gstatic']):
-                third_party['fonts'].append(url)
+        total_detected = sum(len(v) for v in third_party.values())
+        categories_found = [k for k, v in third_party.items() if v]
 
-            # CDNs
-            if any(x in url for x in ['cloudflare', 'fastly', 'cloudfront', 'jsdelivr', 'unpkg']):
-                third_party['cdns'].append(url)
+        # Confidence: 0 if nothing found, scales with detection count
+        if total_detected == 0:
+            confidence = 0
+            pattern = 'No third-party services detected in network traffic'
+        else:
+            confidence = min(90, 30 + total_detected * 8)
+            vendor_names = [m['vendor'] for matches in third_party.values() for m in matches]
+            pattern = f"{total_detected} services: {', '.join(vendor_names[:5])}"
 
         return {
-            'pattern': f"{len(third_party['analytics'])} analytics services detected",
-            'confidence': min(90, 40 + sum(len(v) for v in third_party.values()) * 10),
-            'details': third_party
+            'pattern': pattern,
+            'confidence': confidence,
+            'details': third_party,
+            'categories_found': categories_found,
+            'total_detected': total_detected,
         }
 
     async def _extract_interaction_states(self, page):
@@ -4942,7 +5096,33 @@ class DeepEvidenceEngine:
             }
         """
         links_data = await page.evaluate('''(baseUrl) => {
-            const links = Array.from(document.querySelectorAll('a[href]'));
+            // Find both <a href> AND SPA navigation elements (buttons, divs with click handlers)
+            const anchorLinks = Array.from(document.querySelectorAll('a[href]'));
+
+            // SPA: find elements with onclick or data-href that look like navigation
+            const spaNavEls = Array.from(document.querySelectorAll(
+                'button[onclick*="/"], [role="link"], [data-href], [data-url], ' +
+                '[data-page], [data-route], a[data-spa], [class*="nav-link"], ' +
+                '[class*="menu-item"] a, [class*="navitem"]'
+            ));
+
+            // Merge: extract URLs from SPA elements
+            const links = [...anchorLinks];
+            spaNavEls.forEach(el => {
+                // Skip if it's already an anchor
+                if (el.tagName === 'A' && el.href) return;
+                // Try to extract URL from data attributes or onclick
+                const href = el.getAttribute('data-href') || el.getAttribute('data-url') ||
+                             el.getAttribute('data-route');
+                if (href) {
+                    // Create a fake anchor-like object
+                    try {
+                        const url = new URL(href, baseUrl);
+                        links.push({ href: url.href, innerText: el.innerText || '', _synthetic: true });
+                    } catch(e) {}
+                }
+            });
+
             const base = new URL(baseUrl);
 
             const categorized = {
