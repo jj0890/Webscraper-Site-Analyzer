@@ -42,13 +42,66 @@ class TypographyExtractor(BaseExtractor):
             const allSizes = new Set();
             const allWeights = new Set();
 
-            // Sample a reasonable number of elements (not all, for performance)
-            const elements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, button, li');
-            for (const el of elements) {
+            // Track fonts per role bucket for classification
+            const headingFontCounts = {};   // fonts seen on h1–h3
+            const bodyFontCounts   = {};   // fonts seen on p, article, .body-like
+            const uiFontCounts     = {};   // fonts seen on nav, button, label
+
+            const normFont = ff => ff.split(',')[0].trim().replace(/['"]/g, '');
+
+            // Heading bucket
+            for (const el of document.querySelectorAll('h1, h2, h3, [class*="headline"], [class*="title"], [class*="display"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                headingFontCounts[key] = (headingFontCounts[key] || 0) + 1;
+            }
+            // Body bucket
+            for (const el of document.querySelectorAll('p, article, [class*="body"], [class*="content"], [class*="description"], [class*="summary"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                bodyFontCounts[key] = (bodyFontCounts[key] || 0) + 1;
+            }
+            // UI bucket
+            for (const el of document.querySelectorAll('nav, button, label, [class*="nav"], [class*="menu"], [class*="caption"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                uiFontCounts[key] = (uiFontCounts[key] || 0) + 1;
+            }
+
+            // Sizes and weights from broader set
+            for (const el of document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, button, li')) {
                 const styles = window.getComputedStyle(el);
-                if (styles.fontFamily) allFonts.add(styles.fontFamily);
-                if (styles.fontSize) allSizes.add(styles.fontSize);
+                if (styles.fontSize)  allSizes.add(styles.fontSize);
                 if (styles.fontWeight) allWeights.add(styles.fontWeight);
+            }
+
+            // Classify: a font is "heading" if heading_count > body_count * 2
+            //           "body" if body_count > heading_count * 2
+            //           "ui" if mostly in ui bucket
+            const allBucketFonts = new Set([
+                ...Object.keys(headingFontCounts),
+                ...Object.keys(bodyFontCounts),
+                ...Object.keys(uiFontCounts)
+            ]);
+            const classifiedHeading = [], classifiedBody = [], classifiedUI = [];
+            for (const font of allBucketFonts) {
+                const h = headingFontCounts[font] || 0;
+                const b = bodyFontCounts[font] || 0;
+                const u = uiFontCounts[font] || 0;
+                const total = h + b + u;
+                if (total === 0) continue;
+                const hRatio = h / total, bRatio = b / total, uRatio = u / total;
+                if (hRatio >= 0.5 && h >= b)       classifiedHeading.push(font);
+                else if (bRatio >= 0.5 && b >= h)   classifiedBody.push(font);
+                else if (uRatio >= 0.5)              classifiedUI.push(font);
+                else if (h >= b)                     classifiedHeading.push(font);
+                else                                 classifiedBody.push(font);
             }
 
             return {
@@ -66,7 +119,10 @@ class TypographyExtractor(BaseExtractor):
                 },
                 all_fonts: Array.from(allFonts),
                 all_sizes: Array.from(allSizes),
-                all_weights: Array.from(allWeights)
+                all_weights: Array.from(allWeights),
+                heading_fonts: classifiedHeading,
+                body_fonts: classifiedBody,
+                ui_fonts: classifiedUI,
             };
         }''')
 
@@ -92,6 +148,11 @@ class TypographyExtractor(BaseExtractor):
         # Backwards-compatible type scale
         type_scale = self._calculate_type_scale(typo_data)
 
+        # Promote role-classified fonts into top-level details keys
+        typo_data['heading_fonts'] = typo_data.get('heading_fonts') or []
+        typo_data['body_fonts']    = typo_data.get('body_fonts') or []
+        typo_data['ui_fonts']      = typo_data.get('ui_fonts') or []
+
         # Calculate typography confidence from actual evidence
         confidence = 40  # Base: extraction ran
         if typo_data.get('all_fonts'):
@@ -100,14 +161,19 @@ class TypographyExtractor(BaseExtractor):
             confidence += 15
         if typo_data.get('body', {}).get('lineHeight') and typo_data['body']['lineHeight'] != 'normal':
             confidence += 10
+        if typo_data.get('heading_fonts'):   # Bonus for successful role classification
+            confidence += 10
         if typography_intelligence and typography_intelligence.get('type_scale', {}).get('ratio'):
-            confidence += 15
+            confidence += 5
         confidence = min(confidence, 95)
 
         result = {
             'pattern': self._determine_typo_pattern(typo_data),
             'confidence': confidence,
             'details': typo_data,
+            'heading_fonts': typo_data['heading_fonts'],
+            'body_fonts':    typo_data['body_fonts'],
+            'ui_fonts':      typo_data['ui_fonts'],
             'type_scale': type_scale,
             'code_snippets': self._generate_typo_snippets(typo_data)
         }

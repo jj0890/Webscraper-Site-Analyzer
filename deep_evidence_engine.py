@@ -1418,6 +1418,25 @@ class DeepEvidenceEngine:
                     'confidence': 0, 'pattern': 'Auto-rip failed'
                 }
 
+        # Brand Personality — cross-dependency extractor (needs colors, typography, motion)
+        if _should_extract('brand_personality'):
+            print("\n🎭 Inferring brand personality...")
+            try:
+                from extractors.brand_personality import BrandPersonalityExtractor
+                _bp_ctx = ExtractionContext(
+                    page=page, url=url, html_content=html_content,
+                    network_requests=self.network_requests,
+                    network_responses=self.network_responses,
+                    evidence=evidence
+                )
+                evidence['brand_personality'] = await safe_extract(
+                    'Brand Personality', BrandPersonalityExtractor().extract, _bp_ctx
+                )
+                bp = evidence.get('brand_personality') or {}
+                print(f"   tone={bp.get('tone')} / energy={bp.get('energy')} / {len(bp.get('signals', []))} signals")
+            except Exception as e:
+                print(f"   ⚠️ Brand personality failed: {str(e)[:80]}")
+
         # Box Model Export — enrich spatial zones with computed styles
         if _should_extract('box_model_export') and evidence.get('spatial_composition'):
             print("\n📦 Exporting box model for key zones...")
@@ -3407,18 +3426,65 @@ class DeepEvidenceEngine:
             const paragraph = document.querySelector('p');
             const pStyles = paragraph ? window.getComputedStyle(paragraph) : body;
 
-            // NEW: Collect ALL unique fonts, sizes, and weights across the page
+            // Collect ALL unique fonts, sizes, and weights across the page
             const allFonts = new Set();
             const allSizes = new Set();
             const allWeights = new Set();
 
-            // Sample a reasonable number of elements (not all, for performance)
-            const elements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, button, li');
-            for (const el of elements) {
+            // Track fonts per role bucket for classification
+            const headingFontCounts = {};
+            const bodyFontCounts   = {};
+            const uiFontCounts     = {};
+            const normFont = ff => ff.split(',')[0].trim().replace(/['"]/g, '');
+
+            for (const el of document.querySelectorAll('h1, h2, h3, [class*="headline"], [class*="title"], [class*="display"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                headingFontCounts[key] = (headingFontCounts[key] || 0) + 1;
+            }
+            for (const el of document.querySelectorAll('p, article, [class*="body"], [class*="content"], [class*="description"], [class*="summary"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                bodyFontCounts[key] = (bodyFontCounts[key] || 0) + 1;
+            }
+            for (const el of document.querySelectorAll('nav, button, label, [class*="nav"], [class*="menu"], [class*="caption"]')) {
+                const ff = window.getComputedStyle(el).fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                uiFontCounts[key] = (uiFontCounts[key] || 0) + 1;
+            }
+
+            // Sizes and weights from broader set
+            for (const el of document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, button, li')) {
                 const styles = window.getComputedStyle(el);
-                if (styles.fontFamily) allFonts.add(styles.fontFamily);
-                if (styles.fontSize) allSizes.add(styles.fontSize);
+                if (styles.fontSize)   allSizes.add(styles.fontSize);
                 if (styles.fontWeight) allWeights.add(styles.fontWeight);
+            }
+
+            // Classify roles
+            const allBucketFonts = new Set([
+                ...Object.keys(headingFontCounts),
+                ...Object.keys(bodyFontCounts),
+                ...Object.keys(uiFontCounts)
+            ]);
+            const classifiedHeading = [], classifiedBody = [], classifiedUI = [];
+            for (const font of allBucketFonts) {
+                const h = headingFontCounts[font] || 0;
+                const b = bodyFontCounts[font] || 0;
+                const u = uiFontCounts[font] || 0;
+                const total = h + b + u;
+                if (total === 0) continue;
+                const hR = h / total, bR = b / total, uR = u / total;
+                if      (hR >= 0.5 && h >= b) classifiedHeading.push(font);
+                else if (bR >= 0.5 && b >= h) classifiedBody.push(font);
+                else if (uR >= 0.5)           classifiedUI.push(font);
+                else if (h >= b)              classifiedHeading.push(font);
+                else                          classifiedBody.push(font);
             }
 
             return {
@@ -3434,10 +3500,12 @@ class DeepEvidenceEngine:
                     lineHeight: pStyles.lineHeight,
                     color: pStyles.color
                 },
-                // NEW: Comprehensive data for intelligent analysis
                 all_fonts: Array.from(allFonts),
                 all_sizes: Array.from(allSizes),
-                all_weights: Array.from(allWeights)
+                all_weights: Array.from(allWeights),
+                heading_fonts: classifiedHeading,
+                body_fonts: classifiedBody,
+                ui_fonts: classifiedUI,
             };
         }''')
 
@@ -3464,13 +3532,16 @@ class DeepEvidenceEngine:
         all_sizes = typo_data.get('all_sizes', [])
         all_weights = typo_data.get('all_weights', [])
 
-        # Expose canonical aliases inside details too, so downstream consumers
-        # that look under typography.details.font_sizes / font_weights / fonts
-        # don't get empty arrays when the JS-side names differ.
+        # Expose canonical aliases inside details so all downstream consumers work
         typo_data['fonts'] = all_fonts
         typo_data['font_families'] = all_fonts
         typo_data['font_sizes'] = all_sizes
         typo_data['font_weights'] = all_weights
+
+        # Promote role-classified font lists from JS result
+        heading_fonts = typo_data.get('heading_fonts') or []
+        body_fonts    = typo_data.get('body_fonts') or []
+        ui_fonts      = typo_data.get('ui_fonts') or []
 
         # Build enriched type_scale dict (was bare float)
         type_scale_dict = None
@@ -3498,15 +3569,19 @@ class DeepEvidenceEngine:
         size_bonus = min(15, len(all_sizes) * 2)
         scale_bonus = 15 if type_scale else 0
 
+        heading_bonus = 10 if heading_fonts else 0
         result = {
             'pattern': self._determine_typo_pattern(typo_data),
-            'confidence': min(95, 40 + font_bonus + size_bonus + scale_bonus),
+            'confidence': min(95, 40 + font_bonus + size_bonus + scale_bonus + heading_bonus),
             'details': typo_data,
             'type_scale': type_scale_dict if type_scale_dict else type_scale,
             'font_families': all_fonts,
             'fonts': all_fonts,  # Canonical alias — LLM consumers expect this key
             'font_sizes': all_sizes,
             'font_weights': all_weights,
+            'heading_fonts': heading_fonts,
+            'body_fonts':    body_fonts,
+            'ui_fonts':      ui_fonts,
             'code_snippets': self._generate_typo_snippets(typo_data)
         }
 
@@ -3529,7 +3604,9 @@ class DeepEvidenceEngine:
                 const styles = window.getComputedStyle(el);
 
                 // Count color usage
-                [styles.color, styles.backgroundColor, styles.borderColor].forEach(color => {
+                // Note: borderColor is a shorthand that may return "r g b r g b r g b r g b"
+                // (all four sides concatenated). Use borderTopColor for a single canonical value.
+                [styles.color, styles.backgroundColor, styles.borderTopColor].forEach(color => {
                     if (color && color !== 'rgba(0, 0, 0, 0)') {
                         colorCounts[color] = (colorCounts[color] || 0) + 1;
                     }

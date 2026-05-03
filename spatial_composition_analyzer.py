@@ -412,14 +412,21 @@ class SpatialCompositionAnalyzer:
         zones = []
 
         # Header zone (top of page)
+        def _zone(type_name: str, label: str, el: Dict, all_elements: List[Dict]) -> Dict:
+            """Build a zone dict with both old keys (type/elements_inside) and
+            new aliases (name/element_count) so all consumers work."""
+            count = len([e for e in all_elements if self._is_inside(e['rect'], el['rect'])])
+            return {
+                'type': type_name,
+                'name': label,           # alias: human-readable
+                'bbox': el['rect'],
+                'elements_inside': count,
+                'element_count': count,  # alias: matches dashboard + API consumers
+            }
+
         headers = [el for el in elements if el['semantic']['landmarkType'] == 'header']
         if headers:
-            header = headers[0]
-            zones.append({
-                'type': 'header',
-                'bbox': header['rect'],
-                'elements_inside': len([e for e in elements if self._is_inside(e['rect'], header['rect'])])
-            })
+            zones.append(_zone('header', 'Header', headers[0], elements))
 
         # Hero zone (large element in top 50%)
         heroes = [
@@ -429,22 +436,12 @@ class SpatialCompositionAnalyzer:
                el['rect']['width'] > 600
         ]
         if heroes:
-            hero = heroes[0]
-            zones.append({
-                'type': 'hero',
-                'bbox': hero['rect'],
-                'elements_inside': len([e for e in elements if self._is_inside(e['rect'], hero['rect'])])
-            })
+            zones.append(_zone('hero', 'Hero', heroes[0], elements))
 
         # Footer zone (bottom of page)
         footers = [el for el in elements if el['semantic']['landmarkType'] == 'footer']
         if footers:
-            footer = footers[0]
-            zones.append({
-                'type': 'footer',
-                'bbox': footer['rect'],
-                'elements_inside': len([e for e in elements if self._is_inside(e['rect'], footer['rect'])])
-            })
+            zones.append(_zone('footer', 'Footer', footers[0], elements))
 
         return zones
 

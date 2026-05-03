@@ -30,6 +30,9 @@ TONE_PROFILES = {
     'Premium / Editorial': {
         'description': 'Serif fonts, restrained palette, generous whitespace, subtle shadows',
     },
+    'Dark / Avant-Garde': {
+        'description': 'Dark backgrounds, high-contrast type, editorial/display fonts, subculture aesthetic',
+    },
     'Modern / Polished': {
         'description': 'Sans-serif, accent colors, smooth transitions, card-based layouts',
     },
@@ -115,16 +118,34 @@ class BrandPersonalityExtractor(BaseExtractor):
         # ── Font signals ──
         typo_details = typography.get('details', {})
         body_font = typo_details.get('body', {}).get('fontFamily', '').lower()
+        # Pull from role-classified lists first, then fall back to all_fonts
+        heading_fonts = [f.lower() for f in (
+            typography.get('heading_fonts') or typo_details.get('heading_fonts', [])
+        )]
+        body_fonts_list = [f.lower() for f in (
+            typography.get('body_fonts') or typo_details.get('body_fonts', [])
+        )]
         all_fonts = [f.lower() for f in typo_details.get('all_fonts', [])]
-        all_fonts_str = ' '.join(all_fonts)
+        all_fonts_str = ' '.join(all_fonts + heading_fonts + body_fonts_list)
 
         has_serif = any(f for f in all_fonts if 'serif' in f and 'sans' not in f)
         has_monospace = any(f for f in all_fonts if 'mono' in f or 'courier' in f or 'consolas' in f)
         has_system = 'system-ui' in body_font or 'sf pro' in body_font or '-apple-system' in body_font
 
+        # Editorial/display fonts (Druk, Univers, Haas, Neue Haas, GT, Canela, etc.)
+        editorial_fonts = ['druk', 'univers', 'haas', 'neue haas', 'gt walsheim', 'canela',
+                           'portrait', 'tiempos', 'domaine', 'financier', 'publico', 'brunel',
+                           'graphik', 'founders grotesk', 'acumin', 'dharma', 'knockout',
+                           'tungsten', 'gotham', 'vitesse']
+        has_editorial = any(ef in all_fonts_str for ef in editorial_fonts)
+
         if has_serif:
             scores['Premium / Editorial'] += 3
             signals.append('Serif font detected → Premium/Editorial')
+        if has_editorial:
+            scores['Dark / Avant-Garde'] += 2
+            scores['Premium / Editorial'] += 2
+            signals.append(f'Editorial/display typeface detected → Dark/Avant-Garde + Premium/Editorial')
         if has_monospace:
             scores['Minimal / Technical'] += 3
             signals.append('Monospace font detected → Minimal/Technical')
@@ -143,27 +164,42 @@ class BrandPersonalityExtractor(BaseExtractor):
         palette = colors.get('palette', {})
         primary_colors = palette.get('primary', [])
 
-        # Count how vibrant/saturated the palette is
-        # Simple heuristic: check if colors are vivid or muted
-        if color_roles:
-            accent = color_roles.get('accent', '')
-            bg = color_roles.get('background', '')
+        # color_roles values are either plain strings OR [{variable, value}] lists
+        # Normalise to a single color string for comparison
+        def _role_color(role_key: str) -> str:
+            raw = color_roles.get(role_key, '')
+            if isinstance(raw, list) and raw:
+                # [{variable: '--bg', value: 'rgb(0,0,0)'}]
+                first = raw[0]
+                return first.get('value', '') if isinstance(first, dict) else str(first)
+            return str(raw) if raw else ''
 
-            # Dark background = modern/technical
+        if color_roles:
+            bg     = _role_color('background')
+            accent = _role_color('accent')
+
+            # Dark background = avant-garde / technical
             if bg and self._is_dark_color(bg):
-                scores['Minimal / Technical'] += 2
-                scores['Modern / Polished'] += 1
-                signals.append('Dark background → Technical/Modern')
+                scores['Dark / Avant-Garde'] += 3
+                scores['Minimal / Technical'] += 1
+                signals.append(f'Dark background ({bg}) → Dark/Avant-Garde')
 
             # Bright accent colors
             if accent and self._is_vivid_color(accent):
                 scores['Modern / Polished'] += 2
-                signals.append(f'Vivid accent color ({accent}) → Modern/Polished')
+                signals.append(f'Vivid accent ({accent}) → Modern/Polished')
 
             # Blue/gray accent = professional
             if accent and self._is_blue_gray(accent):
                 scores['Clean / Professional'] += 2
                 signals.append('Blue/gray accent → Clean/Professional')
+
+        # Compute palette darkness from primary colors directly when no bg role
+        if not color_roles.get('background') and primary_colors:
+            dark_primary = sum(1 for c in primary_colors[:5] if self._is_dark_color(c))
+            if dark_primary >= 2:
+                scores['Dark / Avant-Garde'] += 2
+                signals.append(f'{dark_primary} dark primary colors → Dark/Avant-Garde')
 
         # Few total colors = minimal
         total_colors = colors.get('total_unique_colors', len(primary_colors))
@@ -316,63 +352,70 @@ class BrandPersonalityExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _hex_to_rgb(hex_color: str) -> Optional[Tuple[int, int, int]]:
-        """Convert hex color to RGB tuple."""
-        hex_color = hex_color.strip('#')
-        if len(hex_color) == 3:
-            hex_color = ''.join(c * 2 for c in hex_color)
-        if len(hex_color) != 6:
+    def _parse_color(color_str: str) -> Optional[Tuple[int, int, int]]:
+        """Parse any CSS color string to an (R, G, B) tuple.
+
+        Handles: #rgb, #rrggbb, rgb(...), rgba(...).
+        Returns None for unparseable values.
+        """
+        if not color_str or not isinstance(color_str, str):
             return None
-        try:
-            return (
-                int(hex_color[0:2], 16),
-                int(hex_color[2:4], 16),
-                int(hex_color[4:6], 16)
-            )
-        except ValueError:
-            return None
+        s = color_str.strip()
+
+        # rgb() / rgba() — handles both comma and space syntax
+        m = re.search(r'rgba?\(\s*(\d+)\s*[,\s]\s*(\d+)\s*[,\s]\s*(\d+)', s)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+        # Hex
+        s = s.lstrip('#')
+        if len(s) == 3:
+            s = ''.join(c * 2 for c in s)
+        if len(s) == 6:
+            try:
+                return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+            except ValueError:
+                pass
+        return None
+
+    # Keep old name as alias for any callers that might use it directly
+    @classmethod
+    def _hex_to_rgb(cls, color: str) -> Optional[Tuple[int, int, int]]:
+        return cls._parse_color(color)
 
     @classmethod
-    def _is_dark_color(cls, hex_color: str) -> bool:
-        """Check if a color is dark (luminance < 0.3)."""
-        rgb = cls._hex_to_rgb(hex_color)
+    def _is_dark_color(cls, color: str) -> bool:
+        """True when perceived luminance < 0.3 (dark backgrounds, blacks, deep navies)."""
+        rgb = cls._parse_color(color)
         if not rgb:
             return False
-        # Relative luminance
         luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
         return luminance < 0.3
 
     @classmethod
-    def _is_vivid_color(cls, hex_color: str) -> bool:
-        """Check if a color is vivid/saturated."""
-        rgb = cls._hex_to_rgb(hex_color)
+    def _is_vivid_color(cls, color: str) -> bool:
+        """True when HSL saturation > 0.5 (bright, saturated accent colors)."""
+        rgb = cls._parse_color(color)
         if not rgb:
             return False
         r, g, b = rgb[0] / 255, rgb[1] / 255, rgb[2] / 255
-        max_c = max(r, g, b)
-        min_c = min(r, g, b)
-        # Saturation in HSL
+        max_c, min_c = max(r, g, b), min(r, g, b)
         if max_c == min_c:
             return False
         l = (max_c + min_c) / 2
-        if l <= 0.5:
-            s = (max_c - min_c) / (max_c + min_c)
-        else:
-            s = (max_c - min_c) / (2.0 - max_c - min_c)
+        s = (max_c - min_c) / (max_c + min_c) if l <= 0.5 else (max_c - min_c) / (2.0 - max_c - min_c)
         return s > 0.5
 
     @classmethod
-    def _is_blue_gray(cls, hex_color: str) -> bool:
-        """Check if a color is in the blue/gray family."""
-        rgb = cls._hex_to_rgb(hex_color)
+    def _is_blue_gray(cls, color: str) -> bool:
+        """True for colors in the blue/gray family (low saturation, or blue-dominant)."""
+        rgb = cls._parse_color(color)
         if not rgb:
             return False
         r, g, b = rgb
-        # Gray: all channels similar
         spread = max(r, g, b) - min(r, g, b)
         if spread < 30:
-            return True  # Gray
-        # Blue-dominant
+            return True  # Near-gray
         if b > r and b > g and b > (r + g) / 2:
-            return True
+            return True  # Blue-dominant
         return False
