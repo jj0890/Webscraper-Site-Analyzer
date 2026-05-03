@@ -21,7 +21,7 @@ Philosophy: "How do the pieces fit together?"
 """
 
 from typing import Dict, List, Tuple, Optional
-from playwright.async_api import Page
+from patchright.async_api import Page
 import json
 
 
@@ -916,7 +916,7 @@ class SpatialCompositionAnalyzer:
 # Integration test
 async def test_spatial_composition():
     """Test spatial composition analysis on a real site"""
-    from playwright.async_api import async_playwright
+    from patchright.async_api import async_playwright
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)

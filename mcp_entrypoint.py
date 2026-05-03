@@ -44,9 +44,18 @@ mcp = FastMCP(
     "Web Intelligence Scanner",
     instructions=(
         "Analyzes websites for design systems, component architecture, and "
-        "layout patterns. Returns structured evidence with confidence scores. "
-        "Use analyze_design_system first, then rip_component for specifics, "
-        "then audit_design_debt to find inconsistencies."
+        "layout patterns. Returns structured evidence with confidence scores.\n\n"
+        "WORKFLOW:\n"
+        "1. Pick the right URL first. Homepages are often feeds or sparse landing "
+        "pages — low design signal. For marketplaces, galleries, and community "
+        "sites, scan a content listing page (/explore, /releases, /products) or "
+        "a detail page rather than the root URL.\n"
+        "2. Call analyze_design_system. Check evidence['entry_point']['recommendation'] "
+        "immediately — if it flags the page as a feed or sparse, re-scan the "
+        "suggested better_entry_points before reading other metrics.\n"
+        "3. Call rip_component for specific component blueprints.\n"
+        "4. Call audit_design_debt to find inconsistencies.\n\n"
+        "Confidence scores below 60% should not be used as ground truth."
     ),
 )
 
@@ -65,15 +74,33 @@ async def analyze_design_system(
 
     Each metric includes a confidence score (0-100) and evidence trail.
 
+    ENTRY POINT GUIDANCE — scan the most design-rich page, not necessarily
+    the homepage. Homepages are often sparse landing pages or live feeds with
+    low design signal. Better choices:
+      - /explore, /browse, /catalog, /products  (content grids)
+      - /releases, /works, /gallery              (item listing pages)
+      - A specific article, product, or profile  (template-level detail)
+    The evidence includes evidence['entry_point']['recommendation'] with a
+    machine-readable advisory if the scanned URL appears to be a feed or
+    sparse landing page — check this first and re-scan a better URL if needed.
+
     Args:
-        url:  Public website URL to analyze (https://...)
-        mode: 'single' for one page, 'smart-nav' to auto-discover and
-              analyze 3 representative pages (homepage + nav sample + deep link)
+        url:  Public website URL to analyze (https://...). For marketplace,
+              gallery, or community sites, prefer a content listing page
+              over the homepage.
+        mode: 'single' for one page (default), 'smart-nav' to auto-discover
+              and analyze 3 representative pages (homepage + nav + deep link),
+              'multi-template' to discover all distinct page template types
+              (e.g. homepage + /releases/:slug + /profiles/:slug + /explore)
+              and extract the cross-page design system — what's consistent
+              across every template IS the design system; what varies is
+              template-specific. Best for comprehensive site understanding.
 
     Returns:
         evidence dict with keys: typography, colors, spacing_scale, layout,
         visual_hierarchy, spatial_composition, motion_tokens, accessibility,
-        interactions, api_patterns, site_architecture, llm_helper, and more.
+        interactions, api_patterns, site_architecture, entry_point, llm_helper,
+        and more. Always read entry_point.recommendation first.
     """
     engine = DeepEvidenceEngine(url, analysis_mode=mode)
     evidence = await engine.extract_all()

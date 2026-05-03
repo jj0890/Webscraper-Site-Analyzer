@@ -11,7 +11,7 @@ For USAA/professional use:
 """
 
 import asyncio
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 from typing import Dict, List
 from colorama import Fore, init
 from dataclasses import dataclass

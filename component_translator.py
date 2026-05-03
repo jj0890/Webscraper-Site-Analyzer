@@ -600,26 +600,59 @@ def generate_figma_markdown(
 
     # --- Build className from translated values ---
     class_parts = []
-    # Layout
-    display = computed.get('display', '')
-    if display == 'flex':
-        class_parts.append('flex')
-        direction = computed.get('flexDirection', '')
-        if direction == 'column':
-            class_parts.append('flex-col')
-        align = computed.get('alignItems', '')
-        if align == 'center':
-            class_parts.append('items-center')
-        justify = computed.get('justifyContent', '')
-        if justify == 'center':
-            class_parts.append('justify-center')
-        elif justify == 'space-between':
-            class_parts.append('justify-between')
-    elif display == 'grid':
-        class_parts.append('grid')
+    layout = blueprint.get('layout', {})  # captured by ripper: type, columns, direction, etc.
 
-    # Add translated properties (skip layout-related ones we handled above)
-    skip_in_class = {'display', 'flexDirection', 'alignItems', 'justifyContent'}
+    # Layout — read blueprint['layout'] for full fidelity (computed styles alone miss
+    # grid-template-columns, flex-wrap, etc.)
+    display = computed.get('display', '')
+    if display == 'flex' or display == 'inline-flex':
+        class_parts.append('flex' if display == 'flex' else 'inline-flex')
+
+        direction = computed.get('flexDirection', layout.get('direction', ''))
+        dir_map = {'column': 'flex-col', 'row-reverse': 'flex-row-reverse',
+                   'column-reverse': 'flex-col-reverse'}
+        if direction in dir_map:
+            class_parts.append(dir_map[direction])
+
+        align = computed.get('alignItems', layout.get('align', ''))
+        align_map = {'center': 'items-center', 'flex-start': 'items-start',
+                     'flex-end': 'items-end', 'stretch': 'items-stretch',
+                     'baseline': 'items-baseline'}
+        if align in align_map:
+            class_parts.append(align_map[align])
+
+        justify = computed.get('justifyContent', layout.get('justify', ''))
+        justify_map = {'center': 'justify-center', 'space-between': 'justify-between',
+                       'space-around': 'justify-around', 'space-evenly': 'justify-evenly',
+                       'flex-end': 'justify-end', 'flex-start': 'justify-start'}
+        if justify in justify_map:
+            class_parts.append(justify_map[justify])
+
+        wrap = computed.get('flexWrap', layout.get('wrap', ''))
+        if wrap == 'wrap':
+            class_parts.append('flex-wrap')
+        elif wrap == 'wrap-reverse':
+            class_parts.append('flex-wrap-reverse')
+        elif wrap == 'nowrap':
+            class_parts.append('flex-nowrap')
+
+    elif display == 'grid' or display == 'inline-grid':
+        class_parts.append('grid' if display == 'grid' else 'inline-grid')
+
+        # Column count — the most important grid property
+        cols_tw = _gridcols_to_tw(layout.get('columns', ''))
+        if cols_tw:
+            class_parts.append(cols_tw)
+
+        # Auto-flow direction
+        auto_flow = (layout.get('autoFlow') or '').strip()
+        flow_map = {'column': 'grid-flow-col', 'dense': 'grid-flow-dense',
+                    'row dense': 'grid-flow-row-dense', 'column dense': 'grid-flow-col-dense'}
+        if auto_flow in flow_map:
+            class_parts.append(flow_map[auto_flow])
+
+    # Add translated properties (skip layout props we already handled above)
+    skip_in_class = {'display', 'flexDirection', 'alignItems', 'justifyContent', 'flexWrap'}
     for prop, tw_class in translated.items():
         if prop not in skip_in_class:
             class_parts.append(tw_class)
@@ -847,6 +880,23 @@ def generate_figma_prompt(blueprint: dict, states: dict, translator: TailwindTra
             lines.append(hover_desc)
         if child_hover_desc:
             lines.append(child_hover_desc.strip())
+
+    # Network activity (data fetching)
+    net = blueprint.get('network_activity', {})
+    api_calls = net.get('api_calls', [])
+    if api_calls:
+        lines.append('')
+        lines.append('This component fetches data from:')
+        for call in api_calls[:5]:
+            method = call.get('method', 'GET')
+            url = call.get('url', '')
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                display = parsed.path + ('?' + parsed.query if parsed.query else '')
+            except Exception:
+                display = url
+            lines.append(f'  {method} {display}')
 
     return '\n'.join(lines)
 
@@ -1144,6 +1194,41 @@ def generate_figma_html(blueprint: dict) -> str:
 # Figma output helpers
 # ---------------------------------------------------------------------------
 
+def _gridcols_to_tw(cols: str) -> str:
+    """Convert a gridTemplateColumns value to a Tailwind grid-cols-* class.
+
+    Handles:
+      repeat(3, 1fr)                     → grid-cols-3
+      repeat(3, minmax(0, 1fr))          → grid-cols-3
+      88px 88px 88px ... (N equal)       → grid-cols-N
+      repeat(auto-fill, minmax(250px,1fr))→ grid-cols-[repeat(auto-fill,minmax(250px,1fr))]
+    """
+    if not cols or cols in ('none', 'normal'):
+        return ''
+    cols = cols.strip()
+
+    # repeat(N, 1fr) or repeat(N, minmax(...))
+    m = re.match(r'repeat\((\d+),\s*(?:1fr|minmax\([^)]+\))\)', cols)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 12:
+            return f'grid-cols-{n}'
+
+    # repeat(auto-fill/auto-fit, ...) → arbitrary value
+    if 'auto-fill' in cols or 'auto-fit' in cols:
+        safe = cols.replace(' ', '_')
+        return f'grid-cols-[{safe}]'
+
+    # N equal values: "88px 88px 88px" or "1fr 1fr 1fr"
+    parts = cols.split()
+    if len(parts) >= 2 and len(set(parts)) == 1:
+        n = len(parts)
+        if 1 <= n <= 12:
+            return f'grid-cols-{n}'
+
+    return ''
+
+
 def _infer_tag(blueprint: dict) -> str:
     """Infer the HTML tag from the blueprint source."""
     source_html = blueprint.get('source', {}).get('sourceHTML', '')
@@ -1173,7 +1258,43 @@ def _infer_role(blueprint: dict) -> str:
 
 
 def _build_children_jsx(blueprint: dict) -> str:
-    """Build nested JSX from the component's actual source HTML."""
+    """Build nested JSX using a two-source hybrid:
+
+    1. Anatomy elements (level 1 + 2): have computed styles → accurate Tailwind classes
+       via TailwindTranslator. Inspired by json-render's flat element registry pattern:
+       each element is a known node with props, not just a raw HTML string.
+
+    2. BeautifulSoup HTML (level 3+): raw HTML class names preserved for depth
+       that anatomy doesn't cover.
+
+    For grids: shows one representative item template + item count hint.
+    For navs: shows left/center/right zone structure.
+    """
+    anatomy = blueprint.get('anatomy', {})
+    zones = anatomy.get('zones', [])
+    layout = blueprint.get('layout', {})
+    is_grid = layout.get('type') == 'grid'
+
+    # Flatten anatomy zones into an ordered element list
+    anatomy_elements = []
+    for zone in zones:
+        for el in zone.get('elements', []):
+            if el:
+                anatomy_elements.append(el)
+
+    if anatomy_elements:
+        try:
+            translator = TailwindTranslator()
+            lines = []
+            _render_anatomy_jsx(anatomy_elements, lines, depth=1,
+                                translator=translator, is_grid=is_grid,
+                                blueprint=blueprint)
+            if lines:
+                return '\n'.join(lines)
+        except Exception:
+            pass  # fall through to HTML-based approach
+
+    # Fallback: BeautifulSoup raw HTML walk
     source_html = blueprint.get('source', {}).get('sourceHTML', '')
     if not source_html:
         return '{children}'
@@ -1184,12 +1305,124 @@ def _build_children_jsx(blueprint: dict) -> str:
         root = soup.find()
         if not root:
             return '{children}'
-        # Build JSX for children of the root (root itself is handled by the caller)
         lines = []
         _render_jsx_children(root, lines, depth=1, max_depth=4, max_siblings=8)
         return '\n'.join(lines) if lines else '{children}'
     except Exception:
         return '{children}'
+
+
+def _anatomy_styles_to_tw(styles: dict, translator: 'TailwindTranslator') -> str:
+    """Translate an anatomy element's computed styles dict to a Tailwind className string."""
+    if not styles:
+        return ''
+
+    tw = translator.translate(styles)
+    parts = []
+
+    # Layout first
+    display = styles.get('display', '')
+    if display == 'flex':
+        parts.append('flex')
+        dir_map = {'column': 'flex-col', 'row-reverse': 'flex-row-reverse',
+                   'column-reverse': 'flex-col-reverse'}
+        fd = styles.get('flexDirection', '')
+        if fd in dir_map:
+            parts.append(dir_map[fd])
+        align_map = {'center': 'items-center', 'flex-start': 'items-start',
+                     'flex-end': 'items-end', 'stretch': 'items-stretch'}
+        if styles.get('alignItems') in align_map:
+            parts.append(align_map[styles['alignItems']])
+        justify_map = {'center': 'justify-center', 'space-between': 'justify-between',
+                       'space-around': 'justify-around', 'flex-end': 'justify-end'}
+        if styles.get('justifyContent') in justify_map:
+            parts.append(justify_map[styles['justifyContent']])
+    elif display == 'grid':
+        parts.append('grid')
+        cols_tw = _gridcols_to_tw(styles.get('gridTemplateColumns', ''))
+        if cols_tw:
+            parts.append(cols_tw)
+
+    # Remaining translated props (skip layout ones already handled)
+    skip = {'display', 'flexDirection', 'alignItems', 'justifyContent', 'flexWrap'}
+    parts += [v for k, v in tw.items() if k not in skip]
+
+    return ' '.join(parts)
+
+
+def _render_anatomy_jsx(elements: list, lines: list, depth: int,
+                        translator: 'TailwindTranslator', is_grid: bool,
+                        blueprint: dict, max_items: int = 8):
+    """Render JSX from anatomy element nodes (each has computed styles).
+
+    Grid mode: renders the first item as a full template, then a count hint.
+    Nav/flex mode: renders all direct children with their Tailwind classes.
+    """
+    indent = '  ' * depth
+    total = len(elements)
+
+    for i, el in enumerate(elements):
+        if i >= max_items:
+            lines.append(f'{indent}{{/* +{total - max_items} more */}}')
+            break
+
+        tag = (el.get('tag') or 'div').lower()
+        if tag in ('script', 'style', 'noscript', 'template', 'link', 'meta', 'svg'):
+            # Collapse SVGs to single line
+            if tag == 'svg':
+                label = el.get('ariaLabel') or 'icon'
+                lines.append(f'{indent}<svg aria-label="{label}" /> {{/* icon */}}')
+            continue
+
+        styles = el.get('styles') or {}
+        tw_classes = _anatomy_styles_to_tw(styles, translator)
+        class_attr = f' className="{tw_classes}"' if tw_classes else ''
+
+        # Supplemental props
+        extra = ''
+        href = el.get('href')
+        if href and tag == 'a':
+            short_href = href if len(href) <= 50 else href[:47] + '...'
+            extra += f' href="{short_href}"'
+        src = el.get('src')
+        if src and tag == 'img':
+            alt = el.get('ariaLabel') or el.get('text') or ''
+            extra += f' alt="{alt[:40]}"'
+            lines.append(f'{indent}<img{class_attr}{extra} />')
+            continue
+        aria = el.get('ariaLabel')
+        if aria:
+            extra += f' aria-label="{aria[:40]}"'
+
+        children = el.get('children') or []
+        text = (el.get('text') or '').strip()[:60]
+
+        if not children and text:
+            lines.append(f'{indent}<{tag}{class_attr}{extra}>{text}</{tag}>')
+        elif children:
+            lines.append(f'{indent}<{tag}{class_attr}{extra}>')
+            if depth < 3:
+                _render_anatomy_jsx(children, lines, depth + 1,
+                                    translator, is_grid=False,
+                                    blueprint=blueprint, max_items=6)
+            else:
+                # Max depth — summarise with source HTML fallback
+                try:
+                    src_html = blueprint.get('source', {}).get('sourceHTML', '')
+                    if src_html and el.get('text'):
+                        lines.append(f'{indent}  {el["text"][:60]}')
+                    else:
+                        lines.append(f'{indent}  {{/* {len(children)} children */}}')
+                except Exception:
+                    lines.append(f'{indent}  {{/* {len(children)} children */}}')
+            lines.append(f'{indent}</{tag}>')
+        else:
+            lines.append(f'{indent}<{tag}{class_attr}{extra} />')
+
+        # Grid pattern: show one template item, then a repeat count
+        if is_grid and total >= 3 and i == 0:
+            lines.append(f'{indent}{{/* × {total - 1} more items */}}')
+            break
 
 
 def _render_jsx_children(el, lines, depth, max_depth, max_siblings):

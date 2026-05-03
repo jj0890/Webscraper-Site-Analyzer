@@ -569,28 +569,22 @@ class AccessibilityTreeExtractor(BaseExtractor):
         - +10: 3+ headings
         - +10: 10+ interactive elements
         """
-        confidence = 50
+        confidence = 30  # Base: tree captured
 
         landmark_count = sum(len(v) for v in landmarks.values())
-        if landmark_count >= 4:
-            confidence += 20
-        elif landmark_count >= 2:
-            confidence += 10
+        confidence += min(25, landmark_count * 5)  # +5 per landmark, max 25
+
+        heading_count = len(headings)
+        confidence += min(20, heading_count * 3)   # +3 per heading, max 20
 
         has_h1 = any(h['level'] == 1 for h in headings)
         if has_h1:
-            confidence += 10
-
-        if len(headings) >= 3:
-            confidence += 10
+            confidence += 5  # Proper document structure bonus
 
         total_interactive = (
             interactive.get('total_buttons', 0) +
             interactive.get('total_links', 0)
         )
-        if total_interactive >= 10:
-            confidence += 10
-        elif total_interactive >= 3:
-            confidence += 5
+        confidence += min(15, total_interactive)    # +1 per interactive, max 15
 
         return min(confidence, 95)

@@ -3,39 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Glossary — Web Intelligence</title>
+    <title>Visual Dictionary — Web Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            /* ── Surface System ── */
             --surface-0: #0f0f11;
             --surface-1: #161618;
             --surface-2: #1c1c20;
             --surface-3: #242429;
             --surface-4: #2c2c33;
-
-            /* ── Border System ── */
             --border-subtle: rgba(255,255,255,0.06);
             --border-default: rgba(255,255,255,0.10);
             --border-strong: rgba(255,255,255,0.16);
             --border-accent: rgba(99,102,241,0.4);
-
-            /* ── Text System ── */
             --text-primary: #f0f0f3;
             --text-secondary: #a0a0ab;
             --text-tertiary: #636370;
             --text-disabled: #454550;
-
-            /* ── Accent Palette ── */
             --accent: #818cf8;
             --accent-hover: #6366f1;
             --accent-muted: rgba(129,140,248,0.12);
             --accent-strong: rgba(129,140,248,0.24);
             --accent-text: #a5b4fc;
-
-            /* ── Semantic Colors ── */
             --success: #34d399;
             --success-muted: rgba(52,211,153,0.12);
             --warning: #fbbf24;
@@ -44,454 +35,472 @@
             --danger-muted: rgba(248,113,113,0.12);
             --info: #38bdf8;
             --info-muted: rgba(56,189,248,0.12);
-
-            /* ── Code/Data Colors ── */
-            --code-green: #6ee7b7;
-            --code-blue: #7dd3fc;
-            --code-purple: #c4b5fd;
-
-            /* ── Typography ── */
+            --pink: #f472b6;
+            --pink-muted: rgba(244,114,182,0.12);
+            --orange: #fb923c;
+            --orange-muted: rgba(251,146,60,0.12);
+            --cyan: #22d3ee;
+            --cyan-muted: rgba(34,211,238,0.12);
             --font-display: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
             --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
             --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
-
-            --text-xs: 0.75rem;
-            --text-sm: 0.8125rem;
-            --text-base: 0.875rem;
-            --text-md: 0.9375rem;
-            --text-lg: 1.0625rem;
-            --text-xl: 1.25rem;
-            --text-2xl: 1.5rem;
-            --text-3xl: 1.875rem;
-            --text-4xl: 2.25rem;
-
-            /* ── Spacing ── */
-            --space-1: 0.25rem;
-            --space-2: 0.5rem;
-            --space-3: 0.75rem;
-            --space-4: 1rem;
-            --space-5: 1.25rem;
-            --space-6: 1.5rem;
-            --space-8: 2rem;
-            --space-10: 2.5rem;
-            --space-12: 3rem;
-
-            /* ── Radius ── */
-            --radius-sm: 6px;
-            --radius-md: 10px;
-            --radius-lg: 14px;
-            --radius-xl: 20px;
-            --radius-full: 9999px;
-
-            /* ── Shadows ── */
+            --text-xs: 0.75rem; --text-sm: 0.8125rem; --text-base: 0.875rem;
+            --text-md: 0.9375rem; --text-lg: 1.0625rem; --text-xl: 1.25rem;
+            --text-2xl: 1.5rem; --text-3xl: 1.875rem;
+            --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem;
+            --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem;
+            --space-8: 2rem; --space-10: 2.5rem;
+            --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-full: 100px;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.35);
-            --shadow-glow: 0 0 20px rgba(129,140,248,0.15);
-
-            /* ── Motion ── */
-            --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-            --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-            --duration-fast: 150ms;
-            --duration-normal: 250ms;
-            --duration-slow: 400ms;
-            --duration-entrance: 600ms;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
         body {
             font-family: var(--font-body);
-            background: var(--surface-1);
-            color: var(--text-secondary);
+            background: var(--surface-0);
+            color: var(--text-primary);
             line-height: 1.6;
-            font-size: var(--text-base);
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
+            min-height: 100vh;
         }
 
-        /* ── Shared Nav ── */
+        /* ── Nav ── */
         .wi-nav {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+            display: flex; align-items: center; justify-content: space-between;
             padding: var(--space-4) var(--space-8);
-            border-bottom: 1px solid var(--border-subtle);
-            position: sticky;
-            top: 0;
-            background: rgba(15,15,17,0.85);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            z-index: 100;
+            background: var(--surface-1); border-bottom: 1px solid var(--border-subtle);
+            position: sticky; top: 0; z-index: 100; backdrop-filter: blur(12px);
         }
-
-        .wi-logo {
-            font-family: var(--font-display);
-            font-size: var(--text-sm);
-            font-weight: 700;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--text-primary);
-            text-decoration: none;
-        }
-
+        .wi-logo { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 700; color: var(--text-primary); text-decoration: none; }
         .wi-logo span { color: var(--accent); }
+        .wi-nav-links { list-style: none; display: flex; gap: var(--space-6); }
+        .wi-nav-link { color: var(--text-secondary); text-decoration: none; font-size: var(--text-sm); font-weight: 500; transition: color 0.15s; }
+        .wi-nav-link:hover, .wi-nav-link.active { color: var(--text-primary); }
 
-        .wi-nav-links {
-            list-style: none;
-            display: flex;
-            gap: var(--space-6);
+        /* ── Layout: sidebar + grid ── */
+        .page-layout {
+            display: flex; max-width: 1400px; margin: 0 auto;
+            padding: var(--space-8) var(--space-8) var(--space-8) 0;
+            gap: var(--space-8);
         }
 
-        .wi-nav-link {
-            font-family: var(--font-body);
-            font-size: var(--text-sm);
-            color: var(--text-secondary);
-            text-decoration: none;
-            transition: color var(--duration-fast) var(--ease-out);
-            font-weight: 500;
+        /* ── Sidebar ── */
+        .sidebar {
+            width: 220px; flex-shrink: 0; position: sticky; top: 80px;
+            max-height: calc(100vh - 100px); overflow-y: auto;
+            padding: 0 var(--space-4); scrollbar-width: thin;
         }
-
-        .wi-nav-link:hover { color: var(--text-primary); }
-        .wi-nav-link.active { color: var(--accent-text); }
-
-        /* ── Layout ── */
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: var(--space-8) var(--space-6);
+        .sidebar-label {
+            font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
+            text-transform: uppercase; color: var(--text-tertiary);
+            padding: 0 var(--space-3) var(--space-3);
         }
-
-        /* ── Header ── */
-        .header {
-            margin-bottom: var(--space-10);
-            padding-bottom: var(--space-8);
-            border-bottom: 1px solid var(--border-subtle);
+        .sidebar-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+            cursor: pointer; font-size: var(--text-sm); color: var(--text-secondary);
+            transition: all 0.15s; margin-bottom: 2px; user-select: none;
         }
+        .sidebar-item:hover { background: var(--surface-3); color: var(--text-primary); }
+        .sidebar-item.active { background: var(--accent-muted); color: var(--accent-text); }
+        .sidebar-icon { margin-right: var(--space-2); font-size: 1em; }
+        .sidebar-count {
+            font-size: var(--text-xs); font-family: var(--font-mono);
+            color: var(--text-disabled); background: var(--surface-3);
+            padding: 1px 6px; border-radius: var(--radius-full);
+        }
+        .sidebar-item.active .sidebar-count { background: var(--accent-strong); color: var(--accent-text); }
 
+        /* ── Main content ── */
+        .main-content { flex: 1; min-width: 0; }
+
+        .page-header { margin-bottom: var(--space-8); }
         .page-eyebrow {
-            font-size: var(--text-xs);
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--accent);
-            margin-bottom: var(--space-3);
+            font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--accent); font-weight: 600; margin-bottom: var(--space-2);
         }
-
-        h1 {
-            font-family: var(--font-display);
-            font-size: var(--text-4xl);
-            font-weight: 700;
-            color: var(--text-primary);
-            letter-spacing: -0.025em;
-            margin-bottom: var(--space-2);
-        }
-
-        .subtitle {
-            color: var(--text-tertiary);
-            font-size: var(--text-md);
-            max-width: 600px;
-        }
-
-        .section-nav {
-            display: flex;
-            gap: var(--space-3);
-            margin-top: var(--space-5);
-        }
-
-        .section-nav-link {
-            font-size: var(--text-sm);
-            font-weight: 500;
-            color: var(--accent-text);
-            text-decoration: none;
-            padding: var(--space-2) var(--space-4);
-            border-radius: var(--radius-md);
-            border: 1px solid var(--border-accent);
-            background: var(--accent-muted);
-            transition: all var(--duration-fast) var(--ease-out);
-        }
-
-        .section-nav-link:hover {
-            background: var(--accent-strong);
-            border-color: var(--accent);
-        }
+        .page-title { font-size: var(--text-3xl); font-weight: 700; margin-bottom: var(--space-2); }
+        .page-subtitle { color: var(--text-tertiary); font-size: var(--text-base); }
 
         /* ── Search ── */
         .search-box {
-            width: 100%;
-            padding: var(--space-4);
-            background: var(--surface-0);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-            color: var(--text-primary);
-            font-family: var(--font-body);
-            font-size: var(--text-md);
-            margin-bottom: var(--space-8);
-            transition: border-color var(--duration-fast) var(--ease-out),
-                        box-shadow var(--duration-fast) var(--ease-out);
+            width: 100%; padding: var(--space-3) var(--space-5);
+            background: var(--surface-2); border: 1px solid var(--border-default);
+            border-radius: var(--radius-md); color: var(--text-primary);
+            font-family: var(--font-body); font-size: var(--text-base);
+            margin-bottom: var(--space-6); transition: border-color 0.15s;
         }
-
+        .search-box:focus { outline: none; border-color: var(--accent); }
         .search-box::placeholder { color: var(--text-disabled); }
-
-        .search-box:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-muted);
-        }
-
-        /* ── Sections ── */
-        .section {
-            margin-bottom: var(--space-12);
-        }
-
-        .section-title {
-            font-family: var(--font-display);
-            font-size: var(--text-2xl);
-            font-weight: 700;
-            color: var(--text-primary);
-            letter-spacing: -0.015em;
-            margin-bottom: var(--space-6);
-            padding-bottom: var(--space-3);
-            border-bottom: 1px solid var(--border-subtle);
-            display: flex;
-            align-items: center;
-            gap: var(--space-3);
-        }
-
-        .section-title::before {
-            content: '';
-            width: 4px;
-            height: 1.2em;
-            background: var(--accent);
-            border-radius: var(--radius-full);
-            flex-shrink: 0;
-        }
-
-        /* ── Metric Cards ── */
-        .metric-explanation {
-            background: var(--surface-2);
-            border: 1px solid var(--border-subtle);
-            border-left: 3px solid var(--accent);
-            border-radius: var(--radius-lg);
-            padding: var(--space-6);
-            margin-bottom: var(--space-5);
-            transition: border-color var(--duration-normal) var(--ease-out),
-                        box-shadow var(--duration-normal) var(--ease-out);
-        }
-
-        .metric-explanation:hover {
-            border-color: var(--border-default);
-            border-left-color: var(--accent);
-            box-shadow: var(--shadow-md);
-        }
-
-        .metric-title {
-            font-family: var(--font-display);
-            font-size: var(--text-lg);
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: var(--space-4);
-            letter-spacing: -0.01em;
-        }
-
-        .metric-section {
-            margin-bottom: var(--space-4);
-        }
-
-        .metric-section:last-child { margin-bottom: 0; }
-
-        .metric-label {
-            font-size: var(--text-xs);
-            color: var(--text-tertiary);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 500;
-            margin-bottom: var(--space-1);
-        }
-
-        .metric-text {
-            color: var(--text-secondary);
-            font-size: var(--text-base);
-            line-height: 1.65;
-        }
-
-        .metric-text strong {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-
-        .metric-text em {
-            color: var(--text-tertiary);
-            font-style: italic;
-        }
-
-        .metric-warning {
-            color: var(--warning);
-            padding: var(--space-3) var(--space-4);
-            background: var(--warning-muted);
-            border-radius: var(--radius-sm);
-            border-left: 3px solid var(--warning);
-            margin-top: var(--space-2);
-        }
-
-        /* ── Score Tables ── */
-        .score-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            margin-top: var(--space-3);
-            background: var(--surface-0);
-            border-radius: var(--radius-md);
-            overflow: hidden;
-            border: 1px solid var(--border-subtle);
-        }
-
-        .score-table th {
-            padding: var(--space-3) var(--space-4);
-            text-align: left;
-            font-size: var(--text-xs);
-            color: var(--text-tertiary);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            background: var(--surface-0);
-            border-bottom: 1px solid var(--border-subtle);
-        }
-
-        .score-table td {
-            padding: var(--space-3) var(--space-4);
-            border-top: 1px solid var(--border-subtle);
-            font-size: var(--text-base);
-            color: var(--text-secondary);
-        }
-
-        .score-table tbody tr:first-child td { border-top: none; }
-
-        .score-table tbody tr:hover {
-            background: var(--surface-3);
-        }
-
-        .score-range {
-            color: var(--accent-text);
-            font-weight: 600;
+        .search-meta {
+            font-size: var(--text-xs); color: var(--text-disabled);
+            margin-top: calc(-1 * var(--space-4)); margin-bottom: var(--space-6);
             font-family: var(--font-mono);
-            font-size: var(--text-sm);
         }
 
-        /* ── Glossary Grid ── */
-        .glossary-grid {
+        /* ── Card grid ── */
+        .card-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: var(--space-4);
         }
 
-        .glossary-item {
-            background: var(--surface-2);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-lg);
-            padding: var(--space-5);
-            transition: border-color var(--duration-normal) var(--ease-out),
-                        box-shadow var(--duration-normal) var(--ease-out),
-                        transform var(--duration-normal) var(--ease-out);
+        /* ── Card ── */
+        .dict-card {
+            background: var(--surface-2); border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg); overflow: hidden;
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+            cursor: pointer;
         }
-
-        .glossary-item:hover {
+        .dict-card:hover {
             border-color: var(--border-default);
             box-shadow: var(--shadow-md);
             transform: translateY(-2px);
         }
 
-        .term {
-            font-family: var(--font-display);
-            font-size: var(--text-lg);
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: var(--space-2);
+        /* ── Preview area ── */
+        .card-preview {
+            height: 180px; background: var(--surface-3);
+            display: flex; align-items: center; justify-content: center;
+            padding: var(--space-4); overflow: hidden;
+            border-bottom: 1px solid var(--border-subtle);
+            position: relative;
         }
 
-        .definition {
+        /* ── Card body ── */
+        .card-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+        .card-term {
+            font-size: var(--text-lg); font-weight: 600; color: var(--text-primary);
+            margin-bottom: var(--space-1);
+        }
+        .card-def {
+            font-size: var(--text-sm); color: var(--text-secondary);
+            line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .card-tags { margin-top: var(--space-3); display: flex; gap: var(--space-2); flex-wrap: wrap; }
+        .card-tag {
+            font-size: var(--text-xs); padding: 2px 8px; border-radius: var(--radius-full);
+            font-weight: 600;
+        }
+        .tag-layout { background: var(--accent-muted); color: var(--accent-text); }
+        .tag-typography { background: var(--pink-muted); color: var(--pink); }
+        .tag-color { background: var(--orange-muted); color: var(--orange); }
+        .tag-spacing { background: var(--cyan-muted); color: var(--cyan); }
+        .tag-hierarchy { background: var(--warning-muted); color: var(--warning); }
+        .tag-interaction { background: var(--success-muted); color: var(--success); }
+        .tag-accessibility { background: var(--success-muted); color: var(--success); }
+        .tag-architecture { background: var(--info-muted); color: var(--info); }
+        .tag-pattern { background: var(--danger-muted); color: var(--danger); }
+        .tag-motion { background: var(--pink-muted); color: var(--pink); }
+
+        /* ════════════════════════════════════════
+           MINI-UI PREVIEW COMPONENTS
+           Tiny CSS-only diagrams inside card-preview
+           ════════════════════════════════════════ */
+
+        /* Generic mini building blocks */
+        .mini { font-size: 10px; color: var(--text-tertiary); }
+        .mini-box {
+            border-radius: 4px; background: var(--accent-muted);
+            border: 1px solid rgba(129,140,248,0.2);
+        }
+        .mini-box-solid {
+            border-radius: 4px; background: var(--accent);
+        }
+        .mini-label {
+            font-size: 8px; font-family: var(--font-mono); color: var(--text-disabled);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+
+        /* ── Grid Layout preview ── */
+        .preview-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 6px; width: 160px;
+        }
+        .preview-grid .cell {
+            height: 40px; border-radius: 4px;
+            background: var(--accent-muted); border: 1px solid rgba(129,140,248,0.25);
+        }
+        .preview-grid .cell:nth-child(odd) { background: var(--accent-strong); }
+
+        /* ── Masonry preview ── */
+        .preview-masonry {
+            display: flex; gap: 5px; width: 150px;
+        }
+        .preview-masonry .col { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+        .preview-masonry .brick {
+            border-radius: 3px; background: var(--accent-muted);
+            border: 1px solid rgba(129,140,248,0.2);
+        }
+
+        /* ── Flexbox preview ── */
+        .preview-flex {
+            display: flex; gap: 6px; align-items: center;
+        }
+        .preview-flex .item {
+            padding: 6px 14px; border-radius: 4px; font-size: 9px;
+            font-family: var(--font-mono); color: var(--accent-text);
+            background: var(--accent-muted); border: 1px solid rgba(129,140,248,0.25);
+            white-space: nowrap;
+        }
+
+        /* ── Type scale preview ── */
+        .preview-type-scale {
+            display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+        }
+        .preview-type-scale .size {
+            color: var(--text-primary); font-weight: 600; line-height: 1.1;
+            white-space: nowrap;
+        }
+        .preview-type-scale .label {
+            font-size: 8px; font-family: var(--font-mono);
+            color: var(--text-disabled); margin-left: 6px;
+        }
+
+        /* ── Color palette preview ── */
+        .preview-palette {
+            display: flex; gap: 6px; align-items: flex-end;
+        }
+        .preview-palette .swatch {
+            width: 32px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);
+            transition: transform 0.15s;
+        }
+        .preview-palette .swatch:hover { transform: scale(1.1); }
+
+        /* ── Spacing scale preview ── */
+        .preview-spacing {
+            display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+        }
+        .preview-spacing .bar {
+            height: 12px; border-radius: 3px; background: var(--accent);
+            opacity: 0.7; position: relative;
+        }
+        .preview-spacing .bar-label {
+            position: absolute; right: -28px; top: 1px;
+            font-size: 7px; font-family: var(--font-mono); color: var(--text-disabled);
+        }
+
+        /* ── Shadow elevation preview ── */
+        .preview-shadows {
+            display: flex; gap: 16px; align-items: center;
+        }
+        .preview-shadows .shadow-card {
+            width: 48px; height: 48px; border-radius: 8px;
+            background: var(--surface-2); display: flex; align-items: center;
+            justify-content: center; font-size: 8px; font-family: var(--font-mono);
+            color: var(--text-tertiary);
+        }
+
+        /* ── Z-index stack preview ── */
+        .preview-zstack {
+            position: relative; width: 140px; height: 120px;
+        }
+        .preview-zstack .layer {
+            position: absolute; border-radius: 6px; border: 1px solid;
+            display: flex; align-items: flex-end; justify-content: flex-start;
+            padding: 4px 6px; font-size: 7px; font-family: var(--font-mono);
+        }
+
+        /* ── Hero section preview ── */
+        .preview-hero {
+            width: 180px; background: var(--surface-1); border-radius: 6px;
+            overflow: hidden; border: 1px solid var(--border-subtle);
+        }
+        .preview-hero-bar {
+            height: 10px; background: var(--surface-4); display: flex;
+            align-items: center; padding: 0 6px; gap: 8px;
+        }
+        .preview-hero-bar .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-disabled); }
+        .preview-hero-body {
+            padding: 12px 10px; text-align: center;
+        }
+        .preview-hero-h { width: 80%; height: 6px; background: var(--text-primary); border-radius: 2px; margin: 0 auto 6px; }
+        .preview-hero-p { width: 60%; height: 3px; background: var(--text-disabled); border-radius: 2px; margin: 0 auto 8px; }
+        .preview-hero-btn {
+            display: inline-block; padding: 3px 12px; background: var(--accent);
+            border-radius: 3px; font-size: 7px; color: white; font-weight: 600;
+        }
+
+        /* ── Breakpoint preview ── */
+        .preview-breakpoints {
+            display: flex; gap: 8px; align-items: flex-end;
+        }
+        .preview-bp-device {
+            border: 1px solid var(--border-default); border-radius: 4px;
+            background: var(--surface-1); display: flex; flex-direction: column;
+            align-items: center; padding-bottom: 3px;
+        }
+        .preview-bp-screen { background: var(--accent-muted); width: 100%; border-radius: 3px 3px 0 0; }
+        .preview-bp-label { font-size: 6px; font-family: var(--font-mono); color: var(--text-disabled); margin-top: 2px; }
+
+        /* ── Whitespace preview ── */
+        .preview-whitespace {
+            display: flex; gap: 12px; align-items: center;
+        }
+        .preview-ws-box {
+            border: 1px dashed var(--border-default); border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .preview-ws-inner {
+            background: var(--accent-muted); border-radius: 4px;
+            border: 1px solid rgba(129,140,248,0.25);
+        }
+
+        /* ── Hover state preview ── */
+        .preview-states {
+            display: flex; gap: 8px; align-items: center;
+        }
+        .preview-state-btn {
+            padding: 6px 14px; border-radius: 6px; font-size: 9px;
+            font-weight: 600; border: none; cursor: default;
+            font-family: var(--font-body); transition: all 0.2s;
+        }
+
+        /* ── Accessibility tree preview ── */
+        .preview-a11y {
+            display: flex; flex-direction: column; gap: 2px; font-size: 9px;
+            font-family: var(--font-mono); color: var(--text-tertiary);
+        }
+        .preview-a11y .landmark {
+            padding: 2px 8px; border-radius: 3px; border-left: 2px solid;
+        }
+
+        /* ── Motion tokens preview ── */
+        .preview-motion {
+            display: flex; gap: 12px; align-items: center;
+        }
+        .preview-motion .dot {
+            width: 16px; height: 16px; border-radius: 50%;
+            background: var(--accent);
+        }
+        .preview-motion .dot-ease {
+            animation: motionBounce 2s infinite;
+        }
+        .preview-motion .dot-linear {
+            animation: motionBounce 2s infinite linear;
+        }
+        .preview-motion .dot-spring {
+            animation: motionBounce 2s infinite cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        @keyframes motionBounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+        .preview-motion .label {
+            font-size: 7px; font-family: var(--font-mono);
+            color: var(--text-disabled); text-align: center; margin-top: 4px;
+        }
+
+        /* ── Contrast preview ── */
+        .preview-contrast {
+            display: flex; gap: 8px; align-items: center;
+        }
+        .preview-contrast-box {
+            padding: 8px 12px; border-radius: 6px; font-size: 10px;
+            font-weight: 600; text-align: center; width: 64px;
+        }
+
+        /* ── Navigation preview ── */
+        .preview-nav {
+            width: 180px; background: var(--surface-1); border-radius: 6px;
+            overflow: hidden; border: 1px solid var(--border-subtle);
+        }
+        .preview-nav-bar {
+            display: flex; gap: 0; background: var(--surface-4);
+        }
+        .preview-nav-item {
+            padding: 6px 10px; font-size: 8px; color: var(--text-disabled);
+            font-family: var(--font-mono); border-bottom: 2px solid transparent;
+        }
+        .preview-nav-item.active {
+            color: var(--accent-text); border-bottom-color: var(--accent);
+            background: rgba(129,140,248,0.06);
+        }
+
+        /* ── DOM depth preview ── */
+        .preview-dom {
+            display: flex; flex-direction: column; gap: 1px; align-items: flex-start;
+        }
+        .preview-dom .node {
+            display: flex; align-items: center; gap: 4px;
+            font-size: 8px; font-family: var(--font-mono);
+        }
+        .preview-dom .tag { color: var(--danger); }
+        .preview-dom .indent { display: inline-block; }
+
+        /* ════════════════════════════════════════
+           MODAL
+           ════════════════════════════════════════ */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px); z-index: 200;
+            display: none; align-items: center; justify-content: center;
+            padding: var(--space-8);
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: var(--surface-2); border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg); max-width: 640px; width: 100%;
+            max-height: 80vh; overflow-y: auto; padding: 0;
+            box-shadow: var(--shadow-lg);
+        }
+        .modal-preview {
+            height: 220px; background: var(--surface-3);
+            display: flex; align-items: center; justify-content: center;
+            border-bottom: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        }
+        .modal-body { padding: var(--space-6) var(--space-8) var(--space-8); }
+        .modal-term { font-size: var(--text-2xl); font-weight: 700; margin-bottom: var(--space-2); }
+        .modal-def { color: var(--text-secondary); font-size: var(--text-base); line-height: 1.65; margin-bottom: var(--space-6); }
+        .modal-section { margin-bottom: var(--space-5); }
+        .modal-section-label {
+            font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-tertiary); font-weight: 600; margin-bottom: var(--space-2);
+        }
+        .modal-section-text { color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.6; }
+        .modal-close {
+            position: absolute; top: var(--space-4); right: var(--space-4);
+            background: var(--surface-4); border: 1px solid var(--border-default);
+            color: var(--text-secondary); width: 32px; height: 32px;
+            border-radius: var(--radius-full); cursor: pointer; font-size: 16px;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }
+        .modal-close:hover { background: var(--surface-1); color: var(--text-primary); }
+
+        /* Score table inside modal */
+        .score-table {
+            width: 100%; border-collapse: separate; border-spacing: 0;
+            background: var(--surface-1); border-radius: var(--radius-md);
+            overflow: hidden; border: 1px solid var(--border-subtle);
+            font-size: var(--text-sm);
+        }
+        .score-table th {
+            padding: var(--space-2) var(--space-4); text-align: left;
+            font-size: var(--text-xs); color: var(--text-tertiary);
+            font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+            background: var(--surface-1); border-bottom: 1px solid var(--border-subtle);
+        }
+        .score-table td {
+            padding: var(--space-2) var(--space-4);
+            border-top: 1px solid var(--border-subtle);
             color: var(--text-secondary);
-            font-size: var(--text-base);
-            line-height: 1.65;
         }
-
-        /* ── Category Badges — color-coded by type ── */
-        .category-badge {
-            display: inline-block;
-            padding: var(--space-1) var(--space-3);
-            border-radius: var(--radius-full);
-            font-size: var(--text-xs);
-            font-weight: 600;
-            margin-top: var(--space-3);
-            /* Default fallback */
-            background: var(--accent-muted);
-            color: var(--accent-text);
-        }
-
-        .category-badge[data-category="CSS"],
-        .category-badge[data-category="HTML"] {
-            background: var(--info-muted);
-            color: var(--info);
-        }
-
-        .category-badge[data-category="Design System"],
-        .category-badge[data-category="Typography"] {
-            background: var(--accent-muted);
-            color: var(--accent-text);
-        }
-
-        .category-badge[data-category="Accessibility"] {
-            background: var(--success-muted);
-            color: var(--success);
-        }
-
-        .category-badge[data-category="Security"],
-        .category-badge[data-category="Scoring"] {
-            background: var(--warning-muted);
-            color: var(--warning);
-        }
-
-        .category-badge[data-category="API"],
-        .category-badge[data-category="SEO"] {
-            background: rgba(196,181,253,0.12);
-            color: var(--code-purple);
-        }
-
-        .category-badge[data-category="Responsive Design"],
-        .category-badge[data-category="Visual Hierarchy"],
-        .category-badge[data-category="UI Pattern"] {
-            background: rgba(110,231,183,0.12);
-            color: var(--code-green);
-        }
-
-        .category-badge[data-category="Access Strategy"],
-        .category-badge[data-category="Analysis Method"],
-        .category-badge[data-category="Computer Vision"] {
-            background: var(--danger-muted);
-            color: var(--danger);
-        }
+        .score-table tbody tr:first-child td { border-top: none; }
+        .score-range { color: var(--accent-text); font-weight: 600; font-family: var(--font-mono); }
 
         /* ── Responsive ── */
-        @media (max-width: 700px) {
-            .glossary-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .section-nav {
-                flex-wrap: wrap;
-            }
-
-            h1 {
-                font-size: var(--text-3xl);
-            }
-
-            .wi-nav {
-                padding: var(--space-3) var(--space-4);
-            }
-
-            .wi-nav-links {
-                gap: var(--space-4);
-            }
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .page-layout { padding: var(--space-6); }
+            .card-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+        }
+        @media (max-width: 500px) {
+            .card-grid { grid-template-columns: 1fr; }
+            .wi-nav { padding: var(--space-3) var(--space-4); }
         }
     </style>
 </head>
@@ -502,395 +511,807 @@
         <ul class="wi-nav-links">
             <li><a href="/" class="wi-nav-link">Dashboard</a></li>
             <li><a href="/ripper" class="wi-nav-link">Ripper</a></li>
-            <li><a href="/glossary" class="wi-nav-link active">Glossary</a></li>
+            <li><a href="/glossary" class="wi-nav-link active">Dictionary</a></li>
         </ul>
     </nav>
 
-    <div class="container">
-        <div class="header">
-            <div class="page-eyebrow">Reference</div>
-            <h1>Glossary & Metrics</h1>
-            <p class="subtitle">Comprehensive guide to metrics, scores, and terminology used across the scanner</p>
-            <div class="section-nav">
-                <a href="#metrics" class="section-nav-link">Metrics Guide</a>
-                <a href="#terms" class="section-nav-link">Terminology</a>
-            </div>
-        </div>
+    <div class="page-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-label">Categories</div>
+            <div id="sidebarItems"></div>
+        </aside>
 
-        <input type="text" class="search-box" id="searchBox" placeholder="Search glossary...">
-
-        <!-- Metrics Guide Section -->
-        <div class="section" id="metrics">
-            <h2 class="section-title">Metrics Guide</h2>
-
-            <div class="metric-explanation">
-                <div class="metric-title">Spacing Scale</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Whether spacing follows a consistent mathematical pattern (powers of 2, multiples of base unit, etc.)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Consistent spacing creates visual rhythm and makes designs feel cohesive. Sites like Stripe, Airbnb, and Apple use mathematical spacing scales for this reason.</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Base unit explained</div>
-                    <div class="metric-text">The smallest spacing increment. All other values are multiples of this base (4px &rarr; 8px, 16px, 32px).</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Confidence scoring</div>
-                    <table class="score-table">
-                        <thead>
-                            <tr>
-                                <th>Factor</th>
-                                <th>Points</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Base unit found</td>
-                                <td class="score-range">+40pts</td>
-                            </tr>
-                            <tr>
-                                <td>Pattern consistency</td>
-                                <td class="score-range">+30pts</td>
-                            </tr>
-                            <tr>
-                                <td>Unique multiples</td>
-                                <td class="score-range">+20pts</td>
-                            </tr>
-                            <tr>
-                                <td>No outliers</td>
-                                <td class="score-range">+10pts</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Score ranges</div>
-                    <div class="metric-text">
-                        <strong class="score-range">95-100%:</strong> Perfect geometric scale with 30+ instances<br>
-                        <strong class="score-range">80-94%:</strong> Strong pattern with minor outliers<br>
-                        <strong class="score-range">60-79%:</strong> Noticeable pattern but inconsistent<br>
-                        <strong class="score-range">40-59%:</strong> Weak pattern, many outliers
-                    </div>
-                </div>
+        <!-- Main -->
+        <main class="main-content">
+            <div class="page-header">
+                <div class="page-eyebrow">Visual Reference</div>
+                <h1 class="page-title">Design Pattern Dictionary</h1>
+                <p class="page-subtitle">Visual guide to the patterns, metrics, and concepts our scanner extracts from websites</p>
             </div>
 
-            <div class="metric-explanation">
-                <div class="metric-title">Responsive Breakpoints</div>
+            <input type="text" class="search-box" id="searchBox" placeholder="Search patterns... (e.g. grid, typography, hero)">
+            <div class="search-meta" id="searchMeta"></div>
 
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Screen width breakpoints where layout changes for different devices (mobile, tablet, desktop)</div>
-                </div>
+            <div class="card-grid" id="cardGrid"></div>
+        </main>
+    </div>
 
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Ensures the site looks good on mobile, tablet, and desktop. 60%+ of traffic is mobile nowadays.</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Common breakpoints</div>
-                    <div class="metric-text">
-                        <strong>768px:</strong> Tablet<br>
-                        <strong>1024px:</strong> Desktop (small)<br>
-                        <strong>1440px:</strong> Desktop (wide)<br>
-                        <strong>Frameworks:</strong> Bootstrap (576px, 768px, 992px, 1200px), Tailwind (640px, 768px, 1024px, 1280px)
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">Shadow System</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Consistent box-shadow values used for depth and elevation hierarchy</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Creates visual depth and helps users understand element layering (what's in front, what's behind)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Example elevation system</div>
-                    <div class="metric-text">
-                        <strong>Level 1:</strong> 0 1px 3px rgba(0,0,0,0.12) - Cards, tiles<br>
-                        <strong>Level 2:</strong> 0 4px 6px rgba(0,0,0,0.16) - Dropdowns, tooltips<br>
-                        <strong>Level 3:</strong> 0 10px 20px rgba(0,0,0,0.2) - Modals, overlays<br>
-                        <em>Similar to: Material Design elevation, Apple iOS shadows</em>
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">Z-Index Stacking</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">CSS z-index values that control which elements appear on top of others</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Proper stacking prevents visual bugs (modals appearing behind content, dropdowns hidden, etc.)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why values above 500 are hidden</div>
-                    <div class="metric-text metric-warning">
-                        React portals use z-index: 9999, tooltips use 999999. These aren't part of the design system - they're framework noise. We only show meaningful layers (1-500).
-                    </div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Typical stacking hierarchy</div>
-                    <div class="metric-text">
-                        <strong>1-10:</strong> Base content, images<br>
-                        <strong>100:</strong> Dropdowns, popovers<br>
-                        <strong>200:</strong> Sticky headers<br>
-                        <strong>300:</strong> Modals, dialogs<br>
-                        <strong>400:</strong> Notifications, toasts
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">Accessibility Score</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Overall accessibility quality based on WCAG (Web Content Accessibility Guidelines)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Makes the site usable for people with disabilities (screen readers, keyboard navigation, color blindness) and improves SEO</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Score breakdown</div>
-                    <table class="score-table">
-                        <thead>
-                            <tr>
-                                <th>Factor</th>
-                                <th>Points</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Semantic HTML (header, nav, main)</td>
-                                <td class="score-range">+25pts</td>
-                            </tr>
-                            <tr>
-                                <td>ARIA labels present</td>
-                                <td class="score-range">+15pts</td>
-                            </tr>
-                            <tr>
-                                <td>Alt text on images</td>
-                                <td class="score-range">+15pts</td>
-                            </tr>
-                            <tr>
-                                <td>Keyboard navigation working</td>
-                                <td class="score-range">+15pts</td>
-                            </tr>
-                            <tr>
-                                <td>Good color contrast (4.5:1)</td>
-                                <td class="score-range">+15pts</td>
-                            </tr>
-                            <tr>
-                                <td>Skip navigation link</td>
-                                <td class="score-range">+10pts</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Score ranges</div>
-                    <div class="metric-text">
-                        <strong class="score-range">90-100%:</strong> Excellent - WCAG AAA compliant<br>
-                        <strong class="score-range">75-89%:</strong> Good - WCAG AA compliant<br>
-                        <strong class="score-range">60-74%:</strong> Fair - Some issues<br>
-                        <strong class="score-range">40-59%:</strong> Poor - Many issues
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">SEO Score</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Search engine optimization quality (meta tags, structure, performance)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Better SEO means more organic traffic from Google, Bing, etc. Good SEO = more visitors without paid ads.</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Key elements</div>
-                    <div class="metric-text">
-                        <strong>Title tag:</strong> Unique, 50-60 characters<br>
-                        <strong>Meta description:</strong> 155-160 characters<br>
-                        <strong>Open Graph tags:</strong> Social media sharing<br>
-                        <strong>Schema.org markup:</strong> Rich snippets in search<br>
-                        <strong>Mobile responsive:</strong> Required<br>
-                        <strong>Load time:</strong> Under 3 seconds
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">Security Score</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Security best practices (HTTPS, CSP, CORS, security headers)</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Protects users from XSS attacks, CSRF attacks, clickjacking, and other web vulnerabilities</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Key security headers</div>
-                    <div class="metric-text">
-                        <strong>HTTPS:</strong> Encrypted connection (locks in browser)<br>
-                        <strong>CSP:</strong> Content Security Policy (prevents XSS)<br>
-                        <strong>X-Frame-Options:</strong> Prevents clickjacking<br>
-                        <strong>X-Content-Type-Options:</strong> Prevents MIME sniffing<br>
-                        <strong>Strict-Transport-Security:</strong> Forces HTTPS
-                    </div>
-                </div>
-            </div>
-
-            <div class="metric-explanation">
-                <div class="metric-title">CSS Tricks</div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What we're checking</div>
-                    <div class="metric-text">Modern CSS features and techniques used on the site</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Why it matters</div>
-                    <div class="metric-text">Shows technical sophistication and progressive enhancement. Modern CSS = better performance and maintainability.</div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">Categories we detect</div>
-                    <div class="metric-text">
-                        <strong>CSS Variables:</strong> Custom properties (--color-primary, --spacing-base)<br>
-                        <strong>Flexbox:</strong> Modern layout system<br>
-                        <strong>Grid:</strong> Advanced 2D layout (grid-template-columns)<br>
-                        <strong>Custom Properties:</strong> @supports, clamp(), calc()<br>
-                        <strong>Transforms:</strong> scale(), rotate(), translate()<br>
-                        <strong>Animations:</strong> @keyframes, transition<br>
-                        <strong>Filters:</strong> blur(), brightness(), contrast()<br>
-                        <strong>Blend Modes:</strong> mix-blend-mode
-                    </div>
-                </div>
-
-                <div class="metric-section">
-                    <div class="metric-label">What "947 detected" means</div>
-                    <div class="metric-text metric-warning">
-                        This is the total count of modern CSS technique instances across the entire page. Click "View All" to see them categorized (e.g., "234 CSS Variables", "187 Flexbox containers").
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Terminology Section -->
-        <div class="section" id="terms">
-            <h2 class="section-title">Terminology</h2>
-
-            <div class="glossary-grid" id="glossaryGrid">
-                <!-- Glossary items will be inserted by JavaScript -->
-            </div>
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modal" style="position:relative;">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <div class="modal-preview" id="modalPreview"></div>
+            <div class="modal-body" id="modalBody"></div>
         </div>
     </div>
 
-    <script>
-        const GLOSSARY = [
-            { term: "Base Unit", definition: "The smallest spacing increment in a design system. All other spacing values are multiples of this base (e.g., 4px base \u2192 8px, 16px, 32px).", category: "Design System" },
-            { term: "Breakpoint", definition: "A screen width where the layout changes to accommodate different device sizes (mobile at 768px, tablet at 1024px, desktop at 1440px).", category: "Responsive Design" },
-            { term: "Computed Style", definition: "The final CSS values after browser calculation (includes inherited values, resolved CSS variables, etc.). Different from inline styles.", category: "CSS" },
-            { term: "Confidence Score", definition: "A 0-100% score indicating how certain we are about pattern detection. Higher score = more consistent pattern. Based on multiple factors.", category: "Scoring" },
-            { term: "CSS Grid", definition: "Modern CSS layout system for creating two-dimensional layouts (both rows AND columns simultaneously). Best for complex dashboards and galleries.", category: "CSS" },
-            { term: "CSS Variable", definition: "Custom CSS property (--variable-name) that can be reused throughout stylesheets. Example: --primary-color: #818cf8;", category: "CSS" },
-            { term: "Design System", definition: "A collection of reusable components, patterns, and guidelines for consistent design. Examples: Material Design, Ant Design, Carbon.", category: "Design System" },
-            { term: "Elevation", definition: "Visual depth created by box-shadows, making elements appear to float above the page. Used in Material Design for hierarchy.", category: "Design System" },
-            { term: "Flexbox", definition: "CSS layout system for creating one-dimensional layouts (either a row OR a column). Best for navigation bars, card rows, etc.", category: "CSS" },
-            { term: "Modular Scale", definition: "Typography scale based on a mathematical ratio (1.25x, 1.5x, 2x). Creates consistent visual rhythm in headings and text.", category: "Typography" },
-            { term: "Semantic HTML", definition: "HTML tags that convey meaning (header, nav, article, footer) vs generic tags (div, span). Better for accessibility and SEO.", category: "HTML" },
-            { term: "System Font Stack", definition: "List of fonts that uses the operating system's default font for performance. Example: -apple-system, BlinkMacSystemFont, Segoe UI", category: "Typography" },
-            { term: "Z-Index", definition: "CSS property controlling stacking order. Higher values appear on top. Typical hierarchy: content (10) \u2192 dropdowns (100) \u2192 modals (300).", category: "CSS" },
-            { term: "WCAG", definition: "Web Content Accessibility Guidelines - international standards for accessible websites. AA = good, AAA = excellent.", category: "Accessibility" },
-            { term: "Open Graph", definition: "Meta tags that control how content appears when shared on social media (Facebook, LinkedIn, etc.). Includes title, description, image.", category: "SEO" },
-            { term: "Schema.org", definition: "Structured data markup that helps search engines understand page content. Powers rich snippets (star ratings, prices, etc.) in Google.", category: "SEO" },
-            { term: "CSP", definition: "Content Security Policy - HTTP header that prevents XSS attacks by restricting which content sources are allowed on the page.", category: "Security" },
-            { term: "CORS", definition: "Cross-Origin Resource Sharing - controls which domains can access your API. Prevents unauthorized cross-domain requests.", category: "Security" },
-            { term: "API Endpoint", definition: "A URL that accepts HTTP requests to retrieve or modify data. Example: GET /api/users, POST /api/products", category: "API" },
-            { term: "REST API", definition: "Representational State Transfer - API architecture using HTTP methods (GET, POST, PUT, DELETE) for CRUD operations.", category: "API" },
-            { term: "GraphQL", definition: "Query language for APIs that lets clients request exactly the data they need. Alternative to REST with more flexibility.", category: "API" },
-            { term: "MRI Mode", definition: "Metadata Radiological Inspection - graceful degradation mode when full access is blocked. Extracts meta tags, frameworks, structure.", category: "Access Strategy" },
-            { term: "Bot Protection", definition: "Systems like Cloudflare, PerimeterX that block automated tools. Triggers MRI mode for metadata-only extraction.", category: "Access Strategy" },
-            { term: "DOM Depth", definition: "How many levels of nested HTML elements exist. Think of it like folders within folders. Shallow (\u226410) = simple, deep (>20) = complex. Typical sites: 10-15 levels.", category: "HTML" },
-            { term: "Nesting Level", definition: "How deep an element is within the HTML tree. Example: html > body > div > section > p = 5 levels deep. Affects performance and maintainability.", category: "HTML" },
-            { term: "Blur Radius", definition: "How soft/blurry a shadow edge is. 0px = sharp edge, 5px = subtle, 15px = elevated (cards), 30px = floating (modals). Bigger blur = higher perceived elevation.", category: "Design System" },
-            { term: "Y-Offset", definition: "Vertical distance a shadow is cast from the element. Small (2-4px) = subtle depth, large (10-20px) = dramatic elevation. Works with blur radius.", category: "Design System" },
-            { term: "Focus State", definition: "Visual style when element has keyboard focus (tab key). Required for accessibility. Example: blue outline on buttons, underline on links.", category: "Accessibility" },
-            { term: "Active Selector", definition: "CSS selector that targets an element being clicked/pressed. Example: button:active. Shows feedback during user interaction.", category: "CSS" },
-            { term: "Hover State", definition: "Visual change when mouse cursor is over an element. Example: button changes color, link underlines. Not available on touch devices.", category: "CSS" },
-            { term: "Viewport", definition: "The visible area of your browser window. Mobile = small (375px), tablet = medium (768px), desktop = large (1280px+). Sites adapt to viewport size.", category: "Responsive Design" },
-            { term: "Visual Weight", definition: "How much an element grabs attention. Determined by: size, color contrast, position, whitespace. Higher weight = eye goes there first.", category: "Design System" },
-            { term: "Heuristic", definition: "A rule of thumb or educated guess. Heuristic detection uses patterns and common conventions rather than perfect analysis. Fast but not 100% accurate.", category: "Analysis Method" },
-            { term: "Edge Density", definition: "How many sharp lines/borders exist in an area (detected via computer vision). High edge density = detailed/complex, low = simple/minimal.", category: "Computer Vision" },
-            { term: "Contrast", definition: "Difference between colors. High contrast = easy to read (black on white). Low contrast = hard to read (light gray on white). WCAG requires 4.5:1 for text.", category: "Accessibility" },
-            { term: "Whitespace", definition: "Empty space around elements. More whitespace = clean/breathable design, less = dense/cramped. Also called 'negative space'.", category: "Design System" },
-            { term: "Optical Center", definition: "Where your eye naturally looks first on a page. Usually 33% from top, centered horizontally (F-pattern reading). Important for hero placement.", category: "Visual Hierarchy" },
-            { term: "Snackbar", definition: "Brief message that appears at bottom of screen, then disappears. Named after Android's UI pattern. Example: 'Message sent' confirmation.", category: "UI Pattern" },
-            { term: "Dropdown Menu", definition: "Menu that appears when clicking a trigger (usually nav item or button). Requires JavaScript to toggle open/closed state.", category: "UI Pattern" },
-            { term: "Modal", definition: "Popup dialog that dims the background and requires user action before continuing. High z-index (usually 1000+) to appear on top of everything.", category: "UI Pattern" },
-            { term: "Accordion", definition: "Collapsible sections where clicking header expands/collapses content. Only one section open at a time. Common in FAQs.", category: "UI Pattern" },
-            { term: "Hamburger Menu", definition: "Three horizontal lines icon that opens mobile navigation. Typically hidden on desktop, visible on mobile < 768px.", category: "UI Pattern" },
-            { term: "Hero Section", definition: "Large banner at top of page with key message/image. First thing users see. Usually includes heading, description, and CTA button.", category: "UI Pattern" }
-        ];
+<script>
+// ════════════════════════════════════════
+// DICTIONARY DATABASE
+// Each entry: term, def, category, tags,
+// preview (HTML), detail (expanded info)
+// ════════════════════════════════════════
 
-        // Render glossary items
-        const grid = document.getElementById('glossaryGrid');
-        GLOSSARY.forEach(item => {
-            const div = document.createElement('div');
-            div.className = 'glossary-item';
-            div.innerHTML = `
-                <div class="term">${item.term}</div>
-                <div class="definition">${item.definition}</div>
-                <span class="category-badge" data-category="${item.category}">${item.category}</span>
-            `;
-            grid.appendChild(div);
-        });
+const CATEGORIES = [
+    { id: 'layout',        icon: '📐', label: 'Layout & Structure' },
+    { id: 'typography',    icon: '🖋',  label: 'Typography' },
+    { id: 'color',         icon: '🎨', label: 'Color Systems' },
+    { id: 'spacing',       icon: '📏', label: 'Spacing & Scale' },
+    { id: 'hierarchy',     icon: '👁',  label: 'Visual Hierarchy' },
+    { id: 'interaction',   icon: '🖱',  label: 'Interaction' },
+    { id: 'motion',        icon: '🎬', label: 'Motion & Animation' },
+    { id: 'accessibility', icon: '♿', label: 'Accessibility' },
+    { id: 'architecture',  icon: '🏛',  label: 'Architecture' },
+    { id: 'pattern',       icon: '🧩', label: 'UI Patterns' },
+];
 
-        // Search functionality
-        const searchBox = document.getElementById('searchBox');
-        searchBox.addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase();
-            document.querySelectorAll('.glossary-item, .metric-explanation').forEach(item => {
-                const text = item.textContent.toLowerCase();
-                item.style.display = text.includes(query) ? '' : 'none';
-            });
-        });
-    </script>
+// Action types:
+//   {type:'ripper',  query:'hero'}        → /ripper?search=hero  (find this component)
+//   {type:'dashboard', metric:'typography'} → /?metric=typography  (see in scan results)
+//   {type:'states'}                         → ripper targeted mode + enable states checkbox
+//   both can coexist: action:[...] array
+
+const DB = [
+    // ── LAYOUT ──
+    {
+        term: 'Grid Layout',
+        def: 'Two-dimensional layout system using rows and columns. The backbone of modern page structure.',
+        category: 'layout',
+        tags: ['CSS Grid', 'Columns', 'Rows'],
+        action: [{type:'ripper', query:'grid'}, {type:'dashboard', metric:'layout'}],
+        preview: `<div class="preview-grid">
+            <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+            <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+        </div>`,
+        whatWeCheck: 'Number of CSS Grid containers, column definitions (grid-template-columns), gap values, and whether a 12/16-column system is detected.',
+        whyItMatters: 'Grid systems create visual consistency. Sites using CSS Grid score higher on layout confidence because the structure is explicit and predictable.',
+        whatGoodLooksLike: '12-column grid with consistent gaps (16-24px). Column counts that adapt at breakpoints (3→2→1).'
+    },
+    {
+        term: 'Masonry Layout',
+        def: 'Variable-height items packed into columns without row alignment. Common in galleries and Pinterest-style feeds.',
+        category: 'layout',
+        tags: ['Gallery', 'Pinterest', 'Columns'],
+        action: [{type:'ripper', query:'gallery'}, {type:'dashboard', metric:'layout'}],
+        preview: `<div class="preview-masonry">
+            <div class="col"><div class="brick" style="height:50px"></div><div class="brick" style="height:30px"></div><div class="brick" style="height:45px"></div></div>
+            <div class="col"><div class="brick" style="height:35px"></div><div class="brick" style="height:55px"></div><div class="brick" style="height:25px"></div></div>
+            <div class="col"><div class="brick" style="height:42px"></div><div class="brick" style="height:38px"></div><div class="brick" style="height:48px"></div></div>
+        </div>`,
+        whatWeCheck: 'Flex containers with wrap, variable-height children, column-count CSS. Distinguished from regular grids by height variance.',
+        whyItMatters: 'Masonry layouts maximize vertical space efficiency. Detecting them tells you the site prioritizes visual density over rigid alignment.',
+        whatGoodLooksLike: 'Consistent column widths, uniform horizontal gaps, items that fill available space without large empty patches.'
+    },
+    {
+        term: 'Flexbox',
+        def: 'One-dimensional layout for arranging items in a row or column. Used for navbars, card rows, and alignment.',
+        category: 'layout',
+        tags: ['CSS', 'Row', 'Column'],
+        action: [{type:'ripper', query:'navigation'}, {type:'dashboard', metric:'layout'}],
+        preview: `<div class="preview-flex">
+            <div class="item">Nav</div>
+            <div class="item" style="flex:1;text-align:center">Content</div>
+            <div class="item">CTA</div>
+        </div>`,
+        whatWeCheck: 'Flex containers count, direction (row vs column), justify-content and align-items values, gap usage.',
+        whyItMatters: 'Flexbox dominance vs Grid usage reveals layout philosophy. Flex-heavy sites tend toward simpler, linear structures.',
+        whatGoodLooksLike: 'Consistent gap values across flex containers. Direction matches content flow (row for horizontal, column for stacking).'
+    },
+    {
+        term: 'Holy Grail Layout',
+        def: 'Classic pattern: header, three-column body (sidebar + content + sidebar), footer. Named for being historically difficult in CSS.',
+        category: 'layout',
+        tags: ['Classic', 'Three-Column', 'Sidebar'],
+        action: [{type:'ripper', query:'sidebar'}, {type:'dashboard', metric:'spatial_composition'}],
+        preview: `<div style="width:170px;display:flex;flex-direction:column;gap:3px;">
+            <div style="height:14px;background:var(--accent-muted);border-radius:3px;border:1px solid rgba(129,140,248,0.2)"></div>
+            <div style="display:flex;gap:3px;flex:1">
+                <div style="width:30px;background:var(--info-muted);border-radius:3px;border:1px solid rgba(56,189,248,0.2)"></div>
+                <div style="flex:1;height:60px;background:var(--accent-strong);border-radius:3px;border:1px solid rgba(129,140,248,0.3)"></div>
+                <div style="width:30px;background:var(--info-muted);border-radius:3px;border:1px solid rgba(56,189,248,0.2)"></div>
+            </div>
+            <div style="height:14px;background:var(--accent-muted);border-radius:3px;border:1px solid rgba(129,140,248,0.2)"></div>
+        </div>`,
+        whatWeCheck: 'Spatial composition detects header + multi-column + footer landmarks. Page structure classified as "app layout" or "documentation".',
+        whyItMatters: 'This pattern tells you the site has persistent navigation and auxiliary content — typical of dashboards, docs, and admin panels.',
+        whatGoodLooksLike: 'Sidebar widths between 200-300px, main content ≥60% of viewport, sticky sidebar with scroll-independent navigation.'
+    },
+    {
+        term: 'Split Screen',
+        action: [{type:'ripper', query:'split'}],
+        def:'Page divided into two equal or weighted halves — often image + text or form + illustration.',
+        category: 'layout',
+        tags: ['50/50', 'Two-Column', 'Landing'],
+        preview: `<div style="display:flex;gap:4px;width:170px;height:90px;">
+            <div style="flex:1;background:var(--accent);border-radius:4px;opacity:0.6;display:flex;align-items:center;justify-content:center;font-size:14px">🖼</div>
+            <div style="flex:1;background:var(--surface-1);border-radius:4px;border:1px solid var(--border-subtle);padding:10px;display:flex;flex-direction:column;justify-content:center;gap:4px">
+                <div style="height:5px;width:70%;background:var(--text-primary);border-radius:2px"></div>
+                <div style="height:3px;width:50%;background:var(--text-disabled);border-radius:2px"></div>
+                <div style="height:10px;width:40%;background:var(--accent);border-radius:3px;margin-top:4px"></div>
+            </div>
+        </div>`,
+        whatWeCheck: 'Spatial composition: beside_count, two children in a flex/grid container each taking ~50% width.',
+        whyItMatters: 'Split screens are a strong signal for landing pages and onboarding flows. They almost always contain a primary CTA.',
+        whatGoodLooksLike: 'Equal or golden ratio (60/40) split. Content side has clear heading + description + CTA hierarchy.'
+    },
+
+    // ── TYPOGRAPHY ──
+    {
+        term: 'Type Scale',
+        action: [{type:'dashboard', metric:'typography'}],
+        def: 'Mathematical ratio between font sizes that creates visual rhythm. Common ratios: 1.25 (Major Third), 1.333 (Perfect Fourth), 1.5 (Perfect Fifth).',
+        category: 'typography',
+        tags: ['Ratio', 'Sizes', 'Hierarchy'],
+        preview: `<div class="preview-type-scale">
+            <div><span class="size" style="font-size:22px">Display</span><span class="label">36px</span></div>
+            <div><span class="size" style="font-size:16px">Heading</span><span class="label">24px</span></div>
+            <div><span class="size" style="font-size:12px">Body</span><span class="label">16px</span></div>
+            <div><span class="size" style="font-size:9px;color:var(--text-secondary)">Caption</span><span class="label">12px</span></div>
+        </div>`,
+        whatWeCheck: 'All font-size values on the page, heading sizes (h1-h6), ratio between consecutive sizes, number of distinct sizes.',
+        whyItMatters: 'A consistent type scale is the strongest signal of intentional design. Sites with 6-8 sizes and a clear ratio score 90%+ on typography confidence.',
+        whatGoodLooksLike: 'Ratio between 1.2-1.5, 6-10 distinct sizes, heading sizes that follow the scale (not arbitrary values).'
+    },
+    {
+        term: 'Font Stack',
+        action: [{type:'dashboard', metric:'typography'}],
+        def: 'Ordered list of fonts the browser tries, from preferred to fallback. The first available font is used.',
+        category: 'typography',
+        tags: ['Web Fonts', 'Fallback', 'System'],
+        preview: `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">
+            <div style="font-size:13px;font-weight:600;color:var(--text-primary)">Inter <span style="font-size:8px;color:var(--success);font-family:var(--font-mono)">LOADED</span></div>
+            <div style="font-size:11px;color:var(--text-tertiary);font-family:system-ui">system-ui <span style="font-size:8px;color:var(--text-disabled);font-family:var(--font-mono)">FALLBACK</span></div>
+            <div style="font-size:10px;color:var(--text-disabled);font-family:sans-serif">sans-serif <span style="font-size:8px;color:var(--text-disabled);font-family:var(--font-mono)">GENERIC</span></div>
+        </div>`,
+        whatWeCheck: 'All font-family declarations, number of unique font stacks, primary vs fallback fonts, whether web fonts loaded successfully.',
+        whyItMatters: 'Font count reveals design complexity. 1-2 fonts = focused system. 5+ fonts = inconsistent or multi-team codebase.',
+        whatGoodLooksLike: '1-3 font families. Primary font for headings, secondary for body, monospace for code. All web fonts loaded.'
+    },
+    {
+        term: 'Line Height',
+        action: [{type:'dashboard', metric:'typography'}],
+        def: 'Vertical spacing between lines of text. Affects readability — too tight is cramped, too loose wastes space.',
+        category: 'typography',
+        tags: ['Leading', 'Readability', 'Density'],
+        preview: `<div style="display:flex;gap:16px;">
+            <div style="width:60px;font-size:8px;line-height:1.1;color:var(--text-tertiary);border:1px dashed var(--danger);border-radius:3px;padding:4px;">Tight lines cramped together hard to read</div>
+            <div style="width:60px;font-size:8px;line-height:1.6;color:var(--text-secondary);border:1px dashed var(--success);border-radius:3px;padding:4px;">Good spacing easy to read and scan</div>
+        </div>`,
+        whatWeCheck: 'Computed line-height values across body text, headings, and UI elements.',
+        whyItMatters: 'Body text at 1.4-1.6 line-height is the readability sweet spot. Headings can be tighter (1.1-1.3). Values outside these ranges signal design issues.',
+        whatGoodLooksLike: 'Body: 1.5-1.6, Headings: 1.1-1.3, UI elements: 1.2-1.4. Consistent across the page.'
+    },
+
+    // ── COLOR ──
+    {
+        term: 'Color Palette',
+        action: [{type:'dashboard', metric:'colors'}],
+        def: 'The set of colors used across the site — primary, secondary, accent, neutral, and semantic (success/warning/error).',
+        category: 'color',
+        tags: ['Primary', 'Secondary', 'Accent'],
+        preview: `<div class="preview-palette">
+            <div class="swatch" style="height:48px;background:#818cf8"></div>
+            <div class="swatch" style="height:40px;background:#34d399"></div>
+            <div class="swatch" style="height:36px;background:#f87171"></div>
+            <div class="swatch" style="height:44px;background:#1c1c20"></div>
+            <div class="swatch" style="height:32px;background:#a0a0ab"></div>
+            <div class="swatch" style="height:28px;background:#fbbf24"></div>
+        </div>`,
+        whatWeCheck: 'All computed color values (text, background, border), grouped into primary/secondary/intentional. CSS variable names for semantic role detection.',
+        whyItMatters: 'A tight palette (5-8 intentional colors) signals a mature design system. 20+ colors suggests organic growth or inconsistency.',
+        whatGoodLooksLike: '3-5 primary colors, 2-3 neutrals, 3 semantic colors (success/warning/error). All derivable from CSS variables.'
+    },
+    {
+        term: 'Color Roles',
+        action: [{type:'dashboard', metric:'colors'}],
+        def: 'Semantic meaning assigned to colors via CSS variable names — primary, accent, background, text, error, etc.',
+        category: 'color',
+        tags: ['Semantic', 'CSS Variables', 'Tokens'],
+        preview: `<div style="display:flex;flex-direction:column;gap:3px;font-size:8px;font-family:var(--font-mono);">
+            <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;background:#818cf8;border-radius:3px"></div><span style="color:var(--text-tertiary)">--primary</span></div>
+            <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;background:#34d399;border-radius:3px"></div><span style="color:var(--text-tertiary)">--success</span></div>
+            <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;background:#f87171;border-radius:3px"></div><span style="color:var(--text-tertiary)">--error</span></div>
+            <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;background:#1c1c20;border-radius:3px;border:1px solid var(--border-default)"></div><span style="color:var(--text-tertiary)">--bg</span></div>
+        </div>`,
+        whatWeCheck: 'CSS custom property names matching patterns like --primary, --accent, --bg, --text, --error, --success, etc. Maps variable names to semantic roles.',
+        whyItMatters: 'Sites with named color roles have a real design system. Sites with only hex values in classes have colors but no system.',
+        whatGoodLooksLike: '5+ semantic roles mapped. Variables follow a consistent naming convention (--color-primary or --primary-500).'
+    },
+
+    // ── SPACING ──
+    {
+        term: 'Spacing Scale',
+        action: [{type:'dashboard', metric:'spacing_scale'}],
+        def: 'A set of spacing values based on a base unit (usually 4px or 8px). All padding, margin, and gap values are multiples of this base.',
+        category: 'spacing',
+        tags: ['Base Unit', '4px Grid', 'Rhythm'],
+        preview: `<div class="preview-spacing">
+            <div class="bar" style="width:16px"><span class="bar-label">4px</span></div>
+            <div class="bar" style="width:32px"><span class="bar-label">8px</span></div>
+            <div class="bar" style="width:48px"><span class="bar-label">12px</span></div>
+            <div class="bar" style="width:64px"><span class="bar-label">16px</span></div>
+            <div class="bar" style="width:96px"><span class="bar-label">24px</span></div>
+            <div class="bar" style="width:128px"><span class="bar-label">32px</span></div>
+        </div>`,
+        whatWeCheck: 'All padding, margin, and gap computed values. Base unit detection (GCD of common values). Pattern consistency (what % of values are multiples of base).',
+        whyItMatters: 'Consistent spacing is the most visible sign of a design system. Inconsistent spacing makes pages feel "off" even if you cannot explain why.',
+        whatGoodLooksLike: '4px or 8px base unit. 80%+ of values are exact multiples. Scale follows powers of 2 (4, 8, 16, 32, 64).'
+    },
+    {
+        term: 'Whitespace',
+        action: [{type:'dashboard', metric:'spatial_composition'}],
+        def: 'Empty space between and around elements. More whitespace = breathable, premium feel. Less = dense, information-heavy.',
+        category: 'spacing',
+        tags: ['Negative Space', 'Density', 'Breathing Room'],
+        preview: `<div class="preview-whitespace">
+            <div class="preview-ws-box" style="width:60px;height:60px;padding:6px"><div class="preview-ws-inner" style="width:100%;height:100%"></div></div>
+            <div style="font-size:8px;color:var(--text-disabled)">vs</div>
+            <div class="preview-ws-box" style="width:80px;height:80px;padding:20px"><div class="preview-ws-inner" style="width:100%;height:100%"></div></div>
+        </div>`,
+        whatWeCheck: 'Content density (% of viewport filled with elements), average vertical spacing between sections, breathing room score.',
+        whyItMatters: 'Dense (>70% fill) = data apps, dashboards. Spacious (<40% fill) = luxury brands, portfolios. The ratio reveals the site archetype.',
+        whatGoodLooksLike: 'Consistent section spacing (not random). Density that matches the site purpose. Breathing room score 40-60% for most marketing sites.'
+    },
+
+    // ── VISUAL HIERARCHY ──
+    {
+        term: 'Hero Section',
+        action: [{type:'ripper', query:'hero'}, {type:'dashboard', metric:'visual_hierarchy'}],
+        def: 'Large banner at the top of a page — first thing users see. Contains the primary message, image or video, and usually a CTA button.',
+        category: 'hierarchy',
+        tags: ['Above-the-Fold', 'CTA', 'Banner'],
+        preview: `<div class="preview-hero">
+            <div class="preview-hero-bar"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+            <div class="preview-hero-body">
+                <div class="preview-hero-h"></div>
+                <div class="preview-hero-p"></div>
+                <div class="preview-hero-btn">Get Started</div>
+            </div>
+        </div>`,
+        whatWeCheck: 'First large element in DOM with heading + image/background + CTA. Size relative to viewport. Whether it spans full width.',
+        whyItMatters: 'Hero presence is the strongest indicator of a landing/marketing page. No hero = app layout or content-first design.',
+        whatGoodLooksLike: 'Full viewport height or near it. Clear heading hierarchy (h1). One primary CTA button. Background image or gradient.'
+    },
+    {
+        term: 'Visual Weight',
+        action: [{type:'dashboard', metric:'visual_hierarchy'}],
+        def: 'How much an element grabs attention. Determined by size, color contrast, position, and surrounding whitespace.',
+        category: 'hierarchy',
+        tags: ['Attention', 'Focus', 'Emphasis'],
+        preview: `<div style="display:flex;gap:10px;align-items:center">
+            <div style="width:50px;height:50px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:white">A</div>
+            <div style="width:30px;height:30px;background:var(--surface-4);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-disabled)">B</div>
+            <div style="width:20px;height:20px;background:var(--surface-3);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--text-disabled)">C</div>
+        </div>`,
+        whatWeCheck: 'Element sizes relative to viewport, color contrast against background, position (above-the-fold gets more weight), isolation (more whitespace around = more weight).',
+        whyItMatters: 'Visual weight hierarchy guides the eye. If everything has equal weight, nothing stands out and the page feels flat.',
+        whatGoodLooksLike: 'Clear primary focus (hero/headline), secondary elements visually smaller, tertiary elements recede. 3-4 levels of visual weight.'
+    },
+    {
+        term: 'Above the Fold',
+        action: [{type:'dashboard', metric:'spatial_composition'}],
+        def: 'Content visible without scrolling — the initial viewport. Critical for first impressions and engagement.',
+        category: 'hierarchy',
+        tags: ['Viewport', 'First Impression', 'Engagement'],
+        preview: `<div style="width:120px;border:1px solid var(--border-default);border-radius:4px;overflow:hidden">
+            <div style="height:50px;background:var(--accent-muted);border-bottom:2px dashed var(--warning);padding:4px;display:flex;flex-direction:column;gap:2px;justify-content:center;align-items:center">
+                <div style="width:60%;height:4px;background:var(--text-primary);border-radius:1px"></div>
+                <div style="width:40%;height:3px;background:var(--text-disabled);border-radius:1px"></div>
+            </div>
+            <div style="height:30px;background:var(--surface-3);padding:4px;opacity:0.5;display:flex;align-items:center;justify-content:center;font-size:7px;color:var(--text-disabled)">below fold</div>
+        </div>`,
+        whatWeCheck: 'Elements within initial viewport (1080px height). Breakdown: headings, images, buttons. Primary focus classification (hero, CTA, visual, content).',
+        whyItMatters: 'Users decide in 3-5 seconds whether to stay. The above-the-fold content determines that decision.',
+        whatGoodLooksLike: 'Clear value proposition visible. Primary CTA above fold. No wasted space on large logos or empty sections.'
+    },
+
+    // ── INTERACTION ──
+    {
+        term: 'Hover State',
+        action: [{type:'states', note:'Enable "Capture States" in Ripper → Targeted mode, then rip any interactive element'}, {type:'dashboard', metric:'interaction_states'}],
+        def: 'Visual change when the cursor moves over an interactive element — color shifts, shadows, transforms.',
+        category: 'interaction',
+        tags: ['Mouse', 'Feedback', 'CSS'],
+        preview: `<div class="preview-states">
+            <div class="preview-state-btn" style="background:var(--accent);color:white">Default</div>
+            <div class="preview-state-btn" style="background:var(--accent-hover);color:white;transform:translateY(-1px);box-shadow:var(--shadow-md)">Hovered</div>
+        </div>`,
+        whatWeCheck: 'Physical Playwright hover over interactive elements. Captures actual CSS changes (color, background, transform, box-shadow, border) between default and hover states.',
+        whyItMatters: 'Hover feedback tells users what is clickable. Missing hover states = poor affordance. Consistent hover patterns = polished design system.',
+        whatGoodLooksLike: 'Subtle but noticeable change. Consistent across all interactive elements. Common patterns: darken 10%, add shadow, slight translateY.'
+    },
+    {
+        term: 'Focus State',
+        action: [{type:'states', note:'Enable "Capture States" in Ripper → Targeted mode, then rip any interactive element'}, {type:'dashboard', metric:'interaction_states'}],
+        def: 'Visual indicator when an element has keyboard focus (Tab key). Required for accessibility — keyboard users need to see where they are.',
+        category: 'interaction',
+        tags: ['Keyboard', 'Accessibility', 'Outline'],
+        preview: `<div class="preview-states">
+            <div class="preview-state-btn" style="background:var(--surface-3);color:var(--text-secondary);border:1px solid var(--border-default)">Default</div>
+            <div class="preview-state-btn" style="background:var(--surface-3);color:var(--text-primary);border:1px solid var(--accent);outline:2px solid var(--accent);outline-offset:2px">Focused</div>
+        </div>`,
+        whatWeCheck: 'Physical Playwright focus on elements. Captures outline, border, box-shadow changes. Checks if focus is visible (not outline:none).',
+        whyItMatters: 'Focus states are a WCAG AA requirement. Removing focus outlines without replacement is the most common accessibility violation we detect.',
+        whatGoodLooksLike: 'Visible focus ring (2-3px outline). High contrast against background. Consistent across all focusable elements. Never outline:none without alternative.'
+    },
+
+    // ── MOTION ──
+    {
+        term: 'Easing Curves',
+        action: [{type:'dashboard', metric:'motion_tokens'}],
+        def: 'How animation speed changes over time. Linear = constant speed. Ease-out = fast start, slow end. Spring = overshoot and settle.',
+        category: 'motion',
+        tags: ['Timing', 'Bezier', 'Feel'],
+        preview: `<div class="preview-motion">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div class="dot dot-linear" style="background:var(--danger)"></div>
+                <div class="label">linear</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div class="dot dot-ease" style="background:var(--accent)"></div>
+                <div class="label">ease-out</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div class="dot dot-spring" style="background:var(--success)"></div>
+                <div class="label">spring</div>
+            </div>
+        </div>`,
+        whatWeCheck: 'All transition-timing-function and animation-timing-function values. Groups into families (ease, linear, cubic-bezier, spring). Detects custom bezier curves.',
+        whyItMatters: 'Easing reveals motion personality. Linear = mechanical/retro. Ease-out = polished/modern. Spring = playful/premium. Consistent easing = intentional motion system.',
+        whatGoodLooksLike: '1-3 easing curves used consistently. Ease-out for exits, ease-in-out for transforms. No linear on UI transitions (feels robotic).'
+    },
+    {
+        term: 'Duration Scale',
+        action: [{type:'dashboard', metric:'motion_tokens'}],
+        def: 'Set of animation timing values — fast (100-150ms) for micro-interactions, medium (200-300ms) for transitions, slow (400-600ms) for entrances.',
+        category: 'motion',
+        tags: ['Speed', 'Timing', 'Tokens'],
+        preview: `<div style="display:flex;flex-direction:column;gap:6px;width:140px">
+            <div style="display:flex;align-items:center;gap:8px"><div style="width:30px;height:8px;background:var(--success);border-radius:3px"></div><span style="font-size:8px;font-family:var(--font-mono);color:var(--text-disabled)">100ms fast</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="width:60px;height:8px;background:var(--accent);border-radius:3px"></div><span style="font-size:8px;font-family:var(--font-mono);color:var(--text-disabled)">250ms base</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><div style="width:100px;height:8px;background:var(--warning);border-radius:3px"></div><span style="font-size:8px;font-family:var(--font-mono);color:var(--text-disabled)">500ms slow</span></div>
+        </div>`,
+        whatWeCheck: 'All transition-duration and animation-duration values. Groups into clusters to detect scale (fast/base/slow). Counts unique durations.',
+        whyItMatters: 'A duration scale with 3-5 values means the team has motion tokens. Random durations (137ms, 283ms, 412ms) mean ad-hoc animation.',
+        whatGoodLooksLike: '3-5 duration values. Base around 200-300ms. Fast ≤150ms for hover/focus. Slow ≥400ms for page transitions. All multiples of 50ms.'
+    },
+
+    // ── ACCESSIBILITY ──
+    {
+        term: 'Color Contrast',
+        action: [{type:'dashboard', metric:'contrast_a11y'}],
+        def: 'Ratio between text color and background color. WCAG AA requires 4.5:1 for normal text, 3:1 for large text.',
+        category: 'accessibility',
+        tags: ['WCAG', 'Readability', 'Ratio'],
+        preview: `<div class="preview-contrast">
+            <div class="preview-contrast-box" style="background:#000;color:#fff">21:1</div>
+            <div class="preview-contrast-box" style="background:#1c1c20;color:#818cf8">4.6:1</div>
+            <div class="preview-contrast-box" style="background:#242429;color:#454550;border:1px solid var(--border-subtle)">1.8:1</div>
+        </div>`,
+        whatWeCheck: 'Injects axe-core accessibility engine. Runs WCAG AA color-contrast audit on every text element. Reports violations with foreground/background colors and actual ratio.',
+        whyItMatters: 'Low contrast text is invisible to users with vision impairments. Also affects everyone in bright sunlight or on low-quality screens.',
+        whatGoodLooksLike: 'Zero WCAG AA violations. All body text ≥4.5:1. All large text ≥3:1. Score: 100 (our scoring: 100 minus weighted violations).'
+    },
+    {
+        term: 'Accessibility Tree',
+        action: [{type:'dashboard', metric:'accessibility_tree'}],
+        def: 'Browser\'s semantic representation of the page — what screen readers see. Built from HTML landmarks, ARIA roles, and heading structure.',
+        category: 'accessibility',
+        tags: ['Screen Reader', 'Landmarks', 'ARIA'],
+        preview: `<div class="preview-a11y">
+            <div class="landmark" style="border-color:var(--accent);background:var(--accent-muted)">&lt;header&gt; banner</div>
+            <div class="landmark" style="border-color:var(--info);background:var(--info-muted);margin-left:8px">&lt;nav&gt; navigation</div>
+            <div class="landmark" style="border-color:var(--success);background:var(--success-muted);margin-left:8px">&lt;main&gt; content</div>
+            <div class="landmark" style="border-color:var(--warning);background:var(--warning-muted);margin-left:16px">h1 &rarr; h2 &rarr; h3</div>
+            <div class="landmark" style="border-color:var(--accent);background:var(--accent-muted)">&lt;footer&gt; contentinfo</div>
+        </div>`,
+        whatWeCheck: 'Landmark elements (header, nav, main, footer), heading hierarchy (h1-h6), ARIA roles, interactive element count, heading skip detection.',
+        whyItMatters: 'A clean accessibility tree means the page is navigable by screen readers and keyboard. Missing landmarks = disorienting for assistive technology users.',
+        whatGoodLooksLike: 'One h1. Headings in order (no h1→h3 skip). All 4 landmarks present. Interactive elements have accessible names.'
+    },
+
+    // ── ARCHITECTURE ──
+    {
+        term: 'Responsive Breakpoints',
+        action: [{type:'dashboard', metric:'responsive_breakpoints'}],
+        def: 'Screen widths where layout adapts — mobile (375px), tablet (768px), desktop (1024px+). Defined in CSS @media queries.',
+        category: 'architecture',
+        tags: ['Media Queries', 'Mobile-First', 'Adaptive'],
+        preview: `<div class="preview-breakpoints">
+            <div class="preview-bp-device" style="width:24px"><div class="preview-bp-screen" style="height:36px"></div><div class="preview-bp-label">375</div></div>
+            <div class="preview-bp-device" style="width:36px"><div class="preview-bp-screen" style="height:40px"></div><div class="preview-bp-label">768</div></div>
+            <div class="preview-bp-device" style="width:56px"><div class="preview-bp-screen" style="height:36px"></div><div class="preview-bp-label">1024</div></div>
+            <div class="preview-bp-device" style="width:70px"><div class="preview-bp-screen" style="height:32px"></div><div class="preview-bp-label">1440</div></div>
+        </div>`,
+        whatWeCheck: 'Real @media queries from stylesheets (not inferred). Breakpoint values, framework detection (Bootstrap, Tailwind), query count.',
+        whyItMatters: 'Sites with 3-5 breakpoints are intentionally responsive. Sites with 0 breakpoints are either desktop-only or using container queries.',
+        whatGoodLooksLike: '3-5 breakpoints covering mobile, tablet, desktop. Matches a framework (Tailwind: 640/768/1024/1280). Mobile-first (min-width) preferred.'
+    },
+    {
+        term: 'Shadow System',
+        action: [{type:'dashboard', metric:'shadow_system'}],
+        def: 'Layered box-shadow values creating visual depth — subtle for cards, medium for dropdowns, heavy for modals.',
+        category: 'architecture',
+        tags: ['Elevation', 'Depth', 'Material'],
+        preview: `<div class="preview-shadows">
+            <div class="shadow-card" style="box-shadow:0 1px 3px rgba(0,0,0,0.3)">sm</div>
+            <div class="shadow-card" style="box-shadow:0 4px 12px rgba(0,0,0,0.4)">md</div>
+            <div class="shadow-card" style="box-shadow:0 10px 30px rgba(0,0,0,0.5)">lg</div>
+        </div>`,
+        whatWeCheck: 'All box-shadow values, grouped into levels by blur radius. Anatomy: x-offset, y-offset, blur, spread, color, inset.',
+        whyItMatters: 'A shadow system with 3-5 levels means deliberate elevation hierarchy. Random shadows mean ad-hoc styling.',
+        whatGoodLooksLike: '3-5 shadow levels. Progressive blur (2px → 8px → 24px). Consistent color (same rgba with different opacity). Y-offset increases with blur.'
+    },
+    {
+        term: 'Z-Index Stack',
+        action: [{type:'dashboard', metric:'z_index_stack'}],
+        def: 'CSS stacking order: which elements appear on top. Content (1) → dropdowns (100) → modals (300) → toasts (400).',
+        category: 'architecture',
+        tags: ['Stacking', 'Layers', 'Order'],
+        preview: `<div class="preview-zstack">
+            <div class="layer" style="width:120px;height:90px;bottom:0;left:0;background:var(--accent-muted);border-color:rgba(129,140,248,0.2);color:var(--text-disabled)">z:1 content</div>
+            <div class="layer" style="width:80px;height:50px;bottom:20px;left:20px;background:var(--info-muted);border-color:rgba(56,189,248,0.3);color:var(--info)">z:100 nav</div>
+            <div class="layer" style="width:60px;height:35px;bottom:40px;left:40px;background:var(--warning-muted);border-color:rgba(251,191,36,0.3);color:var(--warning)">z:300 modal</div>
+        </div>`,
+        whatWeCheck: 'All z-index values, element selectors, meaningful layer names. Filters out framework noise (z-index: 9999 from React portals).',
+        whyItMatters: 'Z-index bugs (modal behind header, dropdown under content) are common. A clean stacking order means deliberate layer management.',
+        whatGoodLooksLike: '3-6 meaningful layers. Values in increments of 10 or 100. No values above 500 (framework noise filtered). Clear purpose per layer.'
+    },
+    {
+        term: 'DOM Depth',
+        action: [{type:'dashboard', metric:'dom_depth'}],
+        def: 'How many levels of nested HTML elements exist. Like folders within folders — deeper = more complex.',
+        category: 'architecture',
+        tags: ['Nesting', 'HTML', 'Complexity'],
+        preview: `<div class="preview-dom">
+            <div class="node"><span class="tag">&lt;body&gt;</span></div>
+            <div class="node"><span class="indent" style="width:10px"></span><span class="tag">&lt;main&gt;</span></div>
+            <div class="node"><span class="indent" style="width:20px"></span><span class="tag">&lt;section&gt;</span></div>
+            <div class="node"><span class="indent" style="width:30px"></span><span class="tag">&lt;div&gt;</span></div>
+            <div class="node"><span class="indent" style="width:40px"></span><span class="tag">&lt;div&gt;</span></div>
+            <div class="node"><span class="indent" style="width:50px"></span><span style="color:var(--success)">&lt;p&gt;</span> <span style="color:var(--text-disabled)">depth: 6</span></div>
+        </div>`,
+        whatWeCheck: 'Maximum nesting depth, average depth across all elements, deepest element selectors.',
+        whyItMatters: 'Shallow (≤10) = simple, clean HTML. Deep (>20) = complex framework output or div soup. Affects rendering performance and maintainability.',
+        whatGoodLooksLike: 'Max depth 10-15. Average depth 5-8. No unnecessary wrapper divs. Semantic elements (section, article) instead of nested divs.'
+    },
+
+    // ── UI PATTERNS ──
+    {
+        term: 'Navigation Bar',
+        action: [{type:'ripper', query:'navigation'}, {type:'dashboard', metric:'site_architecture'}],
+        def: 'Persistent header with links to main sections. Usually sticky. Contains logo, primary nav links, and sometimes search/CTA.',
+        category: 'pattern',
+        tags: ['Header', 'Sticky', 'Menu'],
+        preview: `<div class="preview-nav">
+            <div class="preview-nav-bar">
+                <div class="preview-nav-item active">Home</div>
+                <div class="preview-nav-item">About</div>
+                <div class="preview-nav-item">Work</div>
+                <div class="preview-nav-item">Blog</div>
+            </div>
+            <div style="height:40px;background:var(--surface-1)"></div>
+        </div>`,
+        whatWeCheck: 'Landmark &lt;nav&gt; detection, link count, sticky/fixed positioning, dropdown menus. Smart Nav discovers all navigable pages.',
+        whyItMatters: 'Navigation structure reveals site architecture. Number of nav items indicates complexity. Dropdowns indicate content hierarchy depth.',
+        whatGoodLooksLike: '5-7 primary nav items. One level of dropdowns max. Sticky header. Active state on current page. Mobile hamburger at ≤768px.'
+    },
+    {
+        term: 'Card Component',
+        action: [{type:'ripper', query:'card'}],
+        def: 'Self-contained content block with image, title, description, and action. The most common UI pattern on the web.',
+        category: 'pattern',
+        tags: ['Content', 'Grid', 'Reusable'],
+        preview: `<div style="display:flex;gap:6px">
+            <div style="width:70px;background:var(--surface-1);border-radius:6px;border:1px solid var(--border-subtle);overflow:hidden">
+                <div style="height:30px;background:var(--accent-muted)"></div>
+                <div style="padding:4px"><div style="height:3px;width:80%;background:var(--text-primary);border-radius:1px;margin-bottom:3px"></div><div style="height:2px;width:60%;background:var(--text-disabled);border-radius:1px"></div></div>
+            </div>
+            <div style="width:70px;background:var(--surface-1);border-radius:6px;border:1px solid var(--border-subtle);overflow:hidden">
+                <div style="height:30px;background:var(--success-muted)"></div>
+                <div style="padding:4px"><div style="height:3px;width:70%;background:var(--text-primary);border-radius:1px;margin-bottom:3px"></div><div style="height:2px;width:50%;background:var(--text-disabled);border-radius:1px"></div></div>
+            </div>
+        </div>`,
+        whatWeCheck: 'Component discovery finds repeating structures with similar DOM shape. Extracts selector, bounding box, category, and content preview.',
+        whyItMatters: 'Cards are the atomic unit of most design systems. Consistent card structure (same padding, radius, shadow) = mature component library.',
+        whatGoodLooksLike: 'Uniform dimensions in grid. Consistent padding, border-radius, shadow level. Hover state. Image aspect ratio maintained.'
+    },
+    {
+        term: 'CTA Button',
+        action: [{type:'ripper', query:'cta'}, {type:'dashboard', metric:'visual_hierarchy'}],
+        def: 'Call-to-Action — the primary button you want users to click. "Get Started", "Sign Up", "Buy Now". Usually the highest-contrast element.',
+        category: 'pattern',
+        tags: ['Action', 'Conversion', 'Primary'],
+        preview: `<div style="display:flex;flex-direction:column;gap:6px;align-items:center">
+            <div style="padding:8px 20px;background:var(--accent);color:white;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:0.02em">Get Started Free</div>
+            <div style="padding:6px 14px;background:transparent;color:var(--accent-text);border:1px solid var(--accent);border-radius:6px;font-size:9px;font-weight:600">Learn More</div>
+        </div>`,
+        whatWeCheck: 'Visual hierarchy detects primary CTA: largest/highest-contrast button in hero section. Checks text content, position, color contrast against background.',
+        whyItMatters: 'CTA is the conversion point. Its visibility, position, and contrast directly impact business metrics. Missing CTA above the fold is a design red flag.',
+        whatGoodLooksLike: 'Above the fold. High contrast (filled, not outlined). Clear action verb. One primary CTA per section. Secondary CTAs visually recede.'
+    },
+    {
+        term: 'Accordion',
+        action: [{type:'ripper', query:'accordion'}, {type:'states', note:'Use Pre-action to click an accordion trigger before ripping its expanded state'}],
+        def: 'Expandable/collapsible sections — click header to reveal content. Common in FAQs, settings, and documentation.',
+        category: 'pattern',
+        tags: ['Expand', 'Collapse', 'FAQ'],
+        preview: `<div style="width:150px;display:flex;flex-direction:column;gap:2px">
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-4);border-radius:4px;font-size:8px;color:var(--text-secondary)"><span>Section 1</span><span style="color:var(--accent)">-</span></div>
+            <div style="padding:4px 8px;background:var(--surface-1);border-radius:3px;font-size:7px;color:var(--text-disabled)">Content revealed here...</div>
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-4);border-radius:4px;font-size:8px;color:var(--text-secondary)"><span>Section 2</span><span style="color:var(--text-disabled)">+</span></div>
+            <div style="display:flex;justify-content:space-between;padding:5px 8px;background:var(--surface-4);border-radius:4px;font-size:8px;color:var(--text-secondary)"><span>Section 3</span><span style="color:var(--text-disabled)">+</span></div>
+        </div>`,
+        whatWeCheck: 'Interactive discovery clicks potential accordion triggers. Detects height changes on child elements after click.',
+        whyItMatters: 'Accordions hide content complexity. Detecting them reveals how much content is below the surface — important for content architecture analysis.',
+        whatGoodLooksLike: 'Clear open/close indicator (+/-/chevron). Smooth height transition. Only one section open at a time. Keyboard accessible.'
+    },
+    {
+        term: 'Modal / Dialog',
+        action: [{type:'ripper', query:'modal'}, {type:'states', note:'Use Pre-action to click the trigger button before ripping the modal'}],
+        def: 'Popup overlay that dims the background and demands user attention. Used for confirmations, forms, and important actions.',
+        category: 'pattern',
+        tags: ['Overlay', 'Popup', 'Focus Trap'],
+        preview: `<div style="position:relative;width:140px;height:80px;background:var(--surface-1);border-radius:6px;border:1px solid var(--border-subtle);overflow:hidden">
+            <div style="padding:4px;opacity:0.3"><div style="height:3px;width:80%;background:var(--text-disabled);border-radius:1px;margin-bottom:3px"></div><div style="height:3px;width:60%;background:var(--text-disabled);border-radius:1px"></div></div>
+            <div style="position:absolute;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center">
+                <div style="background:var(--surface-2);border:1px solid var(--border-default);border-radius:6px;padding:8px 12px;width:80px;text-align:center">
+                    <div style="font-size:8px;color:var(--text-primary);font-weight:600;margin-bottom:4px">Confirm?</div>
+                    <div style="display:flex;gap:4px;justify-content:center"><div style="padding:2px 8px;background:var(--accent);border-radius:3px;font-size:7px;color:white">Yes</div><div style="padding:2px 8px;background:var(--surface-4);border-radius:3px;font-size:7px;color:var(--text-tertiary)">No</div></div>
+                </div>
+            </div>
+        </div>`,
+        whatWeCheck: 'Z-index stack detects modal-layer elements. Component discovery finds overlay patterns. Interaction states can capture open/close transitions.',
+        whyItMatters: 'Modals break flow — they should be used sparingly for critical actions. Too many modals = poor UX. Detecting them maps the interaction architecture.',
+        whatGoodLooksLike: 'Backdrop overlay with blur. Focus trapped inside. Escape key closes. Centered vertically. Clear primary/secondary actions.'
+    },
+];
+
+// ════════════════════════════════════════
+// RENDERING
+// ════════════════════════════════════════
+
+const grid = document.getElementById('cardGrid');
+const searchBox = document.getElementById('searchBox');
+const searchMeta = document.getElementById('searchMeta');
+const sidebarItems = document.getElementById('sidebarItems');
+const modalOverlay = document.getElementById('modalOverlay');
+const modalPreview = document.getElementById('modalPreview');
+const modalBody = document.getElementById('modalBody');
+
+// Build sidebar
+let activeCategory = null;
+CATEGORIES.forEach(cat => {
+    const count = DB.filter(d => d.category === cat.id).length;
+    const item = document.createElement('div');
+    item.className = 'sidebar-item';
+    item.dataset.cat = cat.id;
+    item.innerHTML = `<span><span class="sidebar-icon">${cat.icon}</span>${cat.label}</span><span class="sidebar-count">${count}</span>`;
+    item.addEventListener('click', () => {
+        if (activeCategory === cat.id) {
+            activeCategory = null;
+            item.classList.remove('active');
+        } else {
+            activeCategory = cat.id;
+            document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+            item.classList.add('active');
+        }
+        filterCards();
+    });
+    sidebarItems.appendChild(item);
+});
+
+// Build cards
+const cardElements = [];
+DB.forEach((entry, idx) => {
+    const card = document.createElement('div');
+    card.className = 'dict-card';
+    card.dataset.idx = idx;
+    card.dataset.category = entry.category;
+    card.dataset.searchText = `${entry.term} ${entry.def} ${entry.tags.join(' ')} ${entry.category}`.toLowerCase();
+
+    const tagClass = 'tag-' + entry.category;
+    const catLabel = CATEGORIES.find(c => c.id === entry.category)?.label || entry.category;
+
+    card.innerHTML = `
+        <div class="card-preview">${entry.preview}</div>
+        <div class="card-body">
+            <div class="card-term">${entry.term}</div>
+            <div class="card-def">${entry.def}</div>
+            <div class="card-tags">
+                <span class="card-tag ${tagClass}">${catLabel}</span>
+                ${entry.tags.map(t => `<span class="card-tag" style="background:var(--surface-4);color:var(--text-tertiary)">${t}</span>`).join('')}
+            </div>
+            ${cardActionBadge(entry.action)}
+        </div>
+    `;
+
+    card.addEventListener('click', () => openModal(idx));
+    grid.appendChild(card);
+    cardElements.push(card);
+});
+
+searchMeta.textContent = `${DB.length} patterns`;
+
+// Lazy-render card previews with IntersectionObserver
+const cardObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            entry.target.style.opacity = '1';
+            entry.target.style.transform = 'translateY(0)';
+            cardObserver.unobserve(entry.target);
+        }
+    });
+}, { rootMargin: '100px' });
+
+cardElements.forEach(card => {
+    card.style.opacity = '0';
+    card.style.transform = 'translateY(12px)';
+    card.style.transition = 'opacity 0.3s, transform 0.3s';
+    cardObserver.observe(card);
+});
+
+// ── Action buttons ──
+const METRIC_LABELS = {
+    typography: 'Typography', colors: 'Color Palette', spacing_scale: 'Spacing Scale',
+    layout: 'Layout', spatial_composition: 'Spatial Composition',
+    visual_hierarchy: 'Visual Hierarchy', motion_tokens: 'Motion Tokens',
+    interaction_states: 'Interaction States', contrast_a11y: 'Color Contrast',
+    accessibility_tree: 'Accessibility Tree', responsive_breakpoints: 'Responsive Breakpoints',
+    shadow_system: 'Shadow System', z_index_stack: 'Z-Index Stack', dom_depth: 'DOM Depth',
+    site_architecture: 'Site Architecture',
+};
+
+function buildActionButtons(actions) {
+    if (!actions) return '';
+    const list = Array.isArray(actions) ? actions : [actions];
+    const btns = list.map(a => {
+        if (a.type === 'ripper') {
+            const href = `/ripper?search=${encodeURIComponent(a.query)}`;
+            return `<a href="${href}" target="_blank"
+                style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+                       background:rgba(129,140,248,0.12);border:1px solid rgba(129,140,248,0.25);
+                       color:var(--accent-text);border-radius:8px;font-size:0.8rem;font-weight:600;
+                       text-decoration:none;transition:background 0.15s;"
+                onmouseover="this.style.background='rgba(129,140,248,0.22)'"
+                onmouseout="this.style.background='rgba(129,140,248,0.12)'">
+                🔍 Find on any site
+            </a>`;
+        }
+        if (a.type === 'dashboard') {
+            const label = METRIC_LABELS[a.metric] || a.metric;
+            const href = `/?metric=${encodeURIComponent(a.metric)}`;
+            return `<a href="${href}" target="_blank"
+                style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+                       background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2);
+                       color:#34d399;border-radius:8px;font-size:0.8rem;font-weight:600;
+                       text-decoration:none;transition:background 0.15s;"
+                onmouseover="this.style.background='rgba(52,211,153,0.16)'"
+                onmouseout="this.style.background='rgba(52,211,153,0.08)'">
+                📊 Dashboard → ${label}
+            </a>`;
+        }
+        if (a.type === 'states') {
+            return `<div style="padding:8px 14px;background:rgba(251,146,60,0.08);
+                       border:1px solid rgba(251,146,60,0.2);border-radius:8px;
+                       font-size:0.78rem;color:#fb923c;line-height:1.4;">
+                ⚡ ${a.note}
+            </div>`;
+        }
+        return '';
+    }).join('');
+
+    return `<div style="margin-top:var(--space-5);padding-top:var(--space-4);
+                 border-top:1px solid var(--border-subtle);
+                 display:flex;flex-wrap:wrap;gap:var(--space-2);">
+        ${btns}
+    </div>`;
+}
+
+// Add action badge to card during build
+function cardActionBadge(actions) {
+    if (!actions) return '';
+    const list = Array.isArray(actions) ? actions : [actions];
+    const hasRipper = list.some(a => a.type === 'ripper');
+    const hasDash = list.some(a => a.type === 'dashboard');
+    const hasStates = list.some(a => a.type === 'states');
+    const parts = [];
+    if (hasRipper) parts.push(`<span title="Findable in Component Ripper" style="font-size:0.65rem;padding:2px 5px;background:rgba(129,140,248,0.12);color:var(--accent-text);border-radius:4px;">🔍 Rippable</span>`);
+    if (hasDash)   parts.push(`<span title="Visible in Dashboard scan" style="font-size:0.65rem;padding:2px 5px;background:rgba(52,211,153,0.08);color:#34d399;border-radius:4px;">📊 Metric</span>`);
+    if (hasStates) parts.push(`<span title="Capture via States mode" style="font-size:0.65rem;padding:2px 5px;background:rgba(251,146,60,0.08);color:#fb923c;border-radius:4px;">⚡ States</span>`);
+    return parts.length ? `<div style="margin-top:var(--space-2);display:flex;gap:4px;flex-wrap:wrap;">${parts.join('')}</div>` : '';
+}
+
+// ── Search + filter ──
+function filterCards() {
+    const query = searchBox.value.toLowerCase().trim();
+    let visible = 0;
+    cardElements.forEach(card => {
+        const matchesSearch = !query || card.dataset.searchText.includes(query);
+        const matchesCat = !activeCategory || card.dataset.category === activeCategory;
+        const show = matchesSearch && matchesCat;
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    searchMeta.textContent = query || activeCategory
+        ? `${visible} of ${DB.length} patterns`
+        : `${DB.length} patterns`;
+}
+
+searchBox.addEventListener('input', filterCards);
+
+// ── Modal ──
+function openModal(idx) {
+    const entry = DB[idx];
+    const catLabel = CATEGORIES.find(c => c.id === entry.category)?.label || entry.category;
+    const tagClass = 'tag-' + entry.category;
+
+    modalPreview.innerHTML = entry.preview;
+    modalBody.innerHTML = `
+        <div class="card-tags" style="margin-bottom:var(--space-3)">
+            <span class="card-tag ${tagClass}">${catLabel}</span>
+            ${entry.tags.map(t => `<span class="card-tag" style="background:var(--surface-4);color:var(--text-tertiary)">${t}</span>`).join('')}
+        </div>
+        <div class="modal-term">${entry.term}</div>
+        <div class="modal-def">${entry.def}</div>
+        ${entry.whatWeCheck ? `
+            <div class="modal-section">
+                <div class="modal-section-label">What Our Scanner Checks</div>
+                <div class="modal-section-text">${entry.whatWeCheck}</div>
+            </div>
+        ` : ''}
+        ${entry.whyItMatters ? `
+            <div class="modal-section">
+                <div class="modal-section-label">Why It Matters</div>
+                <div class="modal-section-text">${entry.whyItMatters}</div>
+            </div>
+        ` : ''}
+        ${entry.whatGoodLooksLike ? `
+            <div class="modal-section">
+                <div class="modal-section-label">What Good Looks Like</div>
+                <div class="modal-section-text">${entry.whatGoodLooksLike}</div>
+            </div>
+        ` : ''}
+        ${entry.action ? buildActionButtons(entry.action) : ''}
+    `;
+    modalOverlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+    modalOverlay.classList.remove('open');
+    document.body.style.overflow = '';
+}
+
+modalOverlay.addEventListener('click', (e) => {
+    if (e.target === modalOverlay) closeModal();
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+});
+</script>
 
 </body>
 </html>

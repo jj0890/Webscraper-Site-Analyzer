@@ -36,6 +36,7 @@ class CdpAnimationExtractor(BaseExtractor):
         try:
             client = await ctx.page.context.new_cdp_session(ctx.page)
         except Exception as e:
+            logger.warning("CDP Animation: session attach failed — %s: %s", type(e).__name__, e)
             return self._empty(f"CDP session unavailable: {e}")
 
         animations: List[Dict] = []

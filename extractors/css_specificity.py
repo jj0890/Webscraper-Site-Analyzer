@@ -60,7 +60,7 @@ class CSSSpecificityExtractor(BaseExtractor):
             if not selectors:
                 return {
                     'pattern': 'No accessible CSS selectors found',
-                    'confidence': 30,
+                    'confidence': 35,
                     'details': {}
                 }
 
@@ -111,7 +111,13 @@ class CSSSpecificityExtractor(BaseExtractor):
 
             return {
                 'pattern': f'Specificity: {cascade_health} — avg ({avg_a},{avg_b},{avg_c}), {total} selectors',
-                'confidence': 85,
+                'confidence': min(95,
+                    30
+                    + min(30, total // 20)            # +1 per 20 selectors, max 30
+                    + (15 if methodology else 0)       # Methodology detected
+                    + min(10, len([x for x in [low, medium, high] if x > 0]) * 5)
+                    + (10 if cascade_health == 'Healthy' else 0)
+                ),
                 'average_specificity': [avg_a, avg_b, avg_c],
                 'max_specificity': max_values,
                 'max_specificity_selector': max_selector,

@@ -18,6 +18,69 @@ import json
 import logging
 from typing import Dict, List, Optional
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SHADOW DOM UTILITIES
+# Injected via page.evaluate() once per page session.
+# After injection, every subsequent page.evaluate() can call:
+#   window.__wiRoots()            → all searchable roots (doc + templates + open shadow DOMs)
+#   window.__queryShadowAll(sel)  → querySelectorAll across all roots, deduplicated
+#   window.__shadowTextNodes()    → array of all text nodes across all roots incl. shadow DOMs
+# ─────────────────────────────────────────────────────────────────────────────
+_SHADOW_UTILS_JS = """
+window.__wiRoots = function() {
+    const roots = [document];
+    function walk(root) {
+        let iter;
+        try { iter = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null); }
+        catch(e) { return; }
+        let node;
+        while (node = iter.nextNode()) {
+            if (node.shadowRoot) {
+                roots.push(node.shadowRoot);
+                walk(node.shadowRoot);   // recurse — shadow roots can nest
+            }
+            if (node.tagName === 'TEMPLATE' && node.content) {
+                roots.push(node.content);
+            }
+        }
+    }
+    walk(document);
+    return roots;
+};
+
+window.__queryShadowAll = function(selector) {
+    const results = [];
+    const seen = new WeakSet();
+    window.__wiRoots().forEach(root => {
+        try {
+            root.querySelectorAll(selector).forEach(el => {
+                if (!seen.has(el)) { seen.add(el); results.push(el); }
+            });
+        } catch(e) {}
+    });
+    return results;
+};
+
+// Returns an array of all text nodes across main doc + shadow DOMs
+// (callback pattern breaks across page.evaluate() boundaries in Playwright)
+window.__shadowTextNodes = function() {
+    const nodes = [];
+    function walkRoot(root) {
+        const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while (node = tw.nextNode()) nodes.push(node);
+        // Recurse into open shadow roots
+        const ew = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+        let el;
+        while (el = ew.nextNode()) {
+            if (el.shadowRoot) walkRoot(el.shadowRoot);
+        }
+    }
+    walkRoot(document);
+    return nodes;
+};
+"""
+
 
 class ComponentRipper:
     """
@@ -29,8 +92,97 @@ class ComponentRipper:
         self.selector = selector  # Specific component to rip (e.g., '.product-grid')
         self.blueprint = {}
 
+    async def _flush_microtasks(self, page, levels: int = 2) -> None:
+        """
+        Yield to the microtask queue before reading DOM state.
+
+        After a click, hover, or focus, React/Vue/etc. batch their DOM updates
+        and apply them via the microtask queue — not via setTimeout (macrotask).
+        Awaiting a queueMicrotask-wrapped Promise guarantees we read DOM *after*
+        those updates have flushed.
+
+        levels=2 handles frameworks (React Concurrent, Vue) that queue a second
+        round of microtasks in response to the first round's work.
+
+        Much more precise than wait_for_timeout(100) — waits exactly long enough,
+        no arbitrary millisecond padding needed.
+        """
+        js = "queueMicrotask(resolve)"
+        for _ in range(levels - 1):
+            js = f"queueMicrotask(() => {js})"
+        try:
+            await page.evaluate(f"() => new Promise(resolve => {js})")
+        except Exception:
+            pass  # Non-fatal — fall through if page is navigating/closing
+
+    async def _inject_shadow_utils(self, page) -> None:
+        """
+        Inject shadow DOM utilities into the current page context.
+        After this call, every subsequent page.evaluate() on this page can use:
+          window.__wiRoots()            — all roots (document + <template> + open shadow DOMs)
+          window.__queryShadowAll(sel)  — querySelectorAll across all roots
+          window.__shadowTextNodes()    — array of all text nodes across all roots
+        Safe to call on an already-loaded page.
+        """
+        await page.evaluate(_SHADOW_UTILS_JS)
+
+    async def _execute_pre_action(self, page, pre_action: dict) -> bool:
+        """
+        Execute a DOM interaction before ripping — reveals hidden content like
+        drawer menus, accordions, tooltips, or tab panels.
+
+        pre_action schema:
+          {
+            "type": "click" | "hover" | "focus" | "key",
+            "target": "<CSS selector>",
+            "value": "<key name, e.g. 'ArrowDown'>",   # for type=key only
+            "wait_ms": 800,                             # settle time after action
+            "repeat": 1,                                # how many times to perform
+          }
+
+        Returns True if the action succeeded.
+        """
+        action_type = (pre_action.get('type') or 'click').lower()
+        target_sel = pre_action.get('target', '')
+        wait_ms = int(pre_action.get('wait_ms', 800))
+        repeat = max(1, int(pre_action.get('repeat', 1)))
+
+        if not target_sel:
+            return False
+
+        try:
+            for _ in range(repeat):
+                el = await page.query_selector(target_sel)
+                if not el:
+                    print(f"   ⚠️  pre_action target not found: {target_sel!r}")
+                    return False
+
+                if action_type == 'click':
+                    await el.click()
+                elif action_type == 'hover':
+                    await el.hover()
+                elif action_type == 'focus':
+                    await el.focus()
+                elif action_type == 'key':
+                    key = pre_action.get('value', 'Enter')
+                    await el.press(key)
+                else:
+                    await el.click()
+
+            await asyncio.sleep(wait_ms / 1000)
+            # Flush microtasks so React/Vue updates triggered by the interaction
+            # are applied before we read DOM state
+            await self._flush_microtasks(page)
+            print(f"   ✅ pre_action: {action_type} on {target_sel!r} (waited {wait_ms}ms)")
+            return True
+
+        except Exception as e:
+            print(f"   ⚠️  pre_action failed ({action_type} on {target_sel!r}): {e}")
+            return False
+
     async def rip(self, auth_state: Optional[str] = None, use_stealth: bool = False,
-                  include_states: bool = False, output_format: str = 'json'):
+                  include_states: bool = False, output_format: str = 'json',
+                  pre_action: Optional[dict] = None):
         """
         Extract component blueprint with optional auth and stealth mode
 
@@ -39,6 +191,10 @@ class ComponentRipper:
             use_stealth: Enable stealth mode to bypass anti-bot measures
             include_states: Capture hover/focus interactive state deltas
             output_format: 'json' (default) or 'figma' (Tailwind JSX markdown)
+            pre_action: Optional DOM interaction to perform before ripping.
+                        Use this to expand menus, open drawers, reveal hidden
+                        content before extraction.
+                        Example: {"type": "click", "target": "button.menu-btn"}
         """
         self._include_states = include_states
         self._output_format = output_format
@@ -87,10 +243,19 @@ class ComponentRipper:
                 try:
                     await page.goto(self.url, wait_until='domcontentloaded', timeout=60000)
                     await asyncio.sleep(3)
+                    await self._inject_shadow_utils(page)
+
+                    # Pre-action: interact before ripping (expand menus, open drawers, etc.)
+                    if pre_action:
+                        await self._execute_pre_action(page, pre_action)
 
                     # Extract component blueprint
                     if self.selector:
                         self.blueprint = await self._rip_component(page, self.selector)
+                        if pre_action:
+                            # Record that a pre_action was used so consumers know
+                            # the blueprint reflects an interacted state
+                            self.blueprint['pre_action_applied'] = pre_action
                         if include_states:
                             self.blueprint['interactive_states'] = await self._extract_component_states(page, self.selector)
                         if output_format == 'figma':
@@ -436,6 +601,47 @@ class ComponentRipper:
             'extraction_method': 'playwright_computed_styles'
         }
 
+        # Cross-reference: capture API calls made during component interaction
+        try:
+            component_api_calls = []
+            def _on_component_request(req):
+                rt = req.resource_type
+                url = req.url
+                if rt in ('fetch', 'xhr', 'websocket') or '/api/' in url or url.endswith('.json'):
+                    component_api_calls.append({
+                        'url': url[:200],
+                        'method': req.method,
+                        'resource_type': rt,
+                    })
+
+            page.on('request', _on_component_request)
+
+            # Hover over the component to trigger any lazy-loaded API calls
+            try:
+                el = page.locator(selector).first
+                await el.hover(timeout=3000)
+                await self._flush_microtasks(page)   # flush React/Vue updates from hover
+                import asyncio as _aio
+                await _aio.sleep(1.5)  # Wait for API calls to fire
+            except Exception:
+                pass
+
+            page.remove_listener('request', _on_component_request)
+
+            blueprint['network_activity'] = {
+                'api_calls': component_api_calls,
+                'has_data_fetching': len(component_api_calls) > 0,
+                'total_observed': len(component_api_calls),
+            }
+            if component_api_calls:
+                print(f"      🔌 Component triggered {len(component_api_calls)} API calls")
+        except Exception as e:
+            blueprint['network_activity'] = {
+                'api_calls': [],
+                'has_data_fetching': False,
+                'total_observed': 0,
+            }
+
         # Generate Markdown documentation (V2)
         component_name = selector.replace('.', '').replace('#', '').replace('[', '').replace(']', '')
         blueprint['markdown'] = self._generate_markdown_doc(blueprint, component_name)
@@ -545,7 +751,7 @@ class ComponentRipper:
                 # --- HOVER ---
                 try:
                     await locator.hover(timeout=2000)
-                    await page.wait_for_timeout(150)
+                    await self._flush_microtasks(page)  # React/Vue updates from hover
 
                     hover_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
@@ -568,9 +774,8 @@ class ComponentRipper:
                 # --- FOCUS ---
                 try:
                     await page.mouse.move(0, 0)
-                    await page.wait_for_timeout(100)
                     await locator.focus(timeout=2000)
-                    await page.wait_for_timeout(100)
+                    await self._flush_microtasks(page)  # React/Vue updates from focus
 
                     focus_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
@@ -672,6 +877,7 @@ class ComponentRipper:
             close_browser = True
 
         try:
+            await self._inject_shadow_utils(page)
             from component_discovery_js import COMPONENT_DISCOVERY_JS
             components = await page.evaluate(COMPONENT_DISCOVERY_JS)
 
@@ -726,6 +932,435 @@ class ComponentRipper:
                 'summary': summary,
                 'total': len(component_list)
             }
+
+        finally:
+            if close_browser:
+                await page.context.browser.close()
+                await self._pw.stop()
+
+    async def auto_rip_top_n(self, page=None, n=5):
+        """
+        Automatically discover and rip the top N components by priority.
+        Combines discover_components() → sort by priority → _rip_component() for each.
+
+        Returns:
+            List of dicts, each with discovery metadata + full blueprint.
+        """
+        close_browser = False
+        if page is None:
+            from patchright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            browser = await self._pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+            page = await context.new_page()
+            page.set_default_timeout(60000)
+            await page.goto(self.url, wait_until='domcontentloaded', timeout=60000)
+            await asyncio.sleep(3)
+            close_browser = True
+
+        try:
+            # Step 1: Discover all components
+            discovery = await self.discover_components(page=page)
+            components = discovery.get('components', [])
+
+            if not components:
+                return {
+                    'blueprints': [],
+                    'total_discovered': 0,
+                    'total_ripped': 0,
+                    'url': self.url
+                }
+
+            # Step 2: Sort by priority descending, take top N
+            sorted_comps = sorted(components, key=lambda c: c.get('priority', 0), reverse=True)
+            top_n = sorted_comps[:n]
+
+            # Step 3: Rip each component
+            blueprints = []
+            for comp in top_n:
+                selector = comp.get('selector')
+                if not selector:
+                    continue
+                try:
+                    blueprint = await self._rip_component(page, selector)
+                    if 'error' not in blueprint:
+                        blueprints.append({
+                            'discovery': {
+                                'selector': selector,
+                                'label': comp.get('label', ''),
+                                'category': comp.get('category', ''),
+                                'priority': comp.get('priority', 0),
+                                'bounds': comp.get('bounds', {}),
+                                'screenshot': comp.get('screenshot'),
+                            },
+                            'blueprint': blueprint,
+                        })
+                except Exception as e:
+                    print(f"   ⚠️ Auto-rip failed for {selector}: {str(e)[:100]}")
+
+            return {
+                'blueprints': blueprints,
+                'total_discovered': len(components),
+                'total_ripped': len(blueprints),
+                'url': self.url
+            }
+
+        finally:
+            if close_browser:
+                await page.context.browser.close()
+                await self._pw.stop()
+
+    async def search_components_by_text(self, search_text, page=None):
+        """
+        Find components containing specific text using TreeWalker + CSS Custom Highlight API.
+        Returns matching components with selectors, text context, and bounds.
+        Applies CSS Custom Highlight API for visual marking (no DOM mutation).
+        """
+        close_browser = False
+        if page is None:
+            from patchright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            browser = await self._pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={'width': 1440, 'height': 900})
+            page = await context.new_page()
+            await page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
+            try:
+                await page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception:
+                pass
+            close_browser = True
+
+        try:
+            await self._inject_shadow_utils(page)
+            results = await page.evaluate('''(searchText) => {
+                const matches = [];
+                const ranges = [];
+                const seenSelectors = new Set();
+                const searchLower = searchText.toLowerCase();
+
+                // Walk all text nodes across main doc, <template> content, and open shadow DOMs
+                // __shadowTextNodes() returns an array so no cross-evaluate callback boundary
+                const textNodes = (typeof window.__shadowTextNodes === 'function')
+                    ? window.__shadowTextNodes()
+                    : (() => {
+                        const ns = [];
+                        const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                        let n; while (n = tw.nextNode()) ns.push(n);
+                        return ns;
+                      })();
+
+                textNodes.forEach(node => {
+                    const text = node.textContent;
+                    const idx = text.toLowerCase().indexOf(searchLower);
+                    if (idx === -1) return;
+
+                    // Find component root — nearest element with class or id
+                    let el = node.parentElement;
+                    const rootEl = node.getRootNode();
+                    const boundary = (rootEl === document) ? document.body : rootEl;
+                    while (el && el !== boundary) {
+                        if (el.id || (el.className && typeof el.className === 'string'
+                            && el.className.trim())) break;
+                        el = el.parentElement;
+                    }
+                    if (!el || el === document.body) return;
+
+                    // Generate selector
+                    let selector;
+                    if (el.id) {
+                        selector = '#' + CSS.escape(el.id);
+                    } else {
+                        const firstClass = el.className.trim().split(/\\s+/)[0];
+                        selector = el.tagName.toLowerCase() + '.' + CSS.escape(firstClass);
+                    }
+
+                    // Deduplicate by selector
+                    if (seenSelectors.has(selector)) return;
+                    seenSelectors.add(selector);
+
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return;
+
+                    // Create range for highlighting
+                    try {
+                        const range = new Range();
+                        range.setStart(node, idx);
+                        range.setEnd(node, Math.min(idx + searchText.length, text.length));
+                        ranges.push(range);
+                    } catch (e) {}
+
+                    // Content preview
+                    const elText = (el.textContent || '').trim();
+                    const imgCount = el.querySelectorAll('img, svg, video').length;
+                    const linkCount = el.querySelectorAll('a').length;
+
+                    matches.push({
+                        selector: selector,
+                        matchedText: text.trim().substring(
+                            Math.max(0, idx - 30),
+                            Math.min(text.length, idx + searchText.length + 30)
+                        ),
+                        label: el.tagName.toLowerCase() +
+                            (el.className ? '.' + el.className.trim().split(/\\s+/)[0] : ''),
+                        bounds: {
+                            top: Math.round(rect.top + window.scrollY),
+                            left: Math.round(rect.left),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height)
+                        },
+                        preview: {
+                            text: elText.substring(0, 120),
+                            images: imgCount,
+                            links: linkCount,
+                            children: el.children.length
+                        }
+                    });
+                });
+
+                // Apply CSS Custom Highlight API (no DOM mutation)
+                if (ranges.length > 0 && typeof CSS !== 'undefined' && CSS.highlights) {
+                    const highlight = new Highlight(...ranges);
+                    CSS.highlights.set('wi-search', highlight);
+
+                    // Inject highlight style
+                    if (!document.getElementById('wi-highlight-style')) {
+                        const style = document.createElement('style');
+                        style.id = 'wi-highlight-style';
+                        style.textContent = `::highlight(wi-search) {
+                            background-color: #ffeb3b;
+                            color: #000;
+                        }`;
+                        document.head.appendChild(style);
+                    }
+                }
+
+                return matches;
+            }''', search_text)
+
+            # Take screenshot with highlights visible
+            screenshot = None
+            if results:
+                try:
+                    screenshot_bytes = await page.screenshot(
+                        full_page=False, type='png')
+                    import base64
+                    screenshot = base64.b64encode(screenshot_bytes).decode('utf-8')
+                except Exception:
+                    pass
+
+                # Clean up highlights
+                await page.evaluate('''() => {
+                    if (typeof CSS !== 'undefined' && CSS.highlights) {
+                        CSS.highlights.delete('wi-search');
+                    }
+                    const style = document.getElementById('wi-highlight-style');
+                    if (style) style.remove();
+                }''')
+
+            return {
+                'matches': results,
+                'total': len(results),
+                'search_text': search_text,
+                'screenshot': screenshot,
+                'url': self.url,
+            }
+
+        finally:
+            if close_browser:
+                await page.context.browser.close()
+                await self._pw.stop()
+
+    # ─────────────────────────────────────────────────────────
+    # SVG ICON EXTRACTION
+    # ─────────────────────────────────────────────────────────
+
+    async def extract_svg_icons(self, page=None):
+        """
+        Extract SVG icons from any site using three detection strategies:
+
+        1. Symbol sprites — hidden <svg> with <symbol id="..."> definitions
+           referenced via <use href="#id"> (SoundCloud, GitHub, Spotify)
+        2. Inline SVGs — standalone <svg> elements in the DOM
+           deduplicated by path data hash
+        3. External SVG references — <img src="*.svg"> and CSS background-image SVGs
+
+        Returns a catalog with full SVG markup, names, viewBoxes, usage counts.
+        """
+        close_browser = False
+        if page is None:
+            from patchright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            browser = await self._pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={'width': 1440, 'height': 900})
+            page = await context.new_page()
+            await page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
+            try:
+                await page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception:
+                pass
+            close_browser = True
+
+        try:
+            await self._inject_shadow_utils(page)
+            catalog = await page.evaluate('''() => {
+                const result = {symbols: [], inline: [], external: [], method: 'none',
+                                template_sources: 0, shadow_sources: 0};
+
+                // Use shared shadow DOM utilities (injected by _inject_shadow_utils)
+                // Falls back to document-only if utils weren't injected for some reason
+                const roots = (typeof window.__wiRoots === 'function')
+                    ? window.__wiRoots()
+                    : [document];
+
+                // Count template and shadow sources for reporting
+                roots.forEach(r => {
+                    if (r instanceof DocumentFragment) result.template_sources++;
+                    else if (r !== document) result.shadow_sources++;
+                });
+
+                // ── 1. SYMBOL SPRITES ─────────────────────────────────────
+                // Search main DOM + every template/shadow root for <symbol id="...">
+                const allSymbols = [];
+                roots.forEach(root => {
+                    root.querySelectorAll('symbol[id]').forEach(s => allSymbols.push(s));
+                });
+
+                if (allSymbols.length > 0) {
+                    // Build usage count map across all roots
+                    const usageMap = {};
+                    roots.forEach(root => {
+                        root.querySelectorAll('use').forEach(useEl => {
+                            const href = useEl.getAttribute('href') || useEl.getAttribute('xlink:href') || '';
+                            const id = href.replace(/^.*#/, '');
+                            if (id) usageMap[id] = (usageMap[id] || 0) + 1;
+                        });
+                    });
+
+                    allSymbols.forEach(sym => {
+                        const id = sym.id;
+                        const viewBox = sym.getAttribute('viewBox') || '';
+
+                        // Infer a human name from id: "icon-play-circle" → "play circle"
+                        let name = id
+                            .replace(/^(icon[-_]?|sc[-_]?|i[-_]?|svg[-_]?)/, '')
+                            .replace(/[-_]/g, ' ')
+                            .trim() || id;
+
+                        // Extract inner content and wrap as renderable <svg>
+                        const inner = sym.innerHTML.trim();
+                        const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${inner}</svg>`;
+
+                        result.symbols.push({
+                            id,
+                            name,
+                            svg: svgStr,
+                            inner_html: inner,
+                            viewBox,
+                            usage_count: usageMap[id] || 0
+                        });
+                    });
+
+                    result.method = 'symbol_sprite';
+                }
+
+                // ── 2. INLINE SVGs ───────────────────────────────────────
+                // Find standalone SVG elements across all roots (main + template + shadow)
+                const seenPathHash = new Set();
+                const allSvgs = [];
+                roots.forEach(root => root.querySelectorAll('svg').forEach(s => allSvgs.push(s)));
+                const spriteContainers = new Set(allSvgs.filter(s => s.querySelectorAll('symbol').length > 0));
+
+                allSvgs.forEach(svg => {
+                    if (spriteContainers.has(svg)) return; // skip sprite defs
+                    if (svg.closest('button, a, li, nav') && svg.querySelectorAll('path, circle, rect, polygon, polyline, line').length === 0) return;
+
+                    const rect = svg.getBoundingClientRect();
+                    // Skip invisible/zero-size SVGs
+                    if (rect.width === 0 && rect.height === 0 &&
+                        !svg.getAttribute('viewBox')) return;
+
+                    // Deduplicate by first path's d attribute (normalized)
+                    const firstPath = svg.querySelector('path');
+                    const pathKey = firstPath ? firstPath.getAttribute('d') || '' : svg.innerHTML;
+                    const keyNorm = pathKey.replace(/\s+/g, '').substring(0, 80);
+                    if (seenPathHash.has(keyNorm)) return;
+                    seenPathHash.add(keyNorm);
+
+                    // Name inference: aria-label → title element → alt on parent img → nearest button/link text
+                    let name = svg.getAttribute('aria-label') || '';
+                    if (!name) {
+                        const titleEl = svg.querySelector('title');
+                        name = titleEl ? titleEl.textContent.trim() : '';
+                    }
+                    if (!name) {
+                        // Walk up to find nearest labelled ancestor
+                        let p = svg.parentElement;
+                        while (p && p !== document.body) {
+                            const label = p.getAttribute('aria-label') || p.title || '';
+                            if (label) { name = label; break; }
+                            const btnText = p.tagName.match(/^(BUTTON|A)$/) ?
+                                (p.textContent || '').replace(/\s+/g, ' ').trim() : '';
+                            if (btnText && btnText.length < 40) { name = btnText; break; }
+                            p = p.parentElement;
+                        }
+                    }
+                    if (!name) name = `svg_${result.inline.length + 1}`;
+
+                    const viewBox = svg.getAttribute('viewBox') || '';
+                    const svgStr = svg.outerHTML;
+
+                    result.inline.push({
+                        name: name.toLowerCase().replace(/\s+/g, '_'),
+                        label: name,
+                        svg: svgStr,
+                        viewBox,
+                        width: Math.round(rect.width) || parseInt(svg.getAttribute('width')) || null,
+                        height: Math.round(rect.height) || parseInt(svg.getAttribute('height')) || null,
+                        selector: svg.id ? '#' + svg.id :
+                                  (svg.className && typeof svg.className === 'string' ?
+                                   'svg.' + svg.className.trim().split(/\s+/)[0] : 'svg')
+                    });
+                });
+
+                if (result.inline.length > 0 && result.method === 'none') {
+                    result.method = 'inline_svgs';
+                } else if (result.inline.length > 0) {
+                    result.method = 'mixed';
+                }
+
+                // ── 3. EXTERNAL SVG REFERENCES ────────────────────────────
+                // Only meaningful in the main document (img tags won't be in shadow/template)
+                document.querySelectorAll('img[src]').forEach(img => {
+                    const src = img.src || '';
+                    if (!src.endsWith('.svg') && !src.includes('.svg?')) return;
+                    result.external.push({
+                        name: src.split('/').pop().replace(/\.svg.*$/, ''),
+                        url: src,
+                        alt: img.alt || '',
+                        width: img.naturalWidth || null,
+                        height: img.naturalHeight || null
+                    });
+                });
+
+                return result;
+            }''')
+
+            # Compute totals and summary
+            total = len(catalog['symbols']) + len(catalog['inline']) + len(catalog['external'])
+            catalog['total'] = total
+
+            # Sort symbols by usage count desc
+            catalog['symbols'].sort(key=lambda s: s.get('usage_count', 0), reverse=True)
+
+            # Report how many extra roots were searched
+            template_sources = catalog.pop('template_sources', 0)
+            shadow_sources = catalog.pop('shadow_sources', 0)
+            extra = []
+            if template_sources: extra.append(f'{template_sources} <template>')
+            if shadow_sources: extra.append(f'{shadow_sources} shadow root')
+            catalog['roots_searched'] = extra if extra else ['main document only']
+
+            return catalog
 
         finally:
             if close_browser:

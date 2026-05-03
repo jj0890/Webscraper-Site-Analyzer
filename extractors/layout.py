@@ -93,12 +93,16 @@ class LayoutExtractor(BaseExtractor):
 
     @staticmethod
     def _calculate_layout_confidence(data):
-        if data['grid_count'] > 5 or data['flex_count'] > 5:
-            return 95
-        elif data['grid_count'] > 0 or data['flex_count'] > 0:
-            return 80
-        else:
-            return 60
+        grid = data.get('grid_count', 0)
+        flex = data.get('flex_count', 0)
+        # Graded formula: base 40, +4 per grid container (max 25),
+        # +4 per flex container (max 25), +5 if any nesting detected
+        confidence = 40
+        confidence += min(25, grid * 4)
+        confidence += min(25, flex * 4)
+        if grid > 0 and flex > 0:
+            confidence += 5  # Mixed layout = more sophisticated
+        return min(95, confidence)
 
     @staticmethod
     def _generate_layout_snippets(data):

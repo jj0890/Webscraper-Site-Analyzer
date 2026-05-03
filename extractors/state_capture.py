@@ -48,7 +48,12 @@ class StateCaptureExtractor(BaseExtractor):
 
             return {
                 'pattern': f'{result.get("states_detected", 0)} state changes detected ({hover_count} hover, {focus_count} focus)',
-                'confidence': 90 if result.get('states_detected', 0) > 0 else 50,
+                'confidence': min(95,
+                    40
+                    + min(30, result.get('states_detected', 0) * 3)
+                    + min(15, result.get('elements_tested', 0) // 5)
+                    + min(10, len(result.get('patterns', [])) * 5)
+                ),
                 'elements_tested': result.get('elements_tested', 0),
                 'states_detected': result.get('states_detected', 0),
                 'hover_count': hover_count,

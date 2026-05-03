@@ -965,17 +965,20 @@
         .motion-track-dot {
             position: absolute;
             top: 50%; left: 0;
-            width: 10px; height: 10px;
+            width: 12px; height: 12px;
             border-radius: 50%;
             background: #c9b8ff;
             transform: translateY(-50%);
-            /* Default: still (no animation). Activated on hover/tap. */
             animation: none;
             transition: box-shadow 0.2s;
         }
         .motion-track--active .motion-track-dot {
             animation: motion-track-slide 1.8s var(--easing-fn, ease) 1 forwards;
-            box-shadow: 0 0 8px #c9b8ff88;
+            box-shadow: 0 0 10px #c9b8ff99;
+        }
+        .motion-track--looping .motion-track-dot {
+            animation: motion-track-slide 2s var(--easing-fn, ease) infinite alternate;
+            box-shadow: 0 0 8px #c9b8ff66;
         }
         .race-track {
             position: relative;
@@ -1363,6 +1366,19 @@
             background: var(--surface-4);
             border-color: var(--accent);
             color: var(--text-primary);
+        }
+
+        .export-btn.export-btn--figma {
+            background: rgba(105, 240, 174, 0.12);
+            border-color: rgba(105, 240, 174, 0.4);
+            color: #69f0ae;
+            font-weight: 600;
+        }
+
+        .export-btn.export-btn--figma:hover {
+            background: rgba(105, 240, 174, 0.22);
+            border-color: #69f0ae;
+            box-shadow: 0 0 16px rgba(105, 240, 174, 0.15);
         }
 
         .preview-button {
@@ -2501,6 +2517,7 @@
                 <select id="analysisModeSelect" style="background: var(--surface-0); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); color: var(--text-primary); font-family: var(--font-body); font-size: var(--text-md); min-width: 160px;">
                     <option value="single">Single Page (60s)</option>
                     <option value="smart-nav">Smart Nav (3-4min)</option>
+                    <option value="multi-template">Multi-Template (5-8min)</option>
                     <option value="interactive">Interactive Discovery</option>
                 </select>
                 <button class="btn btn-primary" onclick="analyzeURL()" id="analyzeBtn">Analyze URL</button>
@@ -2630,6 +2647,21 @@
 
                 <button class="btn btn-secondary export-btn" onclick="exportMarkdown()" style="display: none;" id="exportBtn">
                     📄 Export as Markdown
+                </button>
+                <button class="btn btn-secondary export-btn" onclick="exportDesignMd()" style="display: none;" id="exportDesignBtn">
+                    🎨 Export DESIGN.md
+                </button>
+                <button class="btn btn-secondary export-btn" onclick="exportFullJSON()" style="display: none;" id="exportJsonBtn">
+                    📦 Download JSON
+                </button>
+                <button class="btn btn-secondary export-btn" onclick="openInJsonCrack()" style="display: none;" id="jsonCrackBtn" title="Copies evidence to clipboard and opens JSON Crack to visualize it">
+                    🔮 Visualize in JSON Crack
+                </button>
+                <button class="export-btn export-btn--figma" onclick="exportForFigma()" style="display: none;" id="exportFigmaBtn" title="Generate a unified spec for Figma Make — design tokens + brief + layout in one paste">
+                    ◆ Export for Figma Make
+                </button>
+                <button class="btn btn-secondary export-btn" onclick="exportCatalog()" style="display: none;" id="exportCatalogBtn" title="Export a json-render compatible component catalog — AI can generate new pages from this">
+                    ⚡ Export Catalog (json-render)
                 </button>
             </div>
 
@@ -2837,6 +2869,7 @@
 
     <script>
         let currentEvidence = null;
+        let currentResultFile = null;   // server-side path for large exports
 
         // Analysis mode selector listener
         document.getElementById('analysisModeSelect').addEventListener('change', (e) => {
@@ -2847,6 +2880,8 @@
                 descEl.textContent = 'Analyze one page for quick insights (~60 seconds)';
             } else if (mode === 'smart-nav') {
                 descEl.textContent = 'Choose a focus area, auto-discover pages, and run a targeted cross-site scan (~2-4 min)';
+            } else if (mode === 'multi-template') {
+                descEl.textContent = 'Discover all distinct page types, scan one of each in parallel, extract what\'s consistent across every template = the design system (~5-8 min)';
             } else if (mode === 'interactive') {
                 descEl.textContent = 'Explore dropdown menus to discover all pages, then pick which ones to analyze';
             }
@@ -2913,14 +2948,18 @@
             analyzeBtn.textContent = 'Analyzing...';
 
             try {
+                const controller = new AbortController();
+                const scanTimeout = setTimeout(() => controller.abort(), 180000); // 3 min max
                 const response = await fetch('/api/deep-scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         site_url: url,
                         analysis_mode: analysisMode
-                    })
+                    }),
+                    signal: controller.signal
                 });
+                clearTimeout(scanTimeout);
 
                 const data = await response.json();
 
@@ -2938,6 +2977,8 @@
                 }
 
                 currentEvidence = data.evidence;
+                currentResultFile = data.result_file || null;
+                window.__currentEvidence = data.evidence;
                 displayResults(data.evidence);
 
                 // Generate AI summary
@@ -2947,7 +2988,11 @@
                 document.getElementById('results').classList.add('active');
 
             } catch (error) {
-                alert('Error: ' + error.message);
+                if (error.name === 'AbortError') {
+                    alert('Scan timed out after 3 minutes. The site may be too heavy or blocking automated access. Try again or use a simpler page.');
+                } else {
+                    alert('Error: ' + error.message);
+                }
                 document.getElementById('loading').style.display = 'none';
             } finally {
                 analyzeBtn.disabled = false;
@@ -3029,6 +3074,36 @@
                 analyzeBtn.disabled = false;
                 analyzeBtn.textContent = 'Analyze URL';
             }
+        }
+
+        // ---- Z-Tier Lightbox (appended to body to avoid stacking context issues) ----
+        function showZTierLightbox(tierName, purpose, zRange, coveragePct, textColor, borderColor, dataId) {
+            // Remove any existing lightbox
+            const existing = document.getElementById('z-tier-lightbox-global');
+            if (existing) existing.remove();
+
+            const b64 = (window.__zTierScreenshots || {})[dataId];
+            if (!b64) return;
+
+            const overlay = document.createElement('div');
+            overlay.id = 'z-tier-lightbox-global';
+            overlay.style.cssText = 'position:fixed; inset:0; z-index:999999; background:rgba(0,0,0,0.88); display:flex; align-items:center; justify-content:center; cursor:pointer; backdrop-filter:blur(4px);';
+            overlay.onclick = () => overlay.remove();
+
+            overlay.innerHTML = `
+                <div style="max-width: 90vw; max-height: 85vh; position: relative;" onclick="event.stopPropagation();">
+                    <div style="position: absolute; top: -32px; left: 0; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 0.9rem; color: ${textColor}; font-weight: 600;">${tierName}</span>
+                        <span style="font-size: 0.75rem; color: #888;">${purpose}</span>
+                        <span style="font-size: 0.68rem; color: #555;">z: ${zRange}</span>
+                        <span style="font-size: 0.68rem; color: ${textColor};">${coveragePct}% viewport</span>
+                    </div>
+                    <img src="data:image/png;base64,${b64}" style="max-width: 90vw; max-height: 85vh; border-radius: 8px; border: 2px solid ${borderColor}60; display:block;" />
+                    <div style="position: absolute; top: -32px; right: 0; font-size: 0.75rem; color: #666; cursor: pointer;" onclick="this.closest('#z-tier-lightbox-global').remove();">✕ close</div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
         }
 
         // ---- Interactive Discovery: Page Selection UI ----
@@ -3809,6 +3884,7 @@
                 }
 
                 currentEvidence = data.evidence;
+                window.__currentEvidence = data.evidence;
                 displayResults(data.evidence);
                 // Executive summary removed
 
@@ -3831,26 +3907,49 @@
             const container = document.getElementById('strategyBadgeContainer');
             const strategy = metaInfo.access_strategy || 'playwright_full';
             const botProtected = metaInfo.bot_protection_detected || false;
+            const blockedBy = metaInfo.blocked_by || null;
+            const blockedDetail = metaInfo.blocked_detail || null;
+            const isDegraded = metaInfo.degraded === true;
 
             let badgeClass, icon, label, details;
 
-            if (strategy === 'playwright_full' && !botProtected) {
+            if (strategy === 'playwright_full' && !botProtected && !isDegraded) {
                 badgeClass = 'full-access';
                 icon = '✅';
                 label = 'Full Access (Playwright)';
                 details = 'Complete architectural analysis available';
-            } else if (strategy === 'metadata_mri') {
+            } else if (strategy === 'metadata_mri' || isDegraded) {
                 badgeClass = 'mri-mode';
                 icon = '🔬';
-                label = 'Metadata MRI Mode';
-                details = botProtected
-                    ? 'Bot protection detected - showing available metadata'
-                    : 'Limited access - showing structural analysis';
+
+                // Show specific block reason instead of generic message
+                const blockReasons = {
+                    'cloudflare': 'Cloudflare Protection',
+                    'perimeterx': 'PerimeterX Bot Shield',
+                    'datadome': 'DataDome Protection',
+                    'bot_challenge': 'Bot Challenge Page',
+                    'auth_wall': 'Authentication Required',
+                    'http_403': 'Access Forbidden (403)',
+                    'http_401': 'Login Required (401)',
+                    'page_load_error': 'Page Load Failed',
+                };
+
+                const reasonLabel = blockedBy && blockReasons[blockedBy]
+                    ? blockReasons[blockedBy]
+                    : (botProtected ? 'Bot protection detected' : 'Limited access');
+
+                label = `MRI Mode — ${reasonLabel}`;
+                details = blockedDetail || 'Showing available metadata from degraded scan';
+            } else if (botProtected) {
+                badgeClass = 'mri-mode';
+                icon = '🛡️';
+                label = 'Bot Protection Detected';
+                details = 'Some metrics may be limited';
             } else {
                 badgeClass = 'blocked';
                 icon = '🚫';
                 label = 'Access Blocked';
-                details = 'Unable to analyze site';
+                details = blockedDetail || 'Unable to analyze site';
             }
 
             container.innerHTML = `
@@ -3859,6 +3958,15 @@
                 </div>
                 <div class="strategy-details">${details}</div>
             `;
+
+            // Show blocked_by detail if present
+            if (blockedBy && blockedBy !== 'unknown') {
+                container.innerHTML += `
+                    <div class="strategy-details" style="margin-top: 0.25rem; opacity: 0.7; font-size: 0.75rem;">
+                        blocked_by: <code style="background: rgba(255,255,255,0.08); padding: 0.1rem 0.3rem; border-radius: 3px;">${blockedBy}</code>
+                    </div>
+                `;
+            }
 
             // Show limitations if in MRI mode
             if (strategy === 'metadata_mri' && metaInfo.what_we_cannot_see) {
@@ -4492,6 +4600,7 @@
                     name: 'Technical',
                     metrics: [
                         { key: 'performance', icon: '⚡', title: 'Performance' },
+                        { key: 'css_analytics', icon: '🧬', title: 'CSS Analytics' },
                         { key: 'accessibility', icon: '♿', title: 'Accessibility' },
                         { key: 'contrast_a11y', icon: '👁', title: 'Readability' },
                         { key: 'seo', icon: '🔍', title: 'SEO' },
@@ -4774,11 +4883,13 @@
                 showMRIPlaceholder('apimapTab');
             }
 
-            // Display Component Map
-            if (evidence.component_map) {
+            // Display Component Map — fall back to visual_patterns when SDK fails
+            if (evidence.component_map && (evidence.component_map.sections || []).length > 0) {
                 displayComponentMap(evidence.component_map);
+            } else if (evidence.visual_patterns && (evidence.visual_patterns.components || []).length > 0) {
+                displayComponentMapFromVisualPatterns(evidence.visual_patterns);
             } else {
-                showEmptyTabState('componentmapTab', isMRI ? 'mri' : 'no-data', 'Component Map', 'Component detection requires the website-understanding SDK. Install it with: npm install website-understanding-sdk');
+                showEmptyTabState('componentmapTab', isMRI ? 'mri' : 'no-data', 'Component Map', 'Component detection requires JavaScript execution. Try a full scan (non-MRI mode).');
             }
 
             // Display debug info
@@ -4793,6 +4904,26 @@
                 displayAnalytics(evidence);
             } else {
                 showMRIPlaceholder('analyticsTab');
+            }
+
+            // ── ?metric= URL param: scroll to + pulse the relevant card ──
+            // Set by Glossary "📊 Dashboard → X" buttons so users land on the right card.
+            const metricParam = new URLSearchParams(window.location.search).get('metric');
+            if (metricParam) {
+                // Give the DOM one frame to settle, then find + highlight
+                requestAnimationFrame(() => {
+                    const card = document.querySelector(`[data-metric-key="${metricParam}"]`);
+                    if (card) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        card.style.transition = 'box-shadow 0.3s, outline 0.3s';
+                        card.style.outline = '2px solid rgba(52,211,153,0.6)';
+                        card.style.outlineOffset = '3px';
+                        setTimeout(() => {
+                            card.style.outline = '';
+                            card.style.outlineOffset = '';
+                        }, 2800);
+                    }
+                });
             }
         }
 
@@ -5093,6 +5224,8 @@
             grid.innerHTML = gridHTML;
 
             // ── Crop thumbnails from full-page screenshot using Canvas ──
+            // Uses IntersectionObserver to defer canvas drawing until the card
+            // scrolls into view — avoids synchronous drawImage for 30+ cards.
             if (screenshotBase64) {
                 var ssImg = new Image();
                 ssImg.onload = function() {
@@ -5102,7 +5235,10 @@
                     var scaleX = imgW / viewport.width;
                     var scaleY = scaleX;
 
-                    canvases.forEach(function(canvas) {
+                    function renderCanvas(canvas) {
+                        if (canvas.dataset.rendered) return; // already drawn
+                        canvas.dataset.rendered = '1';
+
                         var top = parseFloat(canvas.dataset.top);
                         var left = parseFloat(canvas.dataset.left);
                         var w = parseFloat(canvas.dataset.width);
@@ -5158,13 +5294,11 @@
                         var drawW, drawH, drawX, drawY;
 
                         if (srcAspect > destAspect) {
-                            // Source wider — fit to width, center vertically
                             drawW = canvas.width;
                             drawH = canvas.width / srcAspect;
                             drawX = 0;
                             drawY = (canvas.height - drawH) / 2;
                         } else {
-                            // Source taller — fit to height, show top portion
                             drawH = canvas.height;
                             drawW = canvas.height * srcAspect;
                             drawX = (canvas.width - drawW) / 2;
@@ -5172,6 +5306,20 @@
                         }
 
                         ctx.drawImage(ssImg, sx, sy, sw, sh, drawX, drawY, drawW, drawH);
+                    }
+
+                    // Lazy-render: only draw canvases when they enter the viewport
+                    var thumbObserver = new IntersectionObserver(function(entries) {
+                        entries.forEach(function(entry) {
+                            if (entry.isIntersecting) {
+                                renderCanvas(entry.target);
+                                thumbObserver.unobserve(entry.target);
+                            }
+                        });
+                    }, { rootMargin: '200px' }); // start rendering 200px before visible
+
+                    canvases.forEach(function(canvas) {
+                        thumbObserver.observe(canvas);
                     });
                 };
                 ssImg.src = 'data:image/png;base64,' + screenshotBase64;
@@ -5627,6 +5775,7 @@
 
             // Motion personality
             const motionPersonality = motion.motion_personality || '';
+            const designIntent = evidence.design_intent || '';
 
             // Avg confidence across all metrics
             const confidences = Object.values(evidence)
@@ -5710,6 +5859,19 @@
                                 <span style="font-size:var(--text-sm); color:var(--text-secondary); font-style:italic;">${motionPersonality}</span>
                             </div>
                         ` : ''}
+
+                        ${designIntent ? `
+                            <div style="margin-top:var(--space-4); padding:var(--space-4) var(--space-5); background:linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
+                                <div style="font-size:var(--text-xs); text-transform:uppercase; letter-spacing:0.08em; color:var(--text-tertiary); margin-bottom:var(--space-2);">Design Intent</div>
+                                <div style="font-size:var(--text-base); color:var(--text-primary); line-height:1.6;">${designIntent}</div>
+                            </div>
+                        ` : ''}
+
+                        <div style="margin-top:var(--space-5); display:flex; gap:var(--space-3); flex-wrap:wrap;">
+                            <a href="/ripper" onclick="sessionStorage.setItem('prefill_url', '${url.replace(/'/g, "\\'")}');" style="display:inline-flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-4); background:var(--surface-3); border:1px solid var(--border-default); border-radius:var(--radius-md); color:var(--text-secondary); font-size:var(--text-sm); text-decoration:none; transition:all 0.15s ease;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text-primary)';" onmouseout="this.style.borderColor='var(--border-default)';this.style.color='var(--text-secondary)';">
+                                <span style="font-size:1.1em;">⚡</span> Rip Components
+                            </a>
+                        </div>
                     </div>
                 </div>
             `;
@@ -5774,6 +5936,7 @@
                     metrics: [
                         { key: 'scan_timing', icon: '⏱', title: 'Scan Timing' },
                         { key: 'performance', icon: '⚡', title: 'Performance' },
+                        { key: 'css_analytics', icon: '🧬', title: 'CSS Analytics' },
                         { key: 'css_efficiency', icon: '📊', title: 'CSS Efficiency' },
                         { key: 'css_specificity', icon: '⚖', title: 'CSS Specificity' },
                         { key: 'accessibility', icon: '♿', title: 'Accessibility' },
@@ -5825,7 +5988,7 @@
                     const data = evidence[metric.key];
                     if (!data) return;
 
-                    const card = createMetricCard(metric.icon, metric.title, data);
+                    const card = createMetricCard(metric.icon, metric.title, data, metric.key);
                     categoryCards.push(card);
                     metricsContainer.appendChild(card);
                 });
@@ -6175,9 +6338,11 @@
             return Math.min(100, score);
         }
 
-        function createMetricCard(icon, title, data) {
+        function createMetricCard(icon, title, data, metricKey) {
             const card = document.createElement('div');
             card.className = 'metric-card';
+            // Tag with metric key so ?metric= URL param can find and highlight it
+            if (metricKey) card.dataset.metricKey = metricKey;
 
             const confidenceClass = data.confidence >= 80 ? 'high' : data.confidence >= 60 ? 'medium' : 'low';
 
@@ -6270,6 +6435,8 @@
                 bodyHTML = createContrastAuditCard(icon, title, data, confidenceClass);
             } else if (title === 'Scan Timing') {
                 bodyHTML = createScanTimingCard(icon, title, data, confidenceClass);
+            } else if (title === 'CSS Analytics') {
+                bodyHTML = createCSSAnalyticsCard(icon, title, data, confidenceClass);
             } else if (title === 'CSS Efficiency') {
                 bodyHTML = createCSSEfficiencyCard(icon, title, data, confidenceClass);
             } else if (title === 'CSS Specificity') {
@@ -6452,6 +6619,18 @@
                     return safeDisplayValue(data.pattern);
                 case 'Animations':
                     return safeDisplayValue(data.pattern);
+                case 'CSS Analytics': {
+                    const soph = data.sophistication_score;
+                    const rules = data.stylesheet_stats?.total_rules;
+                    const vars = data.custom_property_sophistication?.total;
+                    if (soph != null) {
+                        let s = `Modernity ${soph}/100`;
+                        if (rules != null) s += `, ${rules.toLocaleString()} rules`;
+                        if (vars != null) s += `, ${vars} CSS vars`;
+                        return s;
+                    }
+                    return safeDisplayValue(data.pattern);
+                }
                 case 'Performance':
                     return safeDisplayValue(data.pattern);
                 case 'SEO':
@@ -6781,73 +6960,80 @@
             const mediaQueries = data.media_queries || [];
             const uniqueBPs = Array.isArray(data.unique_breakpoints) ? data.unique_breakpoints : [];
 
-            // Parse breakpoint pixel values from unique_breakpoints or breakpoints object
             let bpValues = uniqueBPs.map(v => typeof v === 'number' ? v : parseInt(v)).filter(v => v > 0 && v < 3000);
             if (bpValues.length === 0) {
-                // Try parsing from breakpoints object values
                 bpValues = Object.values(breakpoints).map(v => parseInt(String(v))).filter(v => v > 0 && v < 3000);
             }
-            bpValues.sort((a, b) => a - b);
+            bpValues = [...new Set(bpValues)].sort((a, b) => a - b);
 
-            // Device labels for common ranges
-            function deviceLabel(px) {
-                if (px <= 480) return 'Phone';
-                if (px <= 768) return 'Tablet';
-                if (px <= 1024) return 'Laptop';
-                if (px <= 1440) return 'Desktop';
-                return 'Wide';
+            // Map breakpoints to device categories
+            function deviceMeta(px) {
+                if (px <= 480)  return { label: 'Phone',   w: 22, h: 38, radius: 4, color: 'var(--accent)' };
+                if (px <= 768)  return { label: 'Tablet',  w: 32, h: 40, radius: 4, color: '#34c759' };
+                if (px <= 1024) return { label: 'Laptop',  w: 48, h: 32, radius: 3, color: '#0a84ff' };
+                if (px <= 1440) return { label: 'Desktop', w: 60, h: 36, radius: 3, color: '#bf5af2' };
+                return                { label: 'Wide',    w: 72, h: 34, radius: 3, color: '#ff9f0a' };
             }
 
-            // Build visual ruler with collision detection
-            const maxPx = Math.max(...bpValues, 1536);
-            const RULER_EST_WIDTH = 600; // approx rendered width for gap calc
-            const MIN_LABEL_GAP = 55;    // min px between labels before staggering
-
-            // Build markers with collision detection
-            const markers = bpValues.map(px => ({
-                px,
-                pct: Math.min((px / maxPx) * 100, 98),
-                label: deviceLabel(px),
-                stagger: false
-            }));
-            // Detect collisions — stagger overlapping labels to bottom row
-            markers.forEach((m, i) => {
-                if (i > 0) {
-                    const gap = (m.pct - markers[i - 1].pct) / 100 * RULER_EST_WIDTH;
-                    if (gap < MIN_LABEL_GAP) m.stagger = true;
+            // De-duplicate by device category — group adjacent breakpoints
+            // into the same device, show the range
+            const devices = [];
+            const seen = new Set();
+            bpValues.forEach(px => {
+                const d = deviceMeta(px);
+                if (!seen.has(d.label)) {
+                    seen.add(d.label);
+                    devices.push({ ...d, breakpoints: [px] });
+                } else {
+                    devices[devices.length - 1].breakpoints.push(px);
                 }
             });
 
-            const rulerHTML = bpValues.length > 0 ? `
-                <div style="position:relative; height:${markers.some(m => m.stagger) ? '72px' : '56px'}; margin:var(--space-4) 0 var(--space-2);">
-                    <!-- Ruler bar -->
-                    <div style="position:absolute; top:18px; left:0; right:0; height:4px; background:var(--surface-3); border-radius:2px;"></div>
-                    ${markers.map(m => {
-                        const topPos = m.stagger ? '30px' : '0';
+            // Build device silhouette row (glossary style)
+            const devicesHTML = devices.length > 0 ? `
+                <div style="display:flex; gap:10px; align-items:flex-end; margin:var(--space-4) 0 var(--space-3); padding:var(--space-3) var(--space-3); background:var(--surface-0); border-radius:var(--radius-md); overflow-x:auto;">
+                    ${devices.map(d => {
+                        const bpLabel = d.breakpoints.length === 1
+                            ? d.breakpoints[0] + 'px'
+                            : d.breakpoints[0] + '–' + d.breakpoints[d.breakpoints.length - 1] + 'px';
                         return `
-                            <div style="position:absolute; left:${m.pct}%; transform:translateX(-50%); text-align:center; top:${topPos};">
-                                <div style="font-size:0.65rem; color:var(--text-tertiary); white-space:nowrap;">${m.stagger ? '' : m.label}</div>
-                                <div style="width:2px; height:12px; background:var(--accent); margin:2px auto;"></div>
-                                <div style="font-family:var(--font-mono); font-size:0.68rem; color:var(--text-secondary); white-space:nowrap;">${m.px}px</div>
+                        <div style="display:flex; flex-direction:column; align-items:center; gap:4px; flex-shrink:0;">
+                            <div style="
+                                width:${d.w}px; height:${d.h}px;
+                                border:1.5px solid ${d.color};
+                                border-radius:${d.radius}px;
+                                background:${d.color}15;
+                                position:relative;
+                                display:flex; align-items:center; justify-content:center;
+                            ">
+                                <div style="
+                                    width:calc(100% - 6px); height:calc(100% - 6px);
+                                    background:${d.color}25;
+                                    border-radius:${Math.max(d.radius - 2, 1)}px;
+                                "></div>
                             </div>
-                        `;
+                            <div style="font-size:0.6rem; font-weight:600; color:${d.color}; letter-spacing:0.02em;">${d.label}</div>
+                            <div style="font-size:0.58rem; font-family:var(--font-mono); color:var(--text-disabled); white-space:nowrap;">${bpLabel}</div>
+                        </div>`;
                     }).join('')}
                 </div>
             ` : '<div style="color:var(--text-disabled); font-size:var(--text-sm); padding:var(--space-3) 0;">No breakpoint values detected</div>';
 
-            // Plain English explanation
-            const explainHTML = bpValues.length > 0
-                ? `<div style="font-size:var(--text-xs); color:var(--text-tertiary); margin-bottom:var(--space-3);">The layout changes at these widths to fit different devices.</div>`
+            // Count summary
+            const summaryHTML = bpValues.length > 0
+                ? `<div style="font-size:var(--text-xs); color:var(--text-tertiary); margin-bottom:var(--space-2);">Adapts across <strong style="color:var(--text-secondary);">${bpValues.length}</strong> breakpoint${bpValues.length !== 1 ? 's' : ''} from ${bpValues[0]}px to ${bpValues[bpValues.length - 1]}px</div>`
                 : '';
 
-            // Media query details (collapsible in body)
+            // Media query details — collapsed by default for cleanliness
             const mqHTML = mediaQueries.length > 0 ? `
-                <div style="margin-top:var(--space-3);">
-                    <div style="font-size:0.72rem; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:var(--space-2);">Media Queries (${mediaQueries.length})</div>
-                    ${mediaQueries.map(mq => `
-                        <div style="padding:0.35rem 0.5rem; margin:0.2rem 0; background:var(--surface-0); border-left:2px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0; color:var(--text-secondary); font-family:var(--font-mono); font-size:0.75rem; word-break:break-all;">${mq}</div>
-                    `).join('')}
-                </div>
+                <details style="margin-top:var(--space-3);">
+                    <summary style="font-size:0.72rem; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:0.04em; cursor:pointer; user-select:none;">Media Queries (${mediaQueries.length})</summary>
+                    <div style="margin-top:var(--space-2); max-height:200px; overflow-y:auto;">
+                        ${mediaQueries.map(mq => `
+                            <div style="padding:0.3rem 0.5rem; margin:0.15rem 0; background:var(--surface-0); border-left:2px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0; color:var(--text-secondary); font-family:var(--font-mono); font-size:0.72rem; word-break:break-all;">${mq}</div>
+                        `).join('')}
+                    </div>
+                </details>
             ` : '';
 
             return `
@@ -6859,8 +7045,8 @@
                     </div>
                     <div class="confidence-badge confidence-${confidenceClass}">${data.confidence}%</div>
                 </div>
-                ${explainHTML}
-                ${rulerHTML}
+                ${summaryHTML}
+                ${devicesHTML}
                 ${data.current_size ? `<div style="font-size:var(--text-xs); color:var(--text-disabled);">Current viewport: ${data.current_size.width} × ${data.current_size.height}px</div>` : ''}
                 ${mqHTML}
             `;
@@ -7375,7 +7561,7 @@
                 ${healthSummary ? `<div style="font-size: 0.75rem; color: #777; margin-bottom: 1rem; line-height: 1.4;">${healthSummary}</div>` : ''}
             `;
 
-            // Layer panel — Photoshop-style list
+            // Layer panel — Photoshop-style list with tier thumbnails
             const layerPanelId = 'lp-' + Math.random().toString(36).slice(2, 8);
             const layerPanelHTML = sortedLayers.map(([name, info], i) => {
                 const tierName = name.includes(': ') ? name.split(': ')[0] : name;
@@ -7386,14 +7572,33 @@
                 const elements = (info.elements || []).filter(el => el.isVisible !== false);
                 const topEls = elements.slice(0, 4);
                 const detailId = layerPanelId + '-d' + i;
+                const lightboxId = layerPanelId + '-lb' + i;
 
-                // Friendly description: what's IN the layer
-                const elSummary = topEls.map(el => {
-                    const label = el.label || el.selector || '';
-                    // Extract just the meaningful part
-                    if (label.length > 28) return label.substring(0, 25) + '…';
-                    return label;
-                });
+                // Tier screenshot thumbnail
+                const hasScreenshot = !!info.screenshot_b64;
+                const coveragePct = info.viewport_coverage_pct || 0;
+
+                // Thumbnail — opens global lightbox on click
+                const thumbnailHTML = hasScreenshot ? `
+                    <div onclick="event.stopPropagation(); showZTierLightbox('${tierName}', '${(purpose || '').replace(/'/g, "\\'")}', '${info.z_index || 0}${info.z_max && info.z_max !== info.z_index ? '–' + info.z_max : ''}', '${coveragePct}', '${lc.text}', '${lc.border}', '${lightboxId}');"
+                         style="width: 80px; height: 52px; flex-shrink: 0; border-radius: 4px; overflow: hidden; border: 1px solid ${lc.border}40; cursor: pointer; position: relative; background: #0f0f0f;"
+                         title="Click to expand">
+                        <img src="data:image/png;base64,${info.screenshot_b64}" style="width: 100%; height: 100%; object-fit: cover; opacity: 0.9;" />
+                        <div style="position: absolute; bottom: 2px; right: 3px; font-size: 0.5rem; color: ${lc.text}; background: rgba(0,0,0,0.7); padding: 1px 4px; border-radius: 2px;">${coveragePct}%</div>
+                    </div>
+                ` : `
+                    <div style="width: 80px; height: 52px; flex-shrink: 0; border-radius: 4px; border: 1px dashed rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2);">
+                        <span style="font-size: 0.6rem; color: #444;">${count} el</span>
+                    </div>
+                `;
+
+                // Store screenshot data for the global lightbox
+                if (hasScreenshot) {
+                    window.__zTierScreenshots = window.__zTierScreenshots || {};
+                    window.__zTierScreenshots[lightboxId] = info.screenshot_b64;
+                }
+
+                const lightboxHTML = '';
 
                 // Position badges
                 const badges = [];
@@ -7402,21 +7607,23 @@
                 if (interCount > 0) badges.push('Interactive');
 
                 return `
+                ${lightboxHTML}
                 <div style="border-bottom: 1px solid rgba(255,255,255,0.04);">
                     <div onclick="var d=document.getElementById('${detailId}');var o=d.style.maxHeight!=='0px'&&d.style.maxHeight;d.style.maxHeight=o?'0px':'400px';d.style.opacity=o?'0':'1';this.querySelector('.lp-arrow').style.transform=o?'rotate(-90deg)':'rotate(0deg)';"
-                         style="display: flex; align-items: center; gap: 0.6rem; padding: 0.65rem 0.75rem; cursor: pointer; transition: background 0.15s;"
+                         style="display: flex; align-items: center; gap: 0.6rem; padding: 0.65rem 0.75rem; cursor: pointer; transition: background 0.15s; border-left: 3px solid ${lc.border};"
                          onmouseenter="this.style.background='rgba(255,255,255,0.03)'" onmouseleave="this.style.background='none'">
-                        <!-- Layer visibility dot -->
-                        <div style="width: 10px; height: 10px; border-radius: 50%; background: ${lc.border}; flex-shrink: 0; box-shadow: 0 0 6px ${lc.border}40;"></div>
-                        <!-- Purpose icon -->
-                        <span style="font-size: 1rem; flex-shrink: 0;">${purposeIcon(purpose || tierName)}</span>
-                        <!-- Layer name -->
+                        <!-- Tier thumbnail -->
+                        ${thumbnailHTML}
+                        <!-- Layer info -->
                         <div style="flex: 1; min-width: 0;">
-                            <div style="font-size: 0.82rem; color: rgba(255,255,255,0.9); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                ${purpose || tierName}
+                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                <span style="font-size: 1rem; flex-shrink: 0;">${purposeIcon(purpose || tierName)}</span>
+                                <div style="font-size: 0.82rem; color: rgba(255,255,255,0.9); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    ${purpose || tierName}
+                                </div>
                             </div>
-                            <div style="font-size: 0.65rem; color: #555; margin-top: 1px;">
-                                ${count} element${count !== 1 ? 's' : ''}${badges.length ? ' · ' + badges.join(', ') : ''}
+                            <div style="font-size: 0.65rem; color: #555; margin-top: 2px;">
+                                ${count} element${count !== 1 ? 's' : ''}${badges.length ? ' · ' + badges.join(', ') : ''}${coveragePct > 0 ? ` · ${coveragePct}% viewport` : ''}
                             </div>
                         </div>
                         <!-- Tier pill -->
@@ -7533,7 +7740,6 @@
                     </div>
                     ${layerPanelHTML}
                 </div>
-                ${stackHTML}
                 ${conflictsHTML}
                 ${ghostToggleHTML}
             `;
@@ -7856,6 +8062,11 @@
 
             table.style.display = 'block';
             document.getElementById('exportBtn').style.display = 'block';
+            document.getElementById('exportDesignBtn').style.display = 'block';
+            document.getElementById('exportJsonBtn').style.display = 'block';
+            document.getElementById('jsonCrackBtn').style.display = 'block';
+            document.getElementById('exportFigmaBtn').style.display = 'block';
+            document.getElementById('exportCatalogBtn').style.display = 'block';
         }
 
         function showEmptyTabState(tabId, reason, tabName, helpText) {
@@ -9090,6 +9301,122 @@
             `;
         }
 
+        // ── CSS Analytics Card ───────────────────────────────────────────
+        function createCSSAnalyticsCard(icon, title, data, confidenceClass) {
+            const score = data.sophistication_score || 0;
+            const breakdown = data.sophistication_breakdown || [];
+            const stats = data.stylesheet_stats || {};
+            const modern = data.modern_features || {};
+            const custom = data.custom_property_sophistication || {};
+            const dtcg = data.dtcg_tokens || {};
+            const dtcgTotal = (dtcg.color || []).length + (dtcg.spacing || []).length +
+                              (dtcg.typography || []).length + (dtcg.radius || []).length +
+                              (dtcg.shadow || []).length;
+
+            // Score color: treat it as a CSS modernity indicator, not quality
+            const scoreColor = score >= 60 ? '#68d68d' : score >= 35 ? '#ff9f0a' : '#7ec8e3';
+
+            // Key stat pills
+            const totalRules = stats.total_rules || 0;
+            const customCount = custom.total || 0;
+            const modernFeatureCount = [
+                modern.nesting, modern.cascade_layers, modern.container_queries,
+                modern.has_selector, modern.view_transitions, modern.color_mix,
+                modern.subgrid, modern.linear_easing
+            ].filter(Boolean).length;
+
+            // Breakdown rows — only show non-zero earners + the top missed ones
+            const earned = breakdown.filter(b => b.earned > 0);
+            const missed = breakdown.filter(b => b.earned === 0 && b.cap >= 8)
+                .slice(0, 4); // Top missed opportunities
+
+            function breakdownRow(b, dimmed) {
+                const pct = Math.round((b.earned / b.cap) * 100);
+                const barColor = b.earned > 0 ? '#68d68d' : 'rgba(255,255,255,0.08)';
+                const opacity = dimmed ? 'opacity:0.45;' : '';
+                return `
+                    <div style="padding:3px 0; border-bottom:1px solid rgba(255,255,255,0.04); ${opacity}">
+                        <div style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
+                            <div style="flex:1; min-width:0;">
+                                <span style="font-size:0.75rem; color:${b.earned > 0 ? '#ccc' : '#666'};">${b.signal}</span>
+                            </div>
+                            <span style="font-size:0.72rem; font-family:'SF Mono',monospace; color:${b.earned > 0 ? '#68d68d' : '#444'}; flex-shrink:0;">
+                                ${b.earned}/${b.cap}
+                            </span>
+                        </div>
+                        <div style="height:3px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden;">
+                            <div style="height:100%; width:${pct}%; background:${barColor}; border-radius:2px;"></div>
+                        </div>
+                        ${b.note ? `<div style="font-size:0.62rem; color:#555; margin-top:1px;">${b.note.split('.')[0]}</div>` : ''}
+                    </div>
+                `;
+            }
+
+            const earnedRows = earned.map(b => breakdownRow(b, false)).join('');
+            const missedRows = missed.map(b => breakdownRow(b, true)).join('');
+
+            return `
+                <div class="metric-header">
+                    <div class="metric-title">
+                        <span class="metric-icon">${icon}</span>
+                        ${title}
+                    </div>
+                    <span class="confidence-badge confidence-${confidenceClass}">${data.confidence || 0}%</span>
+                </div>
+                <div class="metric-body">
+                    <!-- Score hero + context -->
+                    <div style="display:flex; align-items:flex-start; gap:1rem; margin-bottom:0.7rem;">
+                        <div style="flex-shrink:0; text-align:center; padding:0.5rem 0.9rem; border-radius:var(--radius-sm); border:2px solid ${scoreColor}; background:rgba(255,255,255,0.02);">
+                            <div style="font-size:1.8rem; font-weight:800; color:${scoreColor}; font-family:var(--font-display); line-height:1;">${score}</div>
+                            <div style="font-size:0.58rem; color:#666; margin-top:2px;">/ 100</div>
+                        </div>
+                        <div style="flex:1;">
+                            <div style="font-size:0.78rem; font-weight:600; color:#ccc; margin-bottom:3px;">CSS Modernity Score</div>
+                            <div style="font-size:0.7rem; color:#888; line-height:1.4;">Measures use of modern CSS features — custom properties, nesting, cascade layers, container queries, etc. Not a quality judgment.</div>
+                        </div>
+                    </div>
+
+                    <!-- Stat pills -->
+                    <div style="display:flex; gap:0.5rem; margin-bottom:0.7rem; flex-wrap:wrap;">
+                        <div style="flex:1; min-width:60px; text-align:center; padding:0.4rem; background:rgba(255,255,255,0.03); border-radius:var(--radius-sm);">
+                            <div style="font-size:0.85rem; font-weight:700; color:#ccc; font-family:'SF Mono',monospace;">${totalRules.toLocaleString()}</div>
+                            <div style="font-size:0.62rem; color:#888;">Rules</div>
+                        </div>
+                        <div style="flex:1; min-width:60px; text-align:center; padding:0.4rem; background:rgba(255,255,255,0.03); border-radius:var(--radius-sm);">
+                            <div style="font-size:0.85rem; font-weight:700; color:${customCount >= 30 ? '#68d68d' : customCount >= 10 ? '#ff9f0a' : '#ccc'}; font-family:'SF Mono',monospace;">${customCount}</div>
+                            <div style="font-size:0.62rem; color:#888;">CSS vars</div>
+                        </div>
+                        <div style="flex:1; min-width:60px; text-align:center; padding:0.4rem; background:rgba(255,255,255,0.03); border-radius:var(--radius-sm);">
+                            <div style="font-size:0.85rem; font-weight:700; color:${modernFeatureCount >= 3 ? '#68d68d' : modernFeatureCount >= 1 ? '#ff9f0a' : '#ccc'}; font-family:'SF Mono',monospace;">${modernFeatureCount}</div>
+                            <div style="font-size:0.62rem; color:#888;">Modern features</div>
+                        </div>
+                        ${dtcgTotal > 0 ? `
+                        <div style="flex:1; min-width:60px; text-align:center; padding:0.4rem; background:rgba(255,255,255,0.03); border-radius:var(--radius-sm);">
+                            <div style="font-size:0.85rem; font-weight:700; color:#c9b8ff; font-family:'SF Mono',monospace;">${dtcgTotal}</div>
+                            <div style="font-size:0.62rem; color:#888;">DTCG tokens</div>
+                        </div>` : ''}
+                    </div>
+
+                    <!-- Score breakdown -->
+                    ${earned.length > 0 ? `
+                    <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:0.5rem; margin-bottom:0.4rem;">
+                        <div style="font-size:0.7rem; color:#888; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">What scored</div>
+                        ${earnedRows}
+                    </div>` : `
+                    <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:0.5rem; margin-bottom:0.4rem;">
+                        <div style="font-size:0.72rem; color:#666;">No modern CSS features detected — uses standard properties only.</div>
+                    </div>`}
+
+                    <!-- Missed opportunities -->
+                    ${missedRows ? `
+                    <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:0.4rem;">
+                        <div style="font-size:0.7rem; color:#555; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">Not yet used (highest point opportunities)</div>
+                        ${missedRows}
+                    </div>` : ''}
+                </div>
+            `;
+        }
+
         // ── CSS Efficiency Card ──────────────────────────────────────────
         function createCSSEfficiencyCard(icon, title, data, confidenceClass) {
             const usedPct = data.used_percentage || 0;
@@ -9862,12 +10189,13 @@
                 { key: 'advertising',  label: 'Advertising',  color: '#ff6b6b', icon: '📢' }
             ];
 
-            // Extract unique domains from URLs
+            // Extract unique domains from URLs (items may be strings or {vendor, url} objects)
             function getDomains(urls) {
                 const seen = new Set();
                 return urls.map(u => {
-                    try { return new URL(u).hostname; } catch(e) { return u.split('/')[0]; }
-                }).filter(d => { if (seen.has(d)) return false; seen.add(d); return true; });
+                    const raw = (typeof u === 'object' && u !== null) ? (u.url || u.vendor || '') : String(u || '');
+                    try { return new URL(raw).hostname; } catch(e) { return typeof raw === 'string' ? raw.split('/')[0] : String(raw); }
+                }).filter(d => d && !seen.has(d) && (seen.add(d), true));
             }
 
             // Build category blocks
@@ -10041,6 +10369,39 @@
             `;
         }
 
+        // ── Layout Interpretation (human-readable labels) ─────────────
+        function interpretLayout(flex, grid, density) {
+            var strategy, description;
+            if (grid > flex && grid > 10) {
+                strategy = 'Grid-First Layout';
+                description = 'Content organized in explicit columns and rows — editorial or card-based design.';
+            } else if (flex > 100 && grid < 5) {
+                strategy = 'Flow-Based Layout';
+                description = 'Components stack and reflow naturally. Common in SPAs and component-heavy apps.';
+            } else if (flex > 20 && grid > 5) {
+                strategy = 'Hybrid Layout';
+                description = 'Grid for page structure, flexbox for component internals — modern best practice.';
+            } else if (flex < 10 && grid < 3) {
+                strategy = 'Minimal Layout';
+                description = 'Simple document flow with few explicit layout containers — content-first approach.';
+            } else {
+                strategy = 'Flex-Dominant Layout';
+                description = 'Flexbox handles most alignment — typical of navigation-heavy or app-like interfaces.';
+            }
+
+            // Density interpretation
+            var densityLabel = '';
+            if (typeof density === 'number') {
+                if (density >= 95)      densityLabel = 'Dashboard-dense — every pixel earns its rent';
+                else if (density >= 88) densityLabel = 'Packed — minimal breathing room, information-maximal';
+                else if (density >= 75) densityLabel = 'Content-rich — moderate whitespace';
+                else if (density >= 55) densityLabel = 'Balanced — comfortable reading density';
+                else                    densityLabel = 'Spacious — generous whitespace, editorial feel';
+            }
+
+            return { strategy: strategy, description: description, densityLabel: densityLabel };
+        }
+
         // ── Layout System Card ────────────────────────────────────────
         function createLayoutSystemCard(icon, title, data, confidenceClass) {
             const details = data.details || {};
@@ -10192,6 +10553,14 @@
                     <span class="confidence-badge confidence-${confidenceClass}">${data.confidence || 0}%</span>
                 </div>
                 <div class="metric-body">
+                    <!-- Human-readable layout interpretation -->
+                    ${(() => {
+                        const interp = interpretLayout(flex, grid);
+                        return `<div style="margin-bottom:0.65rem; padding:0.6rem 0.75rem; background:rgba(255,255,255,0.03); border-radius:8px; border-left:3px solid #7ec8e3;">
+                            <div style="font-weight:600; color:#e2e8f0; font-size:0.85rem;">${interp.strategy}</div>
+                            <div style="color:#888; font-size:0.72rem; margin-top:0.2rem;">${interp.description}</div>
+                        </div>`;
+                    })()}
                     <!-- Distribution bar -->
                     <div style="height:8px; border-radius:4px; overflow:hidden; display:flex; margin-bottom:0.5rem; background:rgba(255,255,255,0.05);">
                         ${barParts}
@@ -10328,6 +10697,68 @@
             const curves = easingPalette.curves || [];
             const roles  = easingPalette.roles  || {};
 
+            // ── SVG Bezier Curve Graph ──
+            function createBezierCurveSVG(cssValue, w = 100, h = 80) {
+                const pts = parseBezierPts(cssValue);
+                if (!pts) {
+                    const norm = (cssValue || '').trim().toLowerCase();
+                    if (norm.startsWith('steps')) {
+                        const sm = norm.match(/steps\(\s*(\d+)/);
+                        const n = sm ? parseInt(sm[1]) : 4;
+                        let path = 'M 0 ' + h;
+                        for (let i = 0; i < n; i++) {
+                            const sx = (i / n) * w, sy = h - (i / n) * h;
+                            path += ' L ' + sx + ' ' + sy + ' L ' + ((i+1)/n)*w + ' ' + sy;
+                        }
+                        path += ' L ' + w + ' 0';
+                        return '<svg viewBox="-2 -6 '+(w+4)+' '+(h+12)+'" width="'+w+'" height="'+h+'" style="overflow:visible;">' +
+                            '<line x1="0" y1="'+h+'" x2="'+w+'" y2="0" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3,3"/>' +
+                            '<path d="'+path+'" fill="none" stroke="#c9b8ff" stroke-width="2"/></svg>';
+                    }
+                    if (norm.startsWith('linear(')) {
+                        const inner = norm.match(/linear\((.+)\)/);
+                        if (inner) {
+                            const vals = inner[1].split(',').map(function(s) {
+                                const nums = s.trim().match(/-?[\d.]+/);
+                                return nums ? parseFloat(nums[0]) : null;
+                            }).filter(function(v) { return v !== null; });
+                            if (vals.length > 1) {
+                                let path = 'M 0 ' + (h - vals[0] * h);
+                                for (let i = 1; i < vals.length; i++) {
+                                    const x = (i / (vals.length - 1)) * w;
+                                    const y = h - Math.min(1.3, Math.max(-0.3, vals[i])) * h;
+                                    path += ' L ' + x + ' ' + y;
+                                }
+                                const hasOvershoot = vals.some(function(v) { return v > 1.02 || v < -0.02; });
+                                const col = hasOvershoot ? '#ff9f0a' : '#c9b8ff';
+                                return '<svg viewBox="-2 -6 '+(w+4)+' '+(h+12)+'" width="'+w+'" height="'+h+'" style="overflow:visible;">' +
+                                    '<line x1="0" y1="'+h+'" x2="'+w+'" y2="0" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3,3"/>' +
+                                    '<line x1="0" y1="0" x2="'+w+'" y2="0" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" stroke-dasharray="2,4"/>' +
+                                    '<path d="'+path+'" fill="none" stroke="'+col+'" stroke-width="2"/></svg>';
+                            }
+                        }
+                    }
+                    return '<svg viewBox="-2 -6 '+(w+4)+' '+(h+12)+'" width="'+w+'" height="'+h+'" style="overflow:visible;">' +
+                        '<line x1="0" y1="'+h+'" x2="'+w+'" y2="0" stroke="#c9b8ff" stroke-width="2" opacity="0.3"/></svg>';
+                }
+                const [x1, y1, x2, y2] = pts;
+                const cx1 = x1 * w, cy1 = h - y1 * h;
+                const cx2 = x2 * w, cy2 = h - y2 * h;
+                const isSpring = y1 > 1 || y1 < -0.1 || y2 > 1.1;
+                const curveColor = isSpring ? '#ff9f0a' : '#c9b8ff';
+                return '<svg viewBox="-2 -6 '+(w+4)+' '+(h+12)+'" width="'+w+'" height="'+h+'" style="overflow:visible;">' +
+                    '<line x1="0" y1="'+h+'" x2="'+w+'" y2="0" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3,3"/>' +
+                    '<line x1="0" y1="0" x2="'+w+'" y2="0" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" stroke-dasharray="2,4"/>' +
+                    '<line x1="0" y1="'+h+'" x2="'+cx1+'" y2="'+cy1+'" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>' +
+                    '<line x1="'+w+'" y1="0" x2="'+cx2+'" y2="'+cy2+'" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>' +
+                    '<path d="M 0 '+h+' C '+cx1+' '+cy1+', '+cx2+' '+cy2+', '+w+' 0" fill="none" stroke="'+curveColor+'" stroke-width="2.5" stroke-linecap="round"/>' +
+                    '<circle cx="'+cx1+'" cy="'+cy1+'" r="3.5" fill="'+curveColor+'" stroke="rgba(0,0,0,0.4)" stroke-width="1"/>' +
+                    '<circle cx="'+cx2+'" cy="'+cy2+'" r="3.5" fill="'+curveColor+'" stroke="rgba(0,0,0,0.4)" stroke-width="1"/>' +
+                    '<circle cx="0" cy="'+h+'" r="2" fill="rgba(255,255,255,0.3)"/>' +
+                    '<circle cx="'+w+'" cy="0" r="2" fill="rgba(255,255,255,0.3)"/>' +
+                '</svg>';
+            }
+
             // Parse cubic-bezier control points from a CSS value string
             function parseBezierPts(val) {
                 const named = {
@@ -10350,6 +10781,16 @@
                 if (v === 'ease-out')    return { short: 'Starts fast, slows down', detail: 'Decelerates to a stop — natural for entrances' };
                 if (v === 'ease-in-out') return { short: 'Slow start and stop',     detail: 'Accelerates then decelerates symmetrically' };
                 if (v.startsWith('steps')) return { short: 'Jumps in steps',        detail: 'Discrete frames — no smooth interpolation' };
+                if (v.startsWith('linear(')) {
+                    // Check for spring-like oscillation
+                    const inner = v.match(/linear\((.+)\)/);
+                    if (inner) {
+                        const vals = inner[1].split(',').map(function(s) { const n = s.trim().match(/-?[\d.]+/); return n ? parseFloat(n[0]) : null; }).filter(function(x) { return x !== null; });
+                        const hasOvershoot = vals.some(function(x) { return x > 1.02 || x < -0.02; });
+                        if (hasOvershoot) return { short: 'Spring bounce', detail: 'Physics-based — overshoots target then settles' };
+                    }
+                    return { short: 'Custom linear stops', detail: 'Piecewise-linear timing with explicit stops' };
+                }
                 const pts = parseBezierPts(v);
                 if (pts) {
                     const [x1, y1, x2, y2] = pts;
@@ -10374,6 +10815,7 @@
                 if (v === 'linear')      return { label: 'constant',  color: '#666'    };
                 if (v.startsWith('cubic-bezier')) return { label: 'custom', color: '#ff9f0a' };
                 if (v.startsWith('steps'))        return { label: 'stepped', color: '#ff6b6b' };
+                if (v.startsWith('linear('))      return { label: 'custom', color: '#ff9f0a' };
                 return null;
             }
 
@@ -10386,31 +10828,43 @@
                     ${curves.slice(0, 8).map(c => {
                         const roleName = c.role || '';
                         const knownAs  = c.known_as || '';
+                        const isSpringLike = c.spring_like || roleName === 'spring';
                         const uc = easingUseCase(c.value);
                         const desc = easingDescription(c.value);
                         const mwEas = mwEasing(c.value);
                         const ucChip = uc
                             ? `<span style="flex-shrink:0; font-size:0.62rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:${uc.color}; background:${uc.color}18; border:1px solid ${uc.color}30; border-radius:4px; padding:1px 5px;">${uc.label}</span>`
                             : '';
+                        const springChip = isSpringLike
+                            ? '<span style="flex-shrink:0; font-size:0.58rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#ff9f0a; background:rgba(255,159,10,0.12); border:1px solid rgba(255,159,10,0.3); border-radius:4px; padding:1px 5px;">spring</span>'
+                            : '';
                         return `
                         <div style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-                                <div style="flex: 1; min-width: 0;">
-                                    <div style="font-size: 0.82rem; color: var(--text-primary); font-weight: 500;">${desc.short}</div>
-                                    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap;">
-                                        <span style="font-family: var(--font-mono); font-size: 0.65rem; color: #c9b8ff; word-break: break-all;">${c.value || ''}</span>
-                                        ${mwEas ? mwPill(mwEas) : ''}
-                                        ${roleName ? '<span style="font-size: 0.6rem; color: #0a84ff; text-transform: capitalize;">' + roleName + '</span>' : ''}
-                                        ${knownAs && knownAs !== (c.value || '').trim().toLowerCase() ? '<span style="font-size: 0.6rem; color: #666;">' + knownAs + '</span>' : ''}
+                            <div style="display: grid; grid-template-columns: 100px 1fr; gap: 12px; align-items: start;">
+                                <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 4px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                                    ${createBezierCurveSVG((c.value || '').trim(), 90, 72)}
+                                </div>
+                                <div>
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                                        <div style="flex: 1; min-width: 0;">
+                                            <div style="font-size: 0.82rem; color: var(--text-primary); font-weight: 500;">${desc.short}</div>
+                                            <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap;">
+                                                <span style="font-family: var(--font-mono); font-size: 0.62rem; color: #c9b8ff; word-break: break-all;">${(c.value || '').substring(0, 50)}</span>
+                                                ${mwEas ? mwPill(mwEas) : ''}
+                                                ${springChip}
+                                                ${roleName && roleName !== 'spring' ? '<span style="font-size: 0.58rem; color: #0a84ff; text-transform: capitalize;">' + roleName + '</span>' : ''}
+                                                ${knownAs && knownAs !== (c.value || '').trim().toLowerCase() ? '<span style="font-size: 0.58rem; color: #666;">' + knownAs + '</span>' : ''}
+                                            </div>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                                            ${ucChip}
+                                            <div style="font-size: 0.68rem; color: #555; white-space: nowrap;">${c.count || 0}×</div>
+                                        </div>
+                                    </div>
+                                    <div class="motion-track">
+                                        <div class="motion-track-dot" style="--easing-fn:${(c.value || '').trim()};"></div>
                                     </div>
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-                                    ${ucChip}
-                                    <div style="font-size: 0.68rem; color: #555; white-space: nowrap;">${c.count || 0}×</div>
-                                </div>
-                            </div>
-                            <div class="motion-track">
-                                <div class="motion-track-dot" style="--easing-fn:${(c.value || '').trim()};"></div>
                             </div>
                         </div>`;
                     }).join('')}
@@ -10522,6 +10976,17 @@
                 `;
             }
 
+            // View Transitions API + linear easing badges
+            const vtBadge = data.view_transitions_api
+                ? '<span style="display:inline-block; font-size:0.58rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#34c759; background:rgba(52,199,89,0.12); border:1px solid rgba(52,199,89,0.3); border-radius:4px; padding:2px 6px; margin-right:6px;">View Transitions API</span>'
+                : '';
+            const linearBadge = data.linear_easing_function
+                ? '<span style="display:inline-block; font-size:0.58rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#ff9f0a; background:rgba(255,159,10,0.12); border:1px solid rgba(255,159,10,0.3); border-radius:4px; padding:2px 6px;">CSS linear()</span>'
+                : '';
+            const featureBadgesHTML = (vtBadge || linearBadge) ? `
+                <div style="margin-top:0.5rem; display:flex; flex-wrap:wrap; gap:4px;">${vtBadge}${linearBadge}</div>
+            ` : '';
+
             const topCurves = pickRepresentativeCurves(curves);
             const comparisonHTML = topCurves.length > 0 ? `
                 <div style="margin:var(--space-3) 0; padding:var(--space-4); background:var(--surface-0); border-radius:var(--radius-md);">
@@ -10533,16 +10998,19 @@
                         const roleColor = roleLabel === 'Most used' ? '#c9b8ff' : roleLabel === 'Linear baseline' ? 'var(--text-disabled)' : '#ff9f0a';
                         const isLast = idx === topCurves.length - 1;
                         return `
-                        <div style="display:grid; grid-template-columns:140px 1fr; gap:var(--space-3); align-items:start; ${isLast ? '' : 'margin-bottom:var(--space-4); padding-bottom:var(--space-3); border-bottom:1px solid var(--border-subtle);'}">
+                        <div style="display:grid; grid-template-columns:120px 1fr; gap:var(--space-3); align-items:start; ${isLast ? '' : 'margin-bottom:var(--space-4); padding-bottom:var(--space-3); border-bottom:1px solid var(--border-subtle);'}">
                             <div>
-                                <div style="font-size:0.62rem; color:${roleColor}; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; margin-bottom:2px;">${roleLabel}</div>
-                                <div style="font-size:0.82rem; color:var(--text-primary); font-weight:500; line-height:1.35;">${desc.short}</div>
-                                <div style="font-family:var(--font-mono); font-size:0.62rem; color:var(--text-tertiary); margin-top:4px; word-break:break-all;">${c.known_as || cssVal.substring(0, 30)}</div>
-                                <div style="font-size:0.6rem; color:var(--text-disabled); margin-top:2px;">${c.count || 0}× used</div>
+                                <div style="font-size:0.62rem; color:${roleColor}; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; margin-bottom:4px;">${roleLabel}</div>
+                                <div style="display:flex; align-items:center; justify-content:center; padding:6px; background:rgba(0,0,0,0.25); border-radius:8px; border:1px solid rgba(255,255,255,0.05);">
+                                    ${createBezierCurveSVG(cssVal, 100, 80)}
+                                </div>
+                                <div style="font-size:0.78rem; color:var(--text-primary); font-weight:500; line-height:1.35; margin-top:6px;">${desc.short}</div>
+                                <div style="font-family:var(--font-mono); font-size:0.58rem; color:var(--text-tertiary); margin-top:2px; word-break:break-all;">${c.known_as || cssVal.substring(0, 30)}</div>
+                                <div style="font-size:0.58rem; color:var(--text-disabled); margin-top:2px;">${c.count || 0}× used</div>
                             </div>
-                            <div>
-                                <div class="race-track">
-                                    <div class="race-track-element" style="--easing-fn:${cssVal};"></div>
+                            <div style="display:flex; flex-direction:column; justify-content:center; height:100%;">
+                                <div class="race-track" style="height:44px; border-radius:8px;">
+                                    <div class="race-track-element" style="--easing-fn:${cssVal}; height:30px; border-radius:6px;"></div>
                                 </div>
                                 ${createFrameDots(cssVal, '')}
                             </div>
@@ -10564,6 +11032,7 @@
                 ${comparisonHTML}
                 ${summaryHTML}
                 ${libsHTML}
+                ${featureBadgesHTML}
                 ${durationBarsHTML}
                 ${easingHTML}
                 ${choreoHTML}
@@ -10585,6 +11054,30 @@
             const patternType = pageStructure.pattern_type || '';
             const patternBadgeHTML = patternType ? `
                 <div style="display: inline-block; background: rgba(10,132,255,0.15); color: #0a84ff; border: 1px solid rgba(10,132,255,0.3); border-radius: 20px; padding: 4px 14px; font-size: 0.82rem; font-weight: 600; margin-bottom: 0.75rem;">${patternType}</div>
+            ` : '';
+
+            // ── Composition recipe (from layout_synthesis) ──
+            const layoutSyn = window.__currentEvidence?.layout_synthesis || {};
+            const recipe = layoutSyn.composition_recipe || [];
+            const keyDecisions = layoutSyn.key_decisions || [];
+            const recipeHTML = recipe.length > 0 ? `
+                <div style="margin-top: 0.75rem; margin-bottom: 0.75rem;">
+                    <div style="font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;">Page Composition</div>
+                    <ol style="margin: 0; padding-left: 1.4rem; list-style: none; counter-reset: recipe-step;">
+                        ${recipe.map(step => `
+                            <li style="counter-increment: recipe-step; position: relative; padding: 6px 0 6px 8px; font-size: 0.78rem; color: #ccc; border-left: 2px solid rgba(126,200,227,0.25); margin-left: -8px; padding-left: 16px;">
+                                <span style="position: absolute; left: -9px; top: 6px; width: 16px; height: 16px; border-radius: 50%; background: rgba(126,200,227,0.15); display: flex; align-items: center; justify-content: center; font-size: 0.58rem; color: #7ec8e3; font-weight: 700;">●</span>
+                                ${step}
+                            </li>
+                        `).join('')}
+                    </ol>
+                    ${keyDecisions.length > 0 ? `
+                        <div style="margin-top: 10px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border-left: 2px solid rgba(104,214,141,0.4);">
+                            <div style="font-size: 0.65rem; color: #68d68d; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Key Decisions</div>
+                            ${keyDecisions.map(d => `<div style="font-size: 0.72rem; color: #999; line-height: 1.5;">• ${d}</div>`).join('')}
+                        </div>
+                    ` : ''}
+                </div>
             ` : '';
 
             // ── Component zones list ──
@@ -10676,12 +11169,20 @@
                 </div>
             ` : '';
 
-            // ── Container hierarchy ──
-            const flexCount = containerHier.flex_count || 0;
-            const gridCount = containerHier.grid_count || 0;
+            // ── Container hierarchy with human-readable interpretation ──
+            const flexCount = containerHier.flex_containers?.count || containerHier.flex_count || 0;
+            const gridCount = containerHier.grid_containers?.count || containerHier.grid_count || 0;
+            const densityPct = whitespace.content_density_pct || whitespace.styled_density_pct || null;
+            const layoutInterp = interpretLayout(flexCount, gridCount, densityPct);
             const containerHTML = (flexCount > 0 || gridCount > 0) ? `
                 <div style="margin-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem;">
-                    <div style="font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Container Hierarchy</div>
+                    <!-- Interpretation -->
+                    <div style="margin-bottom:0.6rem; padding:0.5rem 0.65rem; background:rgba(255,255,255,0.03); border-radius:8px; border-left:3px solid #7ec8e3;">
+                        <div style="font-weight:600; color:#e2e8f0; font-size:0.82rem;">${layoutInterp.strategy}</div>
+                        <div style="color:#777; font-size:0.68rem; margin-top:0.15rem;">${layoutInterp.description}</div>
+                        ${layoutInterp.densityLabel ? `<div style="color:#666; font-size:0.65rem; margin-top:0.25rem; font-style:italic;">${layoutInterp.densityLabel}</div>` : ''}
+                    </div>
+                    <div style="font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">Container Counts</div>
                     <div style="display: flex; gap: 12px;">
                         ${flexCount > 0 ? `
                         <div style="display: flex; align-items: center; gap: 6px;">
@@ -10727,6 +11228,7 @@
                         How the page is spatially organized: structure pattern, component zones, whitespace density, and alignment.
                     </div>
                     ${patternBadgeHTML}
+                    ${recipeHTML}
                     ${alignHTML}
                     ${relsHTML}
                     ${zonesHTML}
@@ -12345,6 +12847,84 @@
             }
         }
 
+        /**
+         * Fallback: render component map from visual_patterns (the in-browser
+         * JS discovery that works when the Node SDK bridge is broken).
+         */
+        function displayComponentMapFromVisualPatterns(vp) {
+            const container = document.getElementById('componentMapTree');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const components = vp.components || [];
+            if (components.length === 0) {
+                container.innerHTML = '<p style="color: #888;">No components detected</p>';
+                return;
+            }
+
+            // Group by category
+            const groups = {};
+            components.forEach(c => {
+                const cat = c.category || 'other';
+                if (!groups[cat]) groups[cat] = [];
+                groups[cat].push(c);
+            });
+
+            const catIcons = {
+                navigation: '🧭', hero: '🦸', content_grid: '📰', footer: '🦶',
+                section: '📦', sidebar: '📑', form: '📝', media: '🎬', block: '🧱',
+                card: '🃏', cta: '🎯', other: '•'
+            };
+            const catColors = {
+                navigation: '#0a84ff', hero: '#bf5af2', content_grid: '#34c759',
+                footer: '#8e8e93', section: '#ff9f0a', sidebar: '#00c7be',
+                form: '#ff453a', media: '#5856d6', block: '#636366',
+                card: '#30d158', cta: '#ff375f', other: '#636366'
+            };
+
+            // Header
+            container.innerHTML = `
+                <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; padding:1rem; background:rgba(255,255,255,0.05); border-radius:8px;">
+                    <div style="font-size:2rem;">🗺️</div>
+                    <div>
+                        <div style="font-weight:600; font-size:1.1rem; margin-bottom:0.25rem;">Page Component Map</div>
+                        <div style="font-size:0.8rem; color:var(--text-tertiary);">
+                            ${components.length} components discovered via visual analysis
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Render each category group
+            Object.entries(groups).sort((a, b) => b[1].length - a[1].length).forEach(([cat, comps]) => {
+                const color = catColors[cat] || catColors.other;
+                const icon = catIcons[cat] || catIcons.other;
+
+                const groupEl = document.createElement('div');
+                groupEl.style.cssText = 'margin-bottom:1.2rem;';
+                groupEl.innerHTML = `
+                    <div style="font-weight:600; font-size:0.8rem; color:${color}; margin-bottom:0.5rem; display:flex; align-items:center; gap:0.4rem;">
+                        <span>${icon}</span> ${cat.replace(/_/g, ' ').toUpperCase()} (${comps.length})
+                    </div>
+                    ${comps.map(c => {
+                        const label = c.label || c.selector || 'Component';
+                        const dims = c.bounds ? `${Math.round(c.bounds.width)}×${Math.round(c.bounds.height)}` : '';
+                        const desc = c.description || c.content_preview || '';
+                        return `
+                        <div style="display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.6rem; margin:0.2rem 0; background:var(--surface-0); border-left:2px solid ${color}; border-radius:0 var(--radius-sm) var(--radius-sm) 0;">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.8rem; color:var(--text-primary); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${label}</div>
+                                ${desc ? `<div style="font-size:0.68rem; color:var(--text-disabled); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${desc.substring(0, 80)}</div>` : ''}
+                            </div>
+                            ${dims ? `<div style="font-size:0.65rem; font-family:var(--font-mono); color:var(--text-disabled); flex-shrink:0;">${dims}</div>` : ''}
+                            <div style="font-size:0.6rem; font-family:var(--font-mono); color:${color}; opacity:0.6; flex-shrink:0; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(c.selector || '').replace(/"/g, '&quot;')}">${c.selector || ''}</div>
+                        </div>`;
+                    }).join('')}
+                `;
+                container.appendChild(groupEl);
+            });
+        }
+
         function toggleAPIView(view) {
             const graphSection = document.getElementById('apiNetworkGraphSection');
             const flowSection = document.getElementById('apiFlowSection');
@@ -12729,6 +13309,248 @@
             a.click();
         }
 
+        function exportDesignMd() {
+            if (!currentEvidence) return;
+
+            fetch('/api/export-design-md', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({evidence: currentEvidence})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) { alert('Export failed: ' + (data.error || 'unknown')); return; }
+                const blob = new Blob([data.markdown], {type: 'text/markdown'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const domain = (currentEvidence.meta_info?.url || '').replace(/https?:\/\//, '').replace(/\/.*/,'').replace(/[^a-zA-Z0-9.-]/g, '');
+                a.download = `${domain || 'website'}-DESIGN.md`;
+                a.click();
+            })
+            .catch(err => alert('Export failed: ' + err));
+        }
+
+        function exportCatalog() {
+            if (!currentEvidence) return;
+            const btn = document.getElementById('exportCatalogBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ Building catalog...';
+            btn.disabled = true;
+
+            // Use result_file path to avoid 413 on large scans
+            const payload = currentResultFile
+                ? {result_file: currentResultFile}
+                : {evidence: currentEvidence};
+
+            fetch('/api/export-catalog', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (!data.success) { alert('Catalog export failed: ' + (data.error || 'unknown')); return; }
+                const blob = new Blob([JSON.stringify(data.catalog, null, 2)], {type: 'application/json'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const domain = (currentEvidence.meta_info?.url || '').replace(/https?:\/\//, '').replace(/\/.*/,'').replace(/[^a-zA-Z0-9.-]/g, '');
+                a.download = `${domain || 'website'}-catalog.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                alert('Catalog export failed: ' + err);
+            });
+        }
+
+        function exportFullJSON() {
+            if (!currentEvidence) return;
+            // Strip base64 screenshots to keep file size reasonable
+            const clean = structuredClone(currentEvidence);
+            if (clean.screenshot?.full_page) clean.screenshot.full_page = '[base64 stripped]';
+            if (clean.responsive_screenshots) {
+                for (const key of Object.keys(clean.responsive_screenshots)) {
+                    if (typeof clean.responsive_screenshots[key] === 'string' && clean.responsive_screenshots[key].length > 1000) {
+                        clean.responsive_screenshots[key] = '[base64 stripped]';
+                    }
+                }
+            }
+            if (clean.component_blueprints?.blueprints) {
+                for (const bp of clean.component_blueprints.blueprints) {
+                    if (bp.discovery?.screenshot) bp.discovery.screenshot = '[base64 stripped]';
+                }
+            }
+            const blob = new Blob([JSON.stringify(clean, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const domain = (currentEvidence.meta_info?.url || '').replace(/https?:\/\//, '').replace(/\/.*/,'').replace(/[^a-zA-Z0-9.-]/g, '');
+            a.download = `${domain || 'website'}-evidence.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function openInJsonCrack() {
+            if (!currentEvidence) return;
+            // Build a clean copy without huge base64 data
+            const clean = structuredClone(currentEvidence);
+            // Strip screenshots
+            if (clean.screenshot) clean.screenshot = {note: 'stripped for size'};
+            if (clean.responsive_screenshots) clean.responsive_screenshots = {note: 'stripped for size'};
+            // Strip component blueprint screenshots
+            if (clean.component_blueprints?.blueprints) {
+                clean.component_blueprints.blueprints.forEach(function(bp) {
+                    if (bp.discovery?.screenshot) bp.discovery.screenshot = '[stripped]';
+                    // Trim computedStyles to key properties
+                    if (bp.blueprint?.computedStyles) {
+                        const cs = bp.blueprint.computedStyles;
+                        const keep = ['display','position','width','height','padding','margin','fontSize','fontFamily','color','backgroundColor','borderRadius','gap','flexDirection'];
+                        const slim = {};
+                        keep.forEach(function(k) { if (cs[k]) slim[k] = cs[k]; });
+                        bp.blueprint.computedStyles = slim;
+                    }
+                });
+            }
+            // Trim z_index_stack layers (can be huge)
+            if (clean.z_index_stack?.layers) {
+                const slim = {};
+                for (const [name, layer] of Object.entries(clean.z_index_stack.layers)) {
+                    if (Array.isArray(layer)) {
+                        slim[name] = {total_elements: layer.length, sample: layer.slice(0,2).map(function(e) { return e.selector || e.tag || '?'; })};
+                    } else if (typeof layer === 'object' && layer.elements) {
+                        slim[name] = {total_elements: layer.elements.length, sample: layer.elements.slice(0,2).map(function(e) { return e.selector || e.tag || '?'; })};
+                    } else {
+                        slim[name] = layer;
+                    }
+                }
+                clean.z_index_stack.layers = slim;
+            }
+            const jsonStr = JSON.stringify(clean, null, 2);
+            navigator.clipboard.writeText(jsonStr).then(function() {
+                window.open('https://jsoncrack.com/editor', '_blank');
+                // Brief toast notification
+                const toast = document.createElement('div');
+                toast.textContent = '✅ JSON copied to clipboard — paste it in JSON Crack (Ctrl+V)';
+                toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#69f0ae;padding:12px 24px;border-radius:8px;font-size:0.85rem;z-index:9999;border:1px solid rgba(105,240,174,0.3);box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+                document.body.appendChild(toast);
+                setTimeout(function() { toast.remove(); }, 5000);
+            }).catch(function() {
+                // Fallback: download as file
+                alert('Could not copy to clipboard. Downloading as file instead.');
+                exportFullJSON();
+            });
+        }
+
+        function exportForFigma() {
+            if (!currentEvidence) {
+                alert('No scan data available. Run a scan first.');
+                return;
+            }
+
+            var btn = document.getElementById('exportFigmaBtn');
+            var originalText = btn.textContent;
+            btn.textContent = '⏳ Generating...';
+            btn.disabled = true;
+
+            fetch('/api/export-figma-spec', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({evidence: currentEvidence})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+
+                if (!data.success) {
+                    alert('Export failed: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+
+                var markdown = data.markdown;
+                var tokens = data.tokens;
+
+                // Show action modal
+                var overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;';
+                overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+                var domain = '';
+                try { domain = new URL(currentEvidence.url || currentEvidence.site_url || '').hostname.replace('www.',''); } catch(e) { domain = 'site'; }
+
+                var modal = document.createElement('div');
+                modal.style.cssText = 'background:#1a1a2e;border:1px solid rgba(105,240,174,0.2);border-radius:16px;padding:32px;max-width:480px;width:90%;color:#e0e0e0;font-family:system-ui;';
+                modal.innerHTML = '<h3 style="margin:0 0 8px;color:#69f0ae;font-size:1.2rem;">◆ Figma Make Export Ready</h3>'
+                    + '<p style="margin:0 0 20px;font-size:0.85rem;color:#888;">Unified spec for <strong>' + domain + '</strong> — paste directly into Figma Make</p>'
+                    + '<div style="display:flex;flex-direction:column;gap:10px;">'
+                    + '<button id="fmCopyBtn" style="padding:12px 16px;border-radius:8px;border:1px solid rgba(105,240,174,0.4);background:rgba(105,240,174,0.1);color:#69f0ae;cursor:pointer;font-size:0.9rem;font-weight:600;">📋 Copy for Figma Make</button>'
+                    + '<button id="fmDownloadBtn" style="padding:12px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#e0e0e0;cursor:pointer;font-size:0.9rem;">💾 Download .md file</button>'
+                    + '<button id="fmTokensBtn" style="padding:12px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#e0e0e0;cursor:pointer;font-size:0.9rem;">🔮 Explore Tokens in JSON Crack</button>'
+                    + '</div>'
+                    + '<p style="margin:16px 0 0;font-size:0.75rem;color:#555;">Tip: In Figma Make, paste the full spec as your prompt context.</p>';
+
+                overlay.appendChild(modal);
+                document.body.appendChild(overlay);
+
+                // Copy markdown to clipboard
+                document.getElementById('fmCopyBtn').onclick = function() {
+                    navigator.clipboard.writeText(markdown).then(function() {
+                        document.getElementById('fmCopyBtn').textContent = '✅ Copied!';
+                        setTimeout(function() { document.getElementById('fmCopyBtn').textContent = '📋 Copy for Figma Make'; }, 2000);
+                    }).catch(function() {
+                        // Fallback
+                        var ta = document.createElement('textarea');
+                        ta.value = markdown;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        ta.remove();
+                        document.getElementById('fmCopyBtn').textContent = '✅ Copied!';
+                        setTimeout(function() { document.getElementById('fmCopyBtn').textContent = '📋 Copy for Figma Make'; }, 2000);
+                    });
+                };
+
+                // Download as .md file
+                document.getElementById('fmDownloadBtn').onclick = function() {
+                    var blob = new Blob([markdown], {type: 'text/markdown'});
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = domain + '-figma-spec.md';
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                };
+
+                // Open tokens in JSON Crack
+                document.getElementById('fmTokensBtn').onclick = function() {
+                    navigator.clipboard.writeText(JSON.stringify(tokens, null, 2)).then(function() {
+                        window.open('https://jsoncrack.com/editor', '_blank');
+                        var toast = document.createElement('div');
+                        toast.textContent = '✅ Tokens copied — paste in JSON Crack (Ctrl+V)';
+                        toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#69f0ae;padding:12px 24px;border-radius:8px;font-size:0.85rem;z-index:10001;border:1px solid rgba(105,240,174,0.3);box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+                        document.body.appendChild(toast);
+                        setTimeout(function() { toast.remove(); }, 5000);
+                    }).catch(function() {
+                        alert('Could not copy tokens. Try the Download option instead.');
+                    });
+                };
+            })
+            .catch(function(err) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+                alert('Export failed: ' + err.message);
+            });
+        }
+
         function testServer() {
             fetch('/health')
                 .then(r => r.json())
@@ -12743,47 +13565,74 @@
 
         // Confidence filter removed — values were not evidence-backed
 
-        // ── Motion Track Interaction (hover/tap to play) ──────────────
+        // ── Motion Track Interaction ──────────────
         function initMotionTracks() {
-            document.addEventListener('mouseenter', function(e) {
-                const el = e.target.closest ? e.target : e.target.parentElement;
+            // Start looping a track immediately (no play-once preamble)
+            function startLooping(track) {
+                if (track.classList.contains('motion-track--looping')) return;
+                track.classList.remove('motion-track--active');
+                track.classList.add('motion-track--looping');
+            }
+
+            // Check all tracks — if visible (rendered, not display:none), start them
+            function activateVisibleTracks() {
+                var tracks = document.querySelectorAll('.motion-track');
+                tracks.forEach(function(track) {
+                    if (track.classList.contains('motion-track--looping')) return;
+                    // Check if the track is actually rendered (not inside collapsed card)
+                    if (track.offsetParent === null) return;
+                    startLooping(track);
+                });
+            }
+
+            // Watch for DOM changes (new tracks added, cards expanding/collapsing)
+            var mo = new MutationObserver(function() {
+                // Slight delay to let layout settle after expand/collapse
+                setTimeout(activateVisibleTracks, 80);
+            });
+            mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'open'] });
+
+            // Also check periodically for the first few seconds after load (catches initial render)
+            var checks = 0;
+            var startupInterval = setInterval(function() {
+                activateVisibleTracks();
+                checks++;
+                if (checks > 20) clearInterval(startupInterval);
+            }, 500);
+
+            // Click/tap to replay a single track
+            document.addEventListener('click', function(e) {
+                var el = e.target.closest ? e.target : e.target.parentElement;
                 if (!el) return;
-                const track = el.closest('.motion-track');
-                if (track && !track.classList.contains('motion-track--active')) {
+                var track = el.closest('.motion-track');
+                if (track) {
                     triggerMotionTrack(track);
                 }
-            }, true);
-            document.addEventListener('touchstart', function(e) {
-                const el = e.target.closest ? e.target : e.target.parentElement;
-                if (!el) return;
-                const track = el.closest('.motion-track');
-                if (track && !track.classList.contains('motion-track--active')) {
-                    triggerMotionTrack(track);
-                }
-            }, { passive: true });
+            });
         }
 
         function triggerMotionTrack(track) {
-            track.classList.remove('motion-track--active');
+            track.classList.remove('motion-track--active', 'motion-track--looping');
             // Force reflow to restart animation
             void track.offsetWidth;
             track.classList.add('motion-track--active');
-            const dot = track.querySelector('.motion-track-dot');
+            var dot = track.querySelector('.motion-track-dot');
             if (dot) {
                 dot.addEventListener('animationend', function onEnd() {
                     dot.removeEventListener('animationend', onEnd);
-                    // Brief pause at end position, then reset
                     setTimeout(function() {
                         track.classList.remove('motion-track--active');
-                    }, 400);
+                        void track.offsetWidth;
+                        track.classList.add('motion-track--looping');
+                    }, 300);
                 });
             }
         }
 
         function playAllMotionTracks(btn) {
-            const card = btn.closest('.metric-card') || btn.closest('.metric-body')?.parentElement;
+            var card = btn.closest('.metric-card') || (btn.closest('.metric-body') ? btn.closest('.metric-body').parentElement : null);
             if (!card) return;
-            const tracks = card.querySelectorAll('.motion-track');
+            var tracks = card.querySelectorAll('.motion-track');
             tracks.forEach(function(track, i) {
                 setTimeout(function() {
                     triggerMotionTrack(track);
@@ -13072,7 +13921,7 @@
                 { metrics: [{key:'responsive_breakpoints',title:'Responsive Breakpoints'},{key:'dom_depth',title:'DOM Depth'},{key:'css_tricks',title:'CSS Efficiency'},{key:'css_specificity',title:'CSS Specificity'}] },
                 { metrics: [{key:'motion_tokens',title:'Motion Tokens'},{key:'interaction_states',title:'Interaction States'},{key:'interactive_elements',title:'Interactive Elements'},{key:'cdp_animations',title:'Runtime Animations'}] },
                 { metrics: [{key:'seo',title:'SEO'},{key:'security',title:'Security'},{key:'third_party',title:'Third-Party'},{key:'contrast_a11y',title:'Contrast Audit'},{key:'a11y_tree',title:'Accessibility'}] },
-                { metrics: [{key:'site_architecture',title:'Site Architecture'},{key:'site_topology',title:'Site Topology'},{key:'url_patterns',title:'URL Patterns'},{key:'api_relationships',title:'API Map'},{key:'content_layout',title:'Reading Experience'}] }
+                { metrics: [{key:'site_architecture',title:'Tech Stack'},{key:'site_topology',title:'Site Topology'},{key:'url_patterns',title:'URL Patterns'},{key:'api_relationships',title:'API Map'},{key:'content_layout',title:'Reading Experience'}] }
             ];
             for (const cat of categories) {
                 for (const m of cat.metrics) {

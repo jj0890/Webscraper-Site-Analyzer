@@ -1,5 +1,61 @@
 {
   "configs": {
+
+    "pi.fyi": {
+      "url": "https://pi.fyi",
+      "modal_selectors": ["[role='dialog']", "form[method='post']", "[class*='modal']", "[class*='overlay']", "[class*='signup']", "[class*='gate']"],
+      "modal_strategy": "dom_remove",
+      "unblock_scroll": true,
+      "feed_container": "[class*='feed'], [class*='timeline'], main",
+      "content_types": ["rec", "ask", "event", "editorial"],
+      "content_classifiers": {
+        "rec":       { "selectors": ["[class*='rec']"], "heuristics": ["short text", "external link"] },
+        "ask":       { "selectors": ["[class*='ask']"], "heuristics": ["contains '?'", "reply thread"] },
+        "event":     { "selectors": ["[class*='event']", "time[datetime]"], "heuristics": ["date + location"] },
+        "editorial": { "selectors": ["article"], "heuristics": ["long-form > 200 words", "byline"] }
+      },
+      "infinite_scroll": { "enabled": true, "scroll_steps": 3, "wait_ms": 1500 },
+      "api_hints": ["/api/", "/graphql", "/_next/data/", "/feed"],
+      "notes": "Email-gate modal on landing. DOM remove strategy — modal is client-side only. Content schema is loose: recs, asks, events, editorial all share the same feed. Classify by heuristic not selector."
+    },
+
+    "soundcloud.com": {
+      "url": "https://soundcloud.com",
+      "modal_selectors": ["[class*='CookieBanner']", "[id*='cookie']", "[class*='consent']"],
+      "modal_strategy": "click_close",
+      "api_base": "https://api-v2.soundcloud.com",
+      "api_endpoints": {
+        "stream":  "/stream?limit=20&linked_partitioning=1",
+        "search":  "/search/tracks?q={query}&limit=20",
+        "user":    "/users/{id}/tracks"
+      },
+      "pagination": { "type": "cursor", "param": "linked_partitioning", "limit_param": "limit" },
+      "notes": "Public API exists. client_id is embedded in page JS — intercept network tab to find it. No hard rate limit except 15k stream calls/day."
+    },
+
+    "nts.live": {
+      "url": "https://www.nts.live",
+      "modal_selectors": [],
+      "api_base": "https://www.nts.live/api/v2",
+      "api_endpoints": {
+        "live":     "/live",
+        "shows":    "/shows?limit=50&offset=0",
+        "episodes": "/shows/{slug}/episodes?limit=20&offset=0",
+        "search":   "/search?q={query}"
+      },
+      "pagination": { "type": "offset", "offset_param": "offset", "limit_param": "limit", "default_limit": 50 },
+      "notes": "Open undocumented JSON API. No auth required. Pagination via offset/limit. Shows have genres, location, description."
+    },
+
+    "saintheron.com": {
+      "url": "https://saintheron.com",
+      "modal_selectors": [],
+      "fonts": { "body": "Neue Haas Grotesk Display Pro 45", "display": "Cardinal Fruit" },
+      "colors": { "background": "rgb(255,255,249)", "text": "rgb(0,0,0)", "border": "rgb(229,231,235)" },
+      "layout": "24-column CSS grid, 10.5px gaps",
+      "notes": "Cultural institution aesthetic. Monochrome (no accent). Tiny 14px body. Dense editorial grid. Cardinal Fruit serif for display headings. Reference site for Enamorado editorial direction."
+    },
+
     "theverge.com": {
       "containerSelector": ".duet--content-cards--content-card, [class*='content-card']:not(.m-ad)",
       "titleSelectors": ["h2 a", "h2", "h3"],

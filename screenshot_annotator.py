@@ -293,8 +293,8 @@ class ScreenshotAnnotator:
 
         }''', visual_hierarchy)
 
-        # Wait a moment for overlay to render
-        await page.wait_for_timeout(500)
+        # Wait for overlay to paint — rAF syncs to render cycle
+        await page.evaluate("() => new Promise(r => requestAnimationFrame(r))")
 
         # Capture annotated screenshot (full page with scrolling)
         annotated_bytes = await page.screenshot(full_page=True)
@@ -314,7 +314,7 @@ class ScreenshotAnnotator:
 # Test
 async def test_screenshot_annotator():
     """Test screenshot annotation"""
-    from playwright.async_api import async_playwright
+    from patchright.async_api import async_playwright
     from visual_hierarchy_analyzer import VisualHierarchyAnalyzer
 
     async with async_playwright() as p:

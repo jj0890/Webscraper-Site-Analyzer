@@ -12,7 +12,7 @@ These metrics answer: "What design system are they using?"
 """
 
 import asyncio
-from playwright.async_api import Page
+from patchright.async_api import Page
 from typing import Dict, List, Tuple
 from collections import Counter
 import re
@@ -240,7 +240,8 @@ class DesignSystemMetrics:
         strategy = self._detect_breakpoint_strategy(unique_breakpoints)
 
         return {
-            'confidence': 95 if breakpoint_values else 60,
+            'confidence': self._calculate_breakpoint_confidence(
+                breakpoint_values, unique_breakpoints, strategy, result),
             'pattern': strategy['type'],
             'breakpoints': strategy['breakpoints'],
             'total_media_queries': len(result['breakpoints']),
@@ -255,6 +256,18 @@ class DesignSystemMetrics:
                 'samples': result['breakpoints'][:5]
             }
         }
+
+    @staticmethod
+    def _calculate_breakpoint_confidence(bp_values, unique_bps, strategy, result):
+        """Formula-based confidence for responsive breakpoints."""
+        if not bp_values:
+            return 40  # No breakpoints found but extraction ran
+        confidence = 40
+        confidence += min(30, len(unique_bps) * 8)          # +8 per unique BP, max 30
+        if strategy.get('type', '').lower() not in ('custom', 'unknown', ''):
+            confidence += 15                                  # Known framework match
+        confidence += min(10, len(result.get('breakpoints', [])) * 2)  # Query count
+        return min(95, confidence)
 
     def _detect_breakpoint_strategy(self, breakpoints: List[int]) -> Dict:
         """
@@ -508,6 +521,32 @@ class DesignSystemMetrics:
                         || el.getAttribute('role') === 'button'
                         || el.getAttribute('tabindex') !== null;
                     const textPreview = el.textContent?.trim()?.substring(0, 40) || '';
+                    // Build a CSS selector for isolation screenshots
+                    let selector = '';
+                    if (el.id) {
+                        selector = '#' + CSS.escape(el.id);
+                    } else {
+                        const tag = el.tagName.toLowerCase();
+                        const meaningful = Array.from(el.classList)
+                            .filter(c => !c.match(/^(js-|is-|has-|active|open|show|hide)/))
+                            .slice(0, 2)
+                            .map(c => '.' + CSS.escape(c))
+                            .join('');
+                        selector = tag + meaningful;
+                        // Disambiguate if not unique
+                        try {
+                            if (selector && document.querySelectorAll(selector).length > 1) {
+                                const parent = el.parentElement;
+                                if (parent) {
+                                    const sameTag = Array.from(parent.children)
+                                        .filter(s => s.tagName === el.tagName);
+                                    const idx = sameTag.indexOf(el) + 1;
+                                    if (idx > 0) selector += ':nth-of-type(' + idx + ')';
+                                }
+                            }
+                        } catch(e) { /* CSS.escape edge case */ }
+                    }
+
                     zIndexes.push({
                         z: z,
                         tag: el.tagName.toLowerCase(),
@@ -515,6 +554,7 @@ class DesignSystemMetrics:
                         id: el.id || '',
                         role: el.getAttribute('role') || '',
                         ariaLabel: el.getAttribute('aria-label') || '',
+                        selector: selector,
                         position: styles.position,
                         isFixed: isFixed,
                         isSticky: isSticky,
@@ -534,6 +574,15 @@ class DesignSystemMetrics:
             return zIndexes;
         }''')
 
+        # ── Authoring-level layer info: CSS cascade layers + nested-rule z-index ──
+        # The computed-style walk above tells us what each element renders as.
+        # This walks the CSSOM to tell us what the author *wrote*:
+        #   - @layer blocks give named cascade priority (not z-index, but the
+        #     higher-level stacking system — modals-layer > components-layer > base)
+        #   - Nested rules containing z-index show which parent selector the
+        #     z-index was authored against, revealing component-scoped layering
+        authoring = await self._extract_authoring_layers()
+
         # Categorize z-indexes into semantic tiers
         layers = self._categorize_z_indexes(result)
 
@@ -549,19 +598,187 @@ class DesignSystemMetrics:
         # Count tiers (exclude ghost tier from count)
         tier_count = sum(1 for v in layers.values() if v.get('tier') != 'Ghost')
 
+        # Richer pattern line when authoring layers were found
+        pattern_bits = [f'{tier_count} semantic tier{"s" if tier_count != 1 else ""} detected']
+        cascade_names = [L.get('name') for L in authoring.get('cascade_layers', []) if L.get('name')]
+        if cascade_names:
+            pattern_bits.append(f'{len(cascade_names)} cascade layer{"s" if len(cascade_names) != 1 else ""}')
+        if authoring.get('scoped_z_rules'):
+            pattern_bits.append(f"{len(authoring['scoped_z_rules'])} scoped z-index rule{'s' if len(authoring['scoped_z_rules']) != 1 else ''}")
+
         return {
             'confidence': 90 if result else 60,
-            'pattern': f'{tier_count} semantic tier{"s" if tier_count != 1 else ""} detected',
+            'pattern': ', '.join(pattern_bits),
             'layers': layers,
             'health': health,
             'total_elements': len(result),
             'visible_elements': visible_count,
             'ghost_elements': ghost_count,
             'conflicts': conflicts,
+            'authoring_layers': authoring,
             'evidence': {
                 'samples': result[:10]
             }
         }
+
+    async def _extract_authoring_layers(self) -> Dict:
+        """Walk document.styleSheets for @layer blocks and nested z-index rules.
+
+        Returns:
+            {
+                'cascade_layers': [{name, order, rule_count, z_declarations}, ...],
+                'scoped_z_rules': [{parent_selector, z_index, context}, ...],
+                'nesting_used': bool,
+                'cascade_layers_used': bool,
+            }
+
+        Walking the CSSOM lets us see layering as authored (not just computed):
+        - @layer reset, base, components, utilities; — the declaration order IS
+          the cascade priority. Higher layer wins regardless of specificity.
+        - .modal { z-index: 100; &.open { z-index: 101; } } — CSSStyleRule now
+          exposes .cssRules for nested rules in browsers that support CSS Nesting,
+          so we can see "z-index 101 was authored inside .modal.open".
+        """
+        try:
+            return await self.page.evaluate('''() => {
+                const result = {
+                    cascade_layers: [],
+                    scoped_z_rules: [],
+                    nesting_used: false,
+                    cascade_layers_used: false,
+                };
+
+                // Order of layer declarations (from @layer statements) — this
+                // IS the z-priority at the cascade level.
+                const layerOrderMap = new Map(); // name -> order index
+                let nextLayerOrder = 0;
+                const layerStats = new Map();    // name -> {rules, z_declarations[]}
+
+                const ensureLayer = (name) => {
+                    if (!layerStats.has(name)) {
+                        layerStats.set(name, { rule_count: 0, z_declarations: [] });
+                    }
+                    if (!layerOrderMap.has(name)) {
+                        layerOrderMap.set(name, nextLayerOrder++);
+                    }
+                    return layerStats.get(name);
+                };
+
+                // Walk a rule list — recurses into grouping rules, captures
+                // @layer names and z-index declarations scoped by their
+                // current layer + parent selector context.
+                const walk = (rules, ctx) => {
+                    if (!rules) return;
+                    for (let i = 0; i < rules.length; i++) {
+                        let rule;
+                        try { rule = rules[i]; } catch(e) { continue; }
+                        if (!rule) continue;
+                        const ctorName = rule.constructor && rule.constructor.name;
+
+                        // @layer block: { name, cssRules }
+                        if (ctorName === 'CSSLayerBlockRule') {
+                            result.cascade_layers_used = true;
+                            const name = rule.name || '(anonymous)';
+                            ensureLayer(name);
+                            walk(rule.cssRules, { ...ctx, layer: name });
+                            continue;
+                        }
+                        // @layer statement (no block): @layer reset, base, components;
+                        if (ctorName === 'CSSLayerStatementRule') {
+                            result.cascade_layers_used = true;
+                            const names = rule.nameList || [];
+                            names.forEach(n => ensureLayer(n));
+                            continue;
+                        }
+
+                        // @media / @supports / @scope — walk through
+                        if (rule.cssRules && ctorName !== 'CSSStyleRule') {
+                            walk(rule.cssRules, ctx);
+                            continue;
+                        }
+
+                        if (ctorName === 'CSSStyleRule') {
+                            const sel = rule.selectorText || '';
+                            if (ctx.layer) {
+                                const stats = layerStats.get(ctx.layer);
+                                if (stats) stats.rule_count++;
+                            }
+
+                            // Z-index declaration? Capture the authoring context.
+                            const style = rule.style;
+                            if (style) {
+                                const z = style.getPropertyValue('z-index');
+                                if (z && z.trim() && z !== 'auto') {
+                                    const parentSel = ctx.parentSelector || '';
+                                    const fullSel = parentSel ? parentSel + ' → ' + sel : sel;
+                                    result.scoped_z_rules.push({
+                                        parent_selector: parentSel || null,
+                                        selector: sel,
+                                        full_context: fullSel,
+                                        z_index: z.trim(),
+                                        layer: ctx.layer || null,
+                                        nested: !!parentSel,
+                                    });
+                                    if (ctx.layer) {
+                                        const stats = layerStats.get(ctx.layer);
+                                        if (stats) stats.z_declarations.push({
+                                            selector: fullSel, z_index: z.trim()
+                                        });
+                                    }
+                                }
+                            }
+
+                            // CSS Nesting: CSSStyleRule may have cssRules for
+                            // nested children. Recurse with this rule as parent.
+                            if (rule.cssRules && rule.cssRules.length > 0) {
+                                result.nesting_used = true;
+                                const nextParent = ctx.parentSelector
+                                    ? ctx.parentSelector + ' → ' + sel
+                                    : sel;
+                                walk(rule.cssRules, { ...ctx, parentSelector: nextParent });
+                            }
+                        }
+                    }
+                };
+
+                // Walk every reachable stylesheet
+                for (const sheet of Array.from(document.styleSheets)) {
+                    let rules;
+                    try { rules = sheet.cssRules || sheet.rules; }
+                    catch (e) { continue; } // cross-origin, skip
+                    if (!rules) continue;
+                    walk(rules, { layer: null, parentSelector: null });
+                }
+
+                // Serialize cascade layers in declaration order
+                const sortedNames = Array.from(layerOrderMap.keys())
+                    .sort((a, b) => layerOrderMap.get(a) - layerOrderMap.get(b));
+                result.cascade_layers = sortedNames.map((name) => {
+                    const stats = layerStats.get(name) || { rule_count: 0, z_declarations: [] };
+                    return {
+                        name,
+                        order: layerOrderMap.get(name),
+                        rule_count: stats.rule_count,
+                        z_declaration_count: stats.z_declarations.length,
+                        z_declarations: stats.z_declarations.slice(0, 10),
+                    };
+                });
+
+                // Cap scoped_z_rules to keep payload sane
+                if (result.scoped_z_rules.length > 50) {
+                    result.scoped_z_rules = result.scoped_z_rules.slice(0, 50);
+                }
+                return result;
+            }''')
+        except Exception as exc:
+            print(f"   ⚠️  Authoring-layer extraction failed: {exc}")
+            return {
+                'cascade_layers': [],
+                'scoped_z_rules': [],
+                'nesting_used': False,
+                'cascade_layers_used': False,
+                'error': str(exc)[:120],
+            }
 
     # Common CSS framework prefixes that obscure meaning
     _FRAMEWORK_PREFIXES = (
@@ -661,12 +878,16 @@ class DesignSystemMetrics:
             z_values_in_tier = sorted(set(d['z'] for d in tier_elements))
             purpose = self._infer_purpose(tier_elements)
 
+            # Collect ALL selectors for this tier (used by screenshot isolation)
+            tier_selectors = [el.get('selector', '') for el in tier_elements if el.get('selector')]
+
             # Build enriched element list with labels, bounds, position
             enriched = []
             for el in tier_elements[:8]:
                 enriched.append({
                     'label': self._smart_label(el),
                     'z': el['z'],
+                    'selector': el.get('selector', ''),
                     'position': el.get('position', 'static'),
                     'isInteractive': el.get('isInteractive', False),
                     'isVisible': True,
@@ -686,6 +907,7 @@ class DesignSystemMetrics:
                 'tier_desc': tier_desc,
                 'purpose': purpose,
                 'elements': enriched,
+                'all_selectors': tier_selectors,  # for screenshot isolation
             }
 
         # Ghost tier (zero-size elements)
@@ -961,7 +1183,7 @@ async def demo_design_system_metrics():
     """
     Demo: Extract design system metrics from real sites
     """
-    from playwright.async_api import async_playwright
+    from patchright.async_api import async_playwright
 
     print("\n" + "="*70)
     print(" 🎨 DESIGN SYSTEM METRICS DEMO")

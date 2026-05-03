@@ -13,7 +13,8 @@ Use case: Instead of showing flat API list, show HOW they're connected
 
 import json
 import logging
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 
@@ -75,9 +76,181 @@ class APIRelationshipMapper:
             'stats': self._calculate_stats(endpoints, relationships, data_deps, redundant),
         }
 
+    # ------------------------------------------------------------------
+    # URLPattern-style segment classifier (mirrors deep_evidence_engine.py JS logic)
+    # Runs server-side since network requests are captured Python-side.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _classify_segment(seg: str) -> str:
+        """Return the parameter type for a URL path segment."""
+        if re.fullmatch(r'\d+', seg):
+            return 'id'
+        if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', seg, re.I):
+            return 'uuid'
+        if re.fullmatch(r'v?\d+(\.\d+)+', seg):
+            return 'version'
+        if re.fullmatch(r'[a-z]{2}(-[A-Z]{2})?', seg):
+            return 'locale'
+        if re.fullmatch(r'[a-z]{2,8}_[a-zA-Z0-9]+', seg):
+            return 'prefixed-id'
+        if re.fullmatch(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?', seg):
+            return 'slug'
+        return 'param'
+
+    @staticmethod
+    def _build_template(parts: List[Tuple[str, str]]) -> str:
+        """
+        Build a URLPattern-style template string from (type, value) parts.
+        Suffixes duplicate group names to keep them unique.
+
+        parts: list of (type, value) where type is 'literal'|'id'|'slug'|etc.
+        """
+        name_count: Dict[str, int] = {}
+        segments = []
+        for ptype, pval in parts:
+            if ptype == 'literal':
+                segments.append(pval)
+            else:
+                base = 'id' if ptype == 'id' else ('key' if ptype == 'prefixed-id' else ptype)
+                name_count[base] = name_count.get(base, 0) + 1
+                name = base if name_count[base] == 1 else f"{base}{name_count[base]}"
+                segments.append(f':{name}(\\d+)' if ptype == 'id' else f':{name}')
+        return '/' + '/'.join(segments)
+
+    def _cluster_endpoints(self, raw_endpoints: List[Dict]) -> List[Dict]:
+        """
+        Group raw (exact-URL) endpoints by inferred URLPattern template.
+
+        /api/users/123   ┐
+        /api/users/456   ├─→  GET /api/users/:id(\d+)  call_count=3
+        /api/users/789   ┘
+
+        Returns a collapsed list where each entry has a `template` key and
+        the original `full_url` / `path` represent the first observed example.
+        Endpoints whose paths are unique (no cluster partner) keep their exact URL.
+        """
+        # Group by (method, depth, host)
+        from collections import defaultdict
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+        for ep in raw_endpoints:
+            parsed = urlparse(ep['full_url'])
+            segs = [s for s in parsed.path.split('/') if s]
+            key = f"{ep['method']}|{parsed.netloc}|{len(segs)}"
+            groups[key].append({'ep': ep, 'segs': segs, 'parsed': parsed})
+
+        clustered: List[Dict] = []
+
+        for key, members in groups.items():
+            if len(members) < 2:
+                # Lone endpoint — keep as-is with an identity template
+                ep = members[0]['ep']
+                ep['template'] = ep['path']
+                ep['example_values'] = {}
+                clustered.append(ep)
+                continue
+
+            depth = len(members[0]['segs'])
+            # For each segment position: literal if all same, else classify by dominant type
+            parts: List[Tuple[str, str]] = []
+            for i in range(depth):
+                vals = [m['segs'][i] for m in members if i < len(m['segs'])]
+                unique_vals = list(dict.fromkeys(vals))  # preserve order, dedup
+                if len(unique_vals) == 1:
+                    parts.append(('literal', unique_vals[0]))
+                else:
+                    types = [self._classify_segment(v) for v in vals]
+                    # Dominant type by frequency
+                    type_counts: Dict[str, int] = {}
+                    for t in types:
+                        type_counts[t] = type_counts.get(t, 0) + 1
+                    dominant = max(type_counts, key=type_counts.__getitem__)
+                    parts.append((dominant, unique_vals[0]))
+
+            template = self._build_template(parts)
+
+            # Sub-cluster: find the FIRST variable position that has a small set of
+            # distinct slug-like values (e.g. pos1="products"/"customers" after literal pos0="v1").
+            # Split members by that pivot so each resource type gets its own entry.
+            split_pos = None
+            split_vals: List[str] = []
+            for i in range(depth):
+                seg_vals = [m['segs'][i] for m in members if i < len(m['segs'])]
+                seg_unique = list(dict.fromkeys(seg_vals))
+                seg_all_slugs = all(re.fullmatch(r'[a-z0-9][a-z0-9-]*', v) for v in seg_unique)
+                seg_few = 2 <= len(seg_unique) <= max(2, int(len(members) * 0.6))
+                if seg_all_slugs and seg_few:
+                    split_pos = i
+                    split_vals = seg_unique
+                    break  # use the first qualifying pivot position
+
+            if depth >= 2 and split_pos is not None:
+                sub_groups: Dict[str, List] = defaultdict(list)
+                for m in members:
+                    pivot = m['segs'][split_pos] if split_pos < len(m['segs']) else '__other__'
+                    sub_groups[pivot].append(m)
+                for prefix, sub_members in sub_groups.items():
+                    if len(sub_members) < 2:
+                        ep = sub_members[0]['ep']
+                        ep['template'] = ep['path']
+                        ep['example_values'] = {}
+                        clustered.append(ep)
+                        continue
+                    sub_parts: List[Tuple[str, str]] = []
+                    for i in range(depth):
+                        vals = [m['segs'][i] for m in sub_members if i < len(m['segs'])]
+                        unique_vals = list(dict.fromkeys(vals))
+                        if len(unique_vals) == 1:
+                            sub_parts.append(('literal', unique_vals[0]))
+                        else:
+                            types = [self._classify_segment(v) for v in vals]
+                            type_counts = {}
+                            for t in types:
+                                type_counts[t] = type_counts.get(t, 0) + 1
+                            dominant = max(type_counts, key=type_counts.__getitem__)
+                            sub_parts.append((dominant, unique_vals[0]))
+                    sub_template = self._build_template(sub_parts)
+                    # Merge all sub-member endpoints into one clustered entry
+                    merged = sub_members[0]['ep'].copy()
+                    merged['template'] = sub_template
+                    merged['call_count'] = sum(m['ep'].get('call_count', 1) for m in sub_members)
+                    total_success = sum(m['ep'].get('success_rate', 0) for m in sub_members)
+                    merged['success_rate'] = round(total_success / len(sub_members))
+                    # Collect example values for each named param position
+                    named_positions = [(i, p[0]) for i, p in enumerate(sub_parts) if p[0] != 'literal']
+                    examples: Dict[str, List[str]] = {}
+                    for m in sub_members[:3]:
+                        for idx, ptype in named_positions:
+                            if idx < len(m['segs']):
+                                base = 'id' if ptype == 'id' else ('key' if ptype == 'prefixed-id' else ptype)
+                                examples.setdefault(base, []).append(m['segs'][idx])
+                    merged['example_values'] = {k: list(dict.fromkeys(v))[:3] for k, v in examples.items()}
+                    merged['clustered_count'] = len(sub_members)
+                    clustered.append(merged)
+            else:
+                # Merge all members into one clustered entry
+                merged = members[0]['ep'].copy()
+                merged['template'] = template
+                merged['call_count'] = sum(m['ep'].get('call_count', 1) for m in members)
+                total_success = sum(m['ep'].get('success_rate', 0) for m in members)
+                merged['success_rate'] = round(total_success / len(members))
+                named_positions = [(i, p[0]) for i, p in enumerate(parts) if p[0] != 'literal']
+                examples: Dict[str, List[str]] = {}
+                for m in members[:3]:
+                    for idx, ptype in named_positions:
+                        if idx < len(m['segs']):
+                            base = 'id' if ptype == 'id' else ('key' if ptype == 'prefixed-id' else ptype)
+                            examples.setdefault(base, []).append(m['segs'][idx])
+                merged['example_values'] = {k: list(dict.fromkeys(v))[:3] for k, v in examples.items()}
+                merged['clustered_count'] = len(members)
+                clustered.append(merged)
+
+        return clustered
+
     def _extract_endpoints(self) -> List[Dict]:
         """
-        Extract unique API endpoints with metadata
+        Extract unique API endpoints with metadata, then cluster by inferred
+        URLPattern template so /api/users/123 + /api/users/456 → one entry.
         """
         endpoint_map = {}
         for req in self.api_requests:
@@ -104,7 +277,9 @@ class APIRelationshipMapper:
             if 200 <= status < 400:
                 ep['success_rate'] = min(100, ep['success_rate'] + 1)
 
-        return list(endpoint_map.values())
+        raw = list(endpoint_map.values())
+        # Cluster exact-URL endpoints into parametric templates
+        return self._cluster_endpoints(raw)
 
     def _classify_semantic_roles(self, endpoints: List[Dict]) -> Dict:
         """
@@ -170,7 +345,9 @@ class APIRelationshipMapper:
         for endpoint in endpoints:
             full_url = endpoint.get('full_url', '')
             url_lower = full_url.lower()
-            path = endpoint.get('path', '').lower()
+            # Prefer the inferred template for path matching — it strips concrete IDs
+            # so "/api/v2/users/:id(\d+)" matches 'users' more reliably than "/api/v2/users/12345"
+            path = endpoint.get('template', endpoint.get('path', '')).lower()
             matches = []
 
             for category, patterns in PATTERNS.items():
@@ -394,10 +571,14 @@ class APIRelationshipMapper:
             node_id = f'API{i}'
             node_map[endpoint.get('full_url', '')] = node_id
             method = endpoint.get('method', 'GET')
-            path = endpoint.get('path', endpoint.get('full_url', ''))[-30:]
+            # Prefer template over raw path — shows :id instead of 12345
+            path = endpoint.get('template', endpoint.get('path', endpoint.get('full_url', '')))[-40:]
             count = endpoint.get('call_count', 1)
+            clustered = endpoint.get('clustered_count', 1)
             label = path.replace('"', "'").replace('[', '(').replace(']', ')')
-            mermaid += f'    {node_id}["{method}: {label} ×{count}"]\n'
+            # Show "×N calls [M URLs]" when clustered to make the collapsing visible
+            count_str = f'×{count}' if clustered <= 1 else f'×{count} [{clustered} URLs]'
+            mermaid += f'    {node_id}["{method}: {label} {count_str}"]\n'
 
         for rel in relationships[:20]:
             from_id = node_map.get(rel.get('from', ''))

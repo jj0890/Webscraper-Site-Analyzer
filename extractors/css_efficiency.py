@@ -86,7 +86,7 @@ class CSSEfficiencyExtractor(BaseExtractor):
 
             return {
                 'pattern': f'{efficiency_label} — {used_pct}% of CSS rules are used',
-                'confidence': 90,
+                'confidence': min(95, 40 + 25 + min(20, total // 50)),  # CDP: base 40 + method 25 + rule richness
                 'used_percentage': used_pct,
                 'unused_percentage': unused_pct,
                 'total_rules': total,
@@ -173,7 +173,7 @@ class CSSEfficiencyExtractor(BaseExtractor):
 
             return {
                 'pattern': f'{efficiency_label} — {used_pct}% of CSS rules are used',
-                'confidence': 70,  # Lower confidence for heuristic
+                'confidence': min(95, 40 + 10 + min(20, result.get('total_rules', 0) // 50)),  # Heuristic: base 40 + method 10 + rules
                 'used_percentage': used_pct,
                 'unused_percentage': unused_pct,
                 'total_rules': result.get('total_rules', 0),

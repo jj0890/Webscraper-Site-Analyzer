@@ -14,9 +14,32 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import asyncio
 from pathlib import Path
-from deep_evidence_engine import DeepEvidenceEngine
-from component_ripper import ComponentRipper
-from computed_style_extractor import ComputedStyleExtractor
+# Lazy imports — patchright hangs intermittently at import time
+# These modules are imported on first use instead of at startup
+_DeepEvidenceEngine = None
+_ComponentRipper = None
+_ComputedStyleExtractor = None
+
+def _get_engine_class():
+    global _DeepEvidenceEngine
+    if _DeepEvidenceEngine is None:
+        from deep_evidence_engine import DeepEvidenceEngine
+        _DeepEvidenceEngine = DeepEvidenceEngine
+    return _DeepEvidenceEngine
+
+def _get_ripper_class():
+    global _ComponentRipper
+    if _ComponentRipper is None:
+        from component_ripper import ComponentRipper
+        _ComponentRipper = ComponentRipper
+    return _ComponentRipper
+
+def _get_style_extractor_class():
+    global _ComputedStyleExtractor
+    if _ComputedStyleExtractor is None:
+        from computed_style_extractor import ComputedStyleExtractor
+        _ComputedStyleExtractor = ComputedStyleExtractor
+    return _ComputedStyleExtractor
 import json
 import os
 import traceback
@@ -30,6 +53,11 @@ ANTHROPIC_AVAILABLE = False
 
 # Wizard configuration
 WIZARD_MAX_PAGES = 5  # Max pages for "Scan All" diversity selection
+
+# Evidence cache — stores last scan per URL so compare-sites can reuse
+# TTL: entries older than 10 minutes are considered stale
+_evidence_cache = {}  # {url: {'evidence': {...}, 'timestamp': float}}
+_CACHE_TTL = 600  # 10 minutes
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +181,7 @@ def deep_scan():
     """Run deep evidence extraction with 20+ metrics"""
     data = request.json
     site_url = data.get('site_url')
-    analysis_mode = data.get('analysis_mode', 'single')  # 'single' or 'smart-nav'
+    analysis_mode = data.get('analysis_mode', 'single')  # 'single' | 'smart-nav' | 'multi-template'
 
     site_url, url_error = validate_url(site_url)
     if url_error:
@@ -166,7 +194,7 @@ def deep_scan():
         print('='*70)
 
         discovery_method = data.get('discovery_method', 'auto')
-        engine = DeepEvidenceEngine(site_url, analysis_mode=analysis_mode, discovery_method=discovery_method)
+        engine = _get_engine_class()(site_url, analysis_mode=analysis_mode, discovery_method=discovery_method)
         evidence = run_async(engine.extract_all())
 
         print("\n✅ Deep scan complete!")
@@ -193,9 +221,30 @@ def deep_scan():
             else:
                 cleaned_evidence[k] = v
 
+        # Cache evidence for compare-sites reuse
+        import time as _time
+        _evidence_cache[site_url] = {'evidence': cleaned_evidence, 'timestamp': _time.time()}
+
+        # Persist results to ~/.webscraper/results/ for LLM retrieval
+        result_file = None
+        try:
+            results_dir = os.path.expanduser('~/.webscraper/results')
+            os.makedirs(results_dir, exist_ok=True)
+            domain = urlparse(site_url).netloc.replace('.', '_').replace(':', '_')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{domain}_{timestamp}.json"
+            filepath = os.path.join(results_dir, filename)
+            with open(filepath, 'w') as f:
+                json.dump({'url': site_url, 'mode': analysis_mode, 'evidence': cleaned_evidence}, f, default=str)
+            result_file = filepath
+            print(f"   💾 Results saved to {filepath}")
+        except Exception as save_err:
+            print(f"   ⚠️  Could not save results: {save_err}")
+
         return jsonify({
             'success': True,
-            'evidence': cleaned_evidence
+            'evidence': cleaned_evidence,
+            'result_file': result_file
         })
 
     except TimeoutError as e:
@@ -247,6 +296,7 @@ def rip_component():
     auth_state = data.get('auth_state')  # Optional
     include_states = data.get('include_states', False)
     output_format = data.get('output_format', 'json')
+    pre_action = data.get('pre_action')  # Optional — interact before ripping
 
     site_url, url_error = validate_url(site_url)
     if url_error:
@@ -259,14 +309,17 @@ def rip_component():
             print(f"    Target: {selector}")
         else:
             print(f"    Mode: Auto-detect sections")
+        if pre_action:
+            print(f"    Pre-action: {pre_action.get('type','click')} → {pre_action.get('target','')}")
         if include_states:
             print(f"    States: enabled")
         if output_format == 'figma':
             print(f"    Output: Figma-compatible markdown")
         print('='*70)
 
-        ripper = ComponentRipper(site_url, selector)
-        blueprint = run_async(ripper.rip(auth_state, include_states=include_states, output_format=output_format))
+        ripper = _get_ripper_class()(site_url, selector)
+        blueprint = run_async(ripper.rip(auth_state, include_states=include_states,
+                                         output_format=output_format, pre_action=pre_action))
 
         print("\n✅ Component rip complete!")
 
@@ -306,7 +359,7 @@ def discover_components():
         print(f" 🔍 COMPONENT DISCOVERY: {site_url}")
         print('='*70)
 
-        ripper = ComponentRipper(site_url)
+        ripper = _get_ripper_class()(site_url)
         result = run_async(ripper.discover_components())
 
         print(f"\n✅ Discovery complete: {result.get('total', 0)} components found")
@@ -320,6 +373,152 @@ def discover_components():
         logger.error(f"Error during component discovery: {e}", exc_info=True)
         return jsonify({
             'error': 'Component discovery failed.',
+            'detail': str(e)
+        }), 500
+
+
+@app.route('/api/auto-rip', methods=['POST'])
+def auto_rip():
+    """
+    Auto-rip top N components — discover all components, then rip the highest-priority ones.
+
+    Request body:
+    {
+        "site_url": "https://stripe.com",
+        "count": 5
+    }
+    """
+    data = request.json
+    site_url = data.get('site_url')
+    count = min(data.get('count', 5), 10)  # Cap at 10
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    try:
+        print(f"\n{'='*70}")
+        print(f" ⚡ AUTO-RIP TOP {count}: {site_url}")
+        print('='*70)
+
+        ripper = _get_ripper_class()(site_url)
+        result = run_async(ripper.auto_rip_top_n(n=count))
+
+        print(f"\n✅ Auto-rip complete: {result.get('total_ripped', 0)}/{result.get('total_discovered', 0)} components ripped")
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        logger.error(f"Error during auto-rip: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Auto-rip failed.',
+            'detail': str(e)
+        }), 500
+
+
+@app.route('/api/search-components', methods=['POST'])
+def search_components():
+    """
+    Search for components containing specific text using CSS Custom Highlight API.
+
+    Request body:
+    {
+        "site_url": "https://stripe.com",
+        "search_text": "Sign up"
+    }
+    """
+    data = request.json
+    site_url = data.get('site_url')
+    search_text = data.get('search_text', '').strip()
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    if not search_text:
+        return jsonify({'error': 'search_text is required'}), 400
+
+    try:
+        print(f"\n{'='*70}")
+        print(f" 🔍 COMPONENT TEXT SEARCH: '{search_text}' on {site_url}")
+        print('='*70)
+
+        ripper = _get_ripper_class()(site_url)
+        result = run_async(ripper.search_components_by_text(search_text))
+
+        print(f"\n✅ Found {result.get('total', 0)} components matching '{search_text}'")
+
+        return jsonify({
+            'success': True,
+            **result
+        })
+
+    except Exception as e:
+        logger.error(f"Error during component search: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Component search failed.',
+            'detail': str(e)
+        }), 500
+
+
+@app.route('/api/extract-icons', methods=['POST'])
+def extract_icons():
+    """
+    Extract all SVG icons from a site.
+
+    Detects three patterns:
+      - Symbol sprites (<symbol id="..."> + <use href="#...">)
+      - Standalone inline SVGs (deduplicated by path data)
+      - External SVG file references (<img src="*.svg">)
+
+    Request body:
+    {
+        "site_url": "https://soundcloud.com"
+    }
+
+    Returns:
+    {
+        "success": true,
+        "total": 42,
+        "method": "symbol_sprite",
+        "symbols": [{"id": "icon-play", "name": "play", "svg": "...", "usage_count": 14, "viewBox": "0 0 24 24"}],
+        "inline": [...],
+        "external": [...]
+    }
+    """
+    data = request.json
+    site_url = data.get('site_url')
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    try:
+        print(f"\n{'='*70}")
+        print(f" 🎨 SVG ICON EXTRACTION: {site_url}")
+        print('='*70)
+
+        ripper = _get_ripper_class()(site_url)
+        catalog = run_async(ripper.extract_svg_icons())
+
+        print(f"\n✅ Found {catalog.get('total', 0)} icons "
+              f"({len(catalog.get('symbols', []))} symbols, "
+              f"{len(catalog.get('inline', []))} inline, "
+              f"{len(catalog.get('external', []))} external)")
+        print(f"   Method: {catalog.get('method')}")
+
+        return jsonify({
+            'success': True,
+            **catalog
+        })
+
+    except Exception as e:
+        logger.error(f"Error during icon extraction: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Icon extraction failed.',
             'detail': str(e)
         }), 500
 
@@ -344,7 +543,7 @@ def figma_html():
         return f'<html><body><p>Error: {url_error}</p></body></html>', 400
 
     try:
-        ripper = ComponentRipper(site_url, selector)
+        ripper = _get_ripper_class()(site_url, selector)
         blueprint = run_async(ripper.rip(include_states=True, output_format='figma'))
         html = blueprint.get('figma_html', '<html><body><p>No HTML generated</p></body></html>')
         return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
@@ -554,7 +753,7 @@ def extract_styles():
         print('='*70)
 
         async def extract():
-            from playwright.async_api import async_playwright
+            from patchright.async_api import async_playwright
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
@@ -566,7 +765,7 @@ def extract_styles():
                 await asyncio.sleep(2)
 
                 # Create extractor
-                extractor = ComputedStyleExtractor(page)
+                extractor = _get_style_extractor_class()(page)
 
                 # Extract styles based on mode
                 if mode == 'critical':
@@ -727,7 +926,7 @@ def site_topology():
         # Fall back to nav scraping
         if not urls:
             try:
-                engine = DeepEvidenceEngine(site_url, analysis_mode='single')
+                engine = _get_engine_class()(site_url, analysis_mode='single')
                 result = run_async(engine._quick_discover(site_url))
                 urls = result if isinstance(result, list) else result.get('all', [])
                 url_source = 'nav_discovery'
@@ -808,7 +1007,7 @@ def discover_urls():
                 await asyncio.sleep(2)
 
                 # Create engine to use link discovery
-                engine = DeepEvidenceEngine(site_url)
+                engine = _get_engine_class()(site_url)
 
                 if interactive:
                     # Full interactive discovery — clicks dropdowns, hamburgers, etc.
@@ -908,7 +1107,7 @@ def score_urls():
     max_pages = min(int(max_pages), 10)
 
     try:
-        engine = DeepEvidenceEngine(site_url, analysis_mode='interactive')
+        engine = _get_engine_class()(site_url, analysis_mode='interactive')
         selected = engine._select_diverse_pages(urls, site_url, max_pages=max_pages)
         return jsonify({'success': True, 'selected_urls': selected})
     except Exception as e:
@@ -960,7 +1159,7 @@ def multi_scan():
         print(f" 📄 Pages: {len(validated_urls)}  Focus: {analysis_focus}")
         print('='*70)
 
-        engine = DeepEvidenceEngine(site_url, analysis_mode='interactive')
+        engine = _get_engine_class()(site_url, analysis_mode='interactive')
         evidence = run_async(engine.multi_scan(validated_urls, analysis_focus=analysis_focus))
         evidence['analysis_focus'] = analysis_focus  # Pass through to frontend
 
@@ -1035,7 +1234,7 @@ def batch_analyze():
                 print(f"\n[{i}/{len(validated_urls)}] Analyzing: {url}")
 
                 try:
-                    engine = DeepEvidenceEngine(url)
+                    engine = _get_engine_class()(url)
                     evidence = await engine.extract_all()
                     results[url] = evidence
                     print(f"   ✅ Complete")
@@ -1312,6 +1511,1376 @@ def generate_markdown_report(evidence):
     return md
 
 
+@app.route('/api/export-design-md', methods=['POST'])
+def export_design_md():
+    """Export evidence as AI-agent-consumable DESIGN.md.
+
+    Accepts any ONE of:
+      - {"evidence": {...}}           — inline evidence (max ~16 MB)
+      - {"result_file": "/path.json"} — server-side path from /api/deep-scan's response
+      - {"site_url": "https://..."}   — reuses most-recent cached scan
+    """
+    data = request.json or {}
+    evidence = data.get('evidence')
+
+    # Gap #2: large evidence trips Flask's 16MB MAX_CONTENT_LENGTH.
+    # Allow clients to reference the server-side result_file instead of
+    # POSTing the full payload back.
+    if not evidence and data.get('result_file'):
+        fpath = data['result_file']
+        # Security: restrict to the results directory only
+        results_dir = os.path.realpath(os.path.expanduser('~/.webscraper/results'))
+        real_path = os.path.realpath(fpath)
+        if not real_path.startswith(results_dir + os.sep):
+            return jsonify({'error': 'result_file must live under ~/.webscraper/results'}), 400
+        try:
+            with open(real_path, 'r') as f:
+                evidence = json.load(f).get('evidence')
+        except Exception as e:
+            return jsonify({'error': f'Could not read result_file: {str(e)[:120]}'}), 400
+
+    # Third option: reuse in-memory cache by site_url
+    if not evidence and data.get('site_url'):
+        cached = _evidence_cache.get(data['site_url'])
+        if cached:
+            evidence = cached.get('evidence')
+
+    if not evidence:
+        return jsonify({'error': 'No evidence data provided (use evidence, result_file, or site_url)'}), 400
+
+    markdown = generate_design_md(evidence)
+    return jsonify({'success': True, 'markdown': markdown})
+
+
+def _resolve_design_evidence(evidence):
+    """Return a flat evidence view that works for both single-page and smart-nav.
+
+    Smart-nav stores per-page evidence under `page_results` and only exposes
+    `site_patterns`, `site_architecture`, and consistency at the top level.
+    Downstream design-MD consumers expect the design-system keys at the top
+    level. This helper promotes the home (or first valid) page's keys to the
+    top level without mutating the caller's dict.
+
+    Also attaches `_smart_nav_meta` with cross-page context when applicable.
+    """
+    if not isinstance(evidence, dict):
+        return evidence
+
+    page_results = evidence.get('page_results')
+    if not isinstance(page_results, dict) or not page_results:
+        # Single-page mode: return as-is
+        return evidence
+
+    # Pick the home page if present, otherwise the first non-errored page
+    home = page_results.get('home')
+    if not isinstance(home, dict) or home.get('error'):
+        home = next(
+            (p for p in page_results.values()
+             if isinstance(p, dict) and not p.get('error')),
+            None,
+        )
+    if not home:
+        return evidence
+
+    # Flatten: home page keys as the base, then merge synthesis-level keys over
+    # the top so smart-nav context (site_patterns, consistency) wins where it's
+    # more useful than per-page data.
+    flat = dict(home)
+    synth_keys = (
+        'site_patterns', 'design_system_consistency', 'validated_capabilities',
+        'site_topology', 'site_content_profile', 'architecture_diagrams',
+        'layout_synthesis', 'design_intent', 'design_playbook', 'url_patterns',
+    )
+    for k in synth_keys:
+        if k in evidence and evidence[k] is not None:
+            flat[k] = evidence[k]
+
+    # Prefer synthesis-level site_architecture if present (first-page copy)
+    if 'site_architecture' in evidence and evidence['site_architecture']:
+        flat['site_architecture'] = evidence['site_architecture']
+
+    # Expose smart-nav metadata so generators can mention it explicitly
+    valid_pages = [
+        (label, p) for label, p in page_results.items()
+        if isinstance(p, dict) and not p.get('error')
+    ]
+    flat['_smart_nav_meta'] = {
+        'mode': evidence.get('analysis_mode', 'smart-nav'),
+        'pages_analyzed': evidence.get('pages_analyzed', len(page_results)),
+        'page_labels': [label for label, _ in valid_pages],
+        'home_url': (home.get('meta_info') or {}).get('url', ''),
+    }
+    return flat
+
+
+def generate_design_md(evidence):
+    """Generate concise DESIGN.md for AI coding agents.
+
+    Format inspired by VoltAgent/awesome-design-md — optimized for dropping
+    into a project so Claude Code / Cursor / GPT can generate on-brand UI.
+    Typically 200-400 lines, actionable, evidence-backed.
+    """
+    # Resolve smart-nav (page_results) vs single-page (top-level keys) into
+    # a flat view so the rest of this function is oblivious to the mode.
+    evidence = _resolve_design_evidence(evidence)
+
+    # --- Header ---
+    meta = evidence.get('meta_info', {})
+    url = meta.get('url', 'Unknown')
+    # Extract site name from URL
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    site_name = parsed.hostname or 'Unknown'
+    site_name = site_name.replace('www.', '').split('.')[0].title()
+
+    brand = evidence.get('brand_personality', {})
+    tone = brand.get('tone', 'Modern')
+    energy = brand.get('energy', 'Balanced')
+    audience = brand.get('target_audience', '')
+
+    md = f"# {site_name} — Design System\n\n"
+    md += f"> **{tone}** / **{energy}**"
+    if audience:
+        md += f" / {audience}"
+    md += "\n"
+
+    # Build a one-line personality summary from brand signals
+    signals = brand.get('signals', [])
+    if signals:
+        top_signals = [s.split('→')[0].strip() for s in signals[:3]]
+        md += f"> {', '.join(top_signals)}\n"
+    md += "\n"
+
+    # Architecture context
+    arch = evidence.get('site_architecture', {})
+    css_fw = arch.get('css_framework', '')
+    framework = arch.get('framework', '')
+    css_analytics = evidence.get('css_analytics', {})
+    sophistication = css_analytics.get('sophistication_score', None)
+
+    if css_fw or framework or sophistication is not None:
+        md += "**Built with:**"
+        parts = []
+        if framework:
+            parts.append(framework)
+        if css_fw:
+            parts.append(css_fw)
+        if sophistication is not None:
+            parts.append(f"CSS sophistication {sophistication}/100")
+        md += " " + " · ".join(parts) + "\n\n"
+
+    # Smart-nav context: tell the reader this synthesizes N pages
+    snm = evidence.get('_smart_nav_meta')
+    if snm:
+        pages_n = snm.get('pages_analyzed', 0)
+        labels = snm.get('page_labels', [])
+        site_patterns = evidence.get('site_patterns') or {}
+        dsc = evidence.get('design_system_consistency') or {}
+        md += f"**Synthesized from {pages_n} page"
+        md += "s" if pages_n != 1 else ""
+        if labels:
+            md += f":** {', '.join(labels)}\n"
+        else:
+            md += ":**\n"
+        if site_patterns.get('typography_consistent') is not None:
+            ok = 'consistent' if site_patterns['typography_consistent'] else 'varies by page'
+            md += f"- Typography across pages: **{ok}**\n"
+        if site_patterns.get('color_consistency'):
+            md += f"- Color palette across pages: **{site_patterns['color_consistency']}**\n"
+        if site_patterns.get('layout_consistency'):
+            md += f"- Layout across pages: **{site_patterns['layout_consistency']}**\n"
+        if isinstance(dsc, dict) and dsc.get('overall_score') is not None:
+            md += f"- Design-system consistency score: **{dsc['overall_score']}/100**\n"
+        md += "\n"
+
+    # --- Color Palette ---
+    colors = evidence.get('colors', {})
+    md += "## Color Palette\n\n"
+
+    color_roles = colors.get('color_roles', {})
+    palette = colors.get('palette', {})
+
+    if color_roles:
+        md += "| Role | Value | Usage |\n|------|-------|-------|\n"
+        for role, vals in color_roles.items():
+            if isinstance(vals, list) and vals:
+                for v in vals[:2]:
+                    if isinstance(v, dict):
+                        hex_val = v.get('hex', v.get('value', ''))
+                        count = v.get('count', '')
+                        md += f"| {role} | `{hex_val}` | {count} uses |\n"
+                    elif isinstance(v, str):
+                        md += f"| {role} | `{v}` | — |\n"
+            elif isinstance(vals, str):
+                md += f"| {role} | `{vals}` | — |\n"
+        md += "\n"
+    elif palette:
+        # Fallback to palette structure
+        md += "| Group | Colors |\n|-------|--------|\n"
+        for group, vals in palette.items():
+            if isinstance(vals, list) and vals:
+                hex_list = [f"`{v}`" if isinstance(v, str) else f"`{v.get('hex', '')}`"
+                            for v in vals[:5]]
+                md += f"| {group} | {', '.join(hex_list)} |\n"
+        md += "\n"
+    else:
+        md += "*No color data extracted*\n\n"
+
+    # --- Typography ---
+    typo = evidence.get('typography', {})
+    md += "## Typography\n\n"
+
+    details = typo.get('details', {})
+    all_fonts = details.get('all_fonts', [])
+    body = details.get('body', {})
+    type_scale = typo.get('type_scale', {})
+
+    if all_fonts:
+        # Categorize fonts
+        body_font = body.get('fontFamily', all_fonts[0] if all_fonts else '')
+        heading_fonts = [f for f in all_fonts if f != body_font]
+
+        md += f"- **Body:** `{body_font}`"
+        if body.get('fontSize'):
+            md += f" at {body['fontSize']}"
+        if body.get('lineHeight'):
+            md += f" / {body['lineHeight']} line-height"
+        md += "\n"
+
+        if heading_fonts:
+            md += f"- **Headings:** `{heading_fonts[0]}`\n"
+
+        # Mono fonts
+        mono = [f for f in all_fonts if 'mono' in f.lower() or 'courier' in f.lower() or 'consolas' in f.lower()]
+        if mono:
+            md += f"- **Monospace:** `{mono[0]}`\n"
+
+    # Type scale
+    if isinstance(type_scale, dict):
+        ratio = type_scale.get('ratio')
+        sizes = type_scale.get('heading_sizes_px', type_scale.get('sizes_px', []))
+        if ratio:
+            md += f"- **Scale ratio:** {ratio}\n"
+        if sizes:
+            md += f"- **Heading sizes:** {', '.join(str(s) + 'px' for s in sizes[:6])}\n"
+
+    # Font weights
+    weights = details.get('weights', [])
+    if weights:
+        md += f"- **Weights:** {', '.join(str(w) for w in sorted(weights))}\n"
+
+    md += "\n"
+
+    # --- Spacing Scale ---
+    spacing = evidence.get('spacing_scale', {})
+    md += "## Spacing Scale\n\n"
+
+    scale = spacing.get('scale', spacing.get('values', []))
+    base = spacing.get('base_unit', '')
+
+    # Semantic naming: map scale position to t-shirt sizes
+    size_names = ['3xs', '2xs', 'xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl']
+
+    if scale:
+        sorted_scale = sorted(set(scale))[:10]
+        # Center the naming around the median
+        offset = max(0, (len(size_names) - len(sorted_scale)) // 2)
+
+        md += "| Token | Value |\n|-------|-------|\n"
+        for i, val in enumerate(sorted_scale):
+            name_idx = min(i + offset, len(size_names) - 1)
+            name = size_names[name_idx]
+            md += f"| `spacing.{name}` | `{val}px` |\n"
+        md += "\n"
+        if base:
+            md += f"**Base unit:** `{base}`\n\n"
+    else:
+        md += "*No spacing scale detected*\n\n"
+
+    # --- Layout ---
+    layout = evidence.get('layout', {})
+    spatial = evidence.get('spatial_composition', {})
+    md += "## Layout\n\n"
+
+    page_structure = spatial.get('page_structure', {})
+    pattern_type = page_structure.get('pattern_type', '')
+    if pattern_type:
+        md += f"- **Page pattern:** {pattern_type}\n"
+
+    # Container / grid info
+    container_hierarchy = spatial.get('container_hierarchy', {})
+    layout_grid = spatial.get('layout_grid', {})
+
+    grid_count = layout.get('grid_count', container_hierarchy.get('grid_count', 0))
+    flex_count = layout.get('flex_count', container_hierarchy.get('flex_count', 0))
+
+    if grid_count or flex_count:
+        md += f"- **Layout engines:** {grid_count} CSS Grid, {flex_count} Flexbox\n"
+
+    if layout_grid:
+        cols = layout_grid.get('columns')
+        if cols:
+            md += f"- **Grid system:** {cols}-column\n"
+
+    # Breakpoints
+    breakpoints = evidence.get('responsive_breakpoints', {})
+    bp_list = breakpoints.get('unique_breakpoints', [])
+    if bp_list:
+        md += f"- **Breakpoints:** {', '.join(str(b) + 'px' for b in bp_list[:6])}\n"
+
+    # Alignment & whitespace
+    alignment = spatial.get('alignment_patterns', {})
+    whitespace = spatial.get('whitespace_analysis', {})
+    if alignment.get('dominant'):
+        md += f"- **Alignment:** {alignment['dominant']}\n"
+    if whitespace.get('interpretation'):
+        md += f"- **Density:** {whitespace['interpretation']}\n"
+
+    md += "\n"
+
+    # --- Motion & Animation ---
+    motion = evidence.get('motion_tokens', {})
+    md += "## Motion\n\n"
+
+    duration_scale = motion.get('duration_scale', [])
+    easing_palette = motion.get('easing_palette', [])
+
+    if duration_scale:
+        md += "**Duration scale:**\n"
+        for d in duration_scale[:5]:
+            if isinstance(d, dict):
+                md += f"- `{d.get('value', d.get('duration', ''))}` — {d.get('role', d.get('label', ''))}\n"
+            else:
+                md += f"- `{d}`\n"
+        md += "\n"
+
+    if easing_palette:
+        md += "**Easing palette:**\n"
+        for e in easing_palette[:5]:
+            if isinstance(e, dict):
+                md += f"- `{e.get('value', e.get('easing', ''))}` — {e.get('role', e.get('label', ''))}\n"
+            else:
+                md += f"- `{e}`\n"
+        md += "\n"
+
+    # Transition patterns from CSS analytics
+    transitions = css_analytics.get('transition_patterns', {})
+    trans_props = transitions.get('transitioned_properties', {})
+    if trans_props:
+        top_trans = sorted(trans_props.items(), key=lambda x: -x[1])[:5]
+        md += f"**Most animated properties:** {', '.join(f'`{p}`' for p, _ in top_trans)}\n\n"
+
+    if not duration_scale and not easing_palette and not trans_props:
+        md += "*No motion tokens detected*\n\n"
+
+    # --- Shadows & Elevation ---
+    shadows = evidence.get('shadow_system', {})
+    levels = shadows.get('levels', [])
+    md += "## Shadows & Elevation\n\n"
+
+    if levels:
+        md += "| Level | CSS | Usage |\n|-------|-----|-------|\n"
+        for i, lvl in enumerate(levels):
+            css_val = lvl.get('css', lvl.get('value', ''))
+            count = lvl.get('count', lvl.get('usage', 0))
+            name = lvl.get('name', f'elevation-{i+1}')
+            md += f"| {name} | `{css_val[:60]}` | {count} elements |\n"
+        md += "\n"
+    else:
+        md += "*No shadow system detected*\n\n"
+
+    # --- Component Patterns ---
+    hierarchy = evidence.get('visual_hierarchy', {})
+    md += "## Component Patterns\n\n"
+
+    hero = hierarchy.get('hero_section', {})
+    if hero and hero.get('detected'):
+        md += "### Hero Section\n"
+        if hero.get('heading'):
+            md += f"- **Heading:** \"{hero['heading'][:80]}\"\n"
+        if hero.get('font_size'):
+            md += f"- **Size:** {hero['font_size']}\n"
+        if hero.get('has_background'):
+            md += f"- **Background:** {hero.get('background_type', 'yes')}\n"
+        md += "\n"
+
+    cta = hierarchy.get('primary_cta', {})
+    if cta and cta.get('detected'):
+        md += "### Primary CTA\n"
+        if cta.get('text'):
+            md += f"- **Text:** \"{cta['text'][:50]}\"\n"
+        if cta.get('background_color'):
+            md += f"- **Color:** `{cta['background_color']}`\n"
+        if cta.get('font_size'):
+            md += f"- **Size:** {cta['font_size']}\n"
+        md += "\n"
+
+    # Zones from spatial composition
+    zones = spatial.get('component_zones', [])
+    if zones:
+        md += "### Page Zones\n"
+        for z in zones[:6]:
+            if isinstance(z, dict):
+                name = z.get('type', z.get('name', 'zone'))
+                md += f"- **{name.title()}**"
+                if z.get('bounds'):
+                    b = z['bounds']
+                    md += f" — {b.get('width', '?')}×{b.get('height', '?')}px"
+                md += "\n"
+        md += "\n"
+
+    if not hero.get('detected') and not cta.get('detected') and not zones:
+        md += "*No component patterns detected*\n\n"
+
+    # --- Box Model Export ---
+    box_model = evidence.get('box_model_export', {})
+    bm_zones = box_model.get('zones', [])
+    if bm_zones:
+        md += "## Box Model (Key Zones)\n\n"
+        md += "| Zone | Dimensions | Layout | Properties |\n|------|-----------|--------|------------|\n"
+        for z in bm_zones:
+            comp = z.get('computed', {})
+            dims = comp.get('dimensions', {})
+            zone_name = z.get('zone_type', 'unknown').title()
+            dim_str = f"{dims.get('widthVw', '?')} × {dims.get('height', '?')}"
+            # Layout
+            display = comp.get('display', '')
+            layout_parts = [display]
+            if comp.get('flexDirection') and comp['flexDirection'] != 'row':
+                layout_parts.append(comp['flexDirection'])
+            if comp.get('justifyContent'):
+                layout_parts.append(comp['justifyContent'])
+            layout_str = ', '.join(layout_parts)
+            # Extra props
+            props = []
+            if comp.get('gap'):
+                props.append(f"gap: {comp['gap']}")
+            if comp.get('padding'):
+                props.append(f"padding: {comp['padding']}")
+            if comp.get('zIndex') is not None:
+                props.append(f"z-index: {comp['zIndex']}")
+            if comp.get('maxWidth'):
+                props.append(f"max-width: {comp['maxWidth']}")
+            props_str = '; '.join(props) if props else '—'
+            md += f"| {zone_name} | {dim_str} | {layout_str} | {props_str} |\n"
+        md += "\n"
+
+    # --- Component Blueprints ---
+    blueprints_data = evidence.get('component_blueprints', {})
+    blueprints = blueprints_data.get('blueprints', [])
+    if blueprints:
+        md += "## Component Blueprints\n\n"
+        md += f"*{len(blueprints)} components auto-ripped by priority*\n\n"
+        for bp_entry in blueprints[:5]:
+            disc = bp_entry.get('discovery', {})
+            bp = bp_entry.get('blueprint', {})
+            label = disc.get('label', disc.get('selector', 'Unknown'))
+            category = disc.get('category', '')
+            selector = disc.get('selector', '')
+
+            md += f"### {label}\n"
+            md += f"- **Category:** {category}\n"
+            md += f"- **Selector:** `{selector}`\n"
+
+            # Box model from blueprint
+            box = bp.get('boxModel', {})
+            if box:
+                w = box.get('width', '?')
+                h = box.get('height', '?')
+                md += f"- **Dimensions:** {w} × {h}\n"
+
+            # Layout from blueprint
+            bp_layout = bp.get('layout') or {}
+            if isinstance(bp_layout, dict) and bp_layout.get('display'):
+                layout_desc = bp_layout['display']
+                if bp_layout.get('flexDirection'):
+                    layout_desc += f", {bp_layout['flexDirection']}"
+                if bp_layout.get('justifyContent'):
+                    layout_desc += f", {bp_layout['justifyContent']}"
+                if bp_layout.get('gap') and bp_layout['gap'] != 'normal':
+                    layout_desc += f", gap: {bp_layout['gap']}"
+                md += f"- **Layout:** {layout_desc}\n"
+
+            # Typography (some blueprint shapes store this as a list of
+            # per-element rules instead of a single dict — guard both)
+            typo_bp = bp.get('typography') or {}
+            if isinstance(typo_bp, list):
+                typo_bp = typo_bp[0] if typo_bp and isinstance(typo_bp[0], dict) else {}
+            if isinstance(typo_bp, dict) and typo_bp.get('fontFamily'):
+                md += f"- **Font:** `{typo_bp['fontFamily'][:60]}`"
+                if typo_bp.get('fontSize'):
+                    md += f" at {typo_bp['fontSize']}"
+                md += "\n"
+
+            md += "\n"
+
+    # --- Technical Notes ---
+    md += "## Technical Notes\n\n"
+
+    # Modern CSS features
+    modern = css_analytics.get('modern_features', {})
+    active_features = [k.replace('_', ' ') for k, v in modern.items()
+                       if isinstance(v, bool) and v]
+    if active_features:
+        md += f"- **Modern CSS:** {', '.join(active_features)}\n"
+
+    # DTCG tokens
+    dtcg = css_analytics.get('dtcg_tokens', {})
+    token_count = dtcg.get('total_token_count', 0)
+    if token_count:
+        md += f"- **Design tokens:** {token_count} DTCG-classifiable custom properties\n"
+
+    # Accessibility
+    a11y = evidence.get('accessibility', {})
+    if a11y.get('confidence', 0) > 50:
+        md += f"- **Accessibility:** {a11y.get('pattern', 'analyzed')}\n"
+
+    contrast = evidence.get('contrast_a11y', {})
+    if contrast.get('confidence', 0) > 50:
+        md += f"- **Contrast:** {contrast.get('pattern', 'analyzed')}\n"
+
+    md += f"\n---\n\n"
+    md += f"*Generated from [{url}]({url}) by Web Intelligence Scraper*\n"
+
+    return md
+
+
+@app.route('/api/export-catalog', methods=['POST'])
+def export_catalog():
+    """Export json-render compatible component catalog.
+
+    Accepts any ONE of:
+      - {"evidence": {...}}           — inline evidence (max ~16 MB)
+      - {"result_file": "/path.json"} — server-side path from /api/deep-scan response
+      - {"site_url": "https://..."}   — reuses most-recent cached scan
+    """
+    data = request.json or {}
+    evidence = data.get('evidence')
+
+    # Accept result_file to avoid 413 on large scans
+    if not evidence and data.get('result_file'):
+        fpath = data['result_file']
+        results_dir = os.path.realpath(os.path.expanduser('~/.webscraper/results'))
+        real_path = os.path.realpath(fpath)
+        if not real_path.startswith(results_dir + os.sep):
+            return jsonify({'error': 'result_file must live under ~/.webscraper/results'}), 400
+        try:
+            with open(real_path, 'r') as f:
+                evidence = json.load(f).get('evidence')
+        except Exception as e:
+            return jsonify({'error': f'Could not read result_file: {str(e)[:120]}'}), 400
+
+    if not evidence and data.get('site_url'):
+        cached = _evidence_cache.get(data['site_url'])
+        if cached:
+            evidence = cached.get('evidence')
+
+    if not evidence:
+        return jsonify({'error': 'No evidence data provided (use evidence, result_file, or site_url)'}), 400
+
+    catalog = generate_json_render_catalog(evidence)
+    return jsonify({'success': True, 'catalog': catalog})
+
+
+def generate_json_render_catalog(evidence):
+    """
+    Generate a json-render compatible component catalog from scan evidence.
+
+    Output format matches vercel-labs/json-render — a Catalog JSON an AI can
+    use to generate new pages that precisely match the scanned site's design
+    language. Includes:
+      - design tokens (colors, typography, spacing, shadows, motion)
+      - component definitions with inferred props + descriptions
+      - an example spec showing page assembly
+      - a system_prompt snippet to paste into any LLM
+
+    See: https://github.com/vercel-labs/json-render
+    """
+    from urllib.parse import urlparse
+    import datetime
+
+    evidence = _resolve_design_evidence(evidence)
+
+    meta = evidence.get('meta_info', {})
+    url = meta.get('url', 'unknown')
+    parsed = urlparse(url)
+    site_name = (parsed.hostname or 'unknown').replace('www.', '')
+    site_short = site_name.split('.')[0].title()
+    today = datetime.date.today().isoformat()
+
+    # ── 1. Design Tokens ──────────────────────────────────────────────────────
+    tokens = {}
+
+    # Colors — prefer semantic roles over raw palette
+    colors_ev = evidence.get('colors', {})
+    color_roles = colors_ev.get('color_roles', {})
+    palette = colors_ev.get('palette', {})
+
+    def _extract_color_value(raw):
+        """Flatten a color role entry — handles str, dict {value}, or list thereof."""
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, dict):
+            return raw.get('value') or raw.get('hex') or ''
+        if isinstance(raw, list) and raw:
+            return _extract_color_value(raw[0])
+        return ''
+
+    tok_colors = {}
+    role_map = {
+        'primary': ['primary', 'brand', 'accent'],
+        'secondary': ['secondary', 'secondary_brand'],
+        'background': ['background', 'bg', 'surface'],
+        'text': ['text', 'foreground', 'on_background'],
+        'muted': ['muted', 'subtle', 'disabled'],
+        'success': ['success', 'positive'],
+        'warning': ['warning', 'caution'],
+        'error': ['error', 'danger', 'negative'],
+        'border': ['border', 'divider', 'outline'],
+    }
+    for token_name, candidates in role_map.items():
+        for cand in candidates:
+            if cand in color_roles and color_roles[cand]:
+                val = _extract_color_value(color_roles[cand])
+                if val:
+                    tok_colors[token_name] = val
+                    break
+        if token_name not in tok_colors:
+            # Fall back to palette
+            primary_list = palette.get('primary', palette.get('intentional', []))
+            if primary_list and token_name == 'primary':
+                first = primary_list[0]
+                tok_colors['primary'] = first if isinstance(first, str) else first.get('value', '')
+
+    if tok_colors:
+        tokens['colors'] = tok_colors
+
+    # Typography
+    typo_ev = evidence.get('typography', {})
+    typo_details = typo_ev.get('details', {})
+    tok_typo = {}
+
+    all_fonts = typo_details.get('all_fonts', typo_details.get('fonts', []))
+    heading_font = typo_details.get('heading_font') or (all_fonts[0] if all_fonts else None)
+    body_font = typo_details.get('body_font') or (all_fonts[1] if len(all_fonts) > 1 else heading_font)
+    mono_font = typo_details.get('mono_font')
+
+    if heading_font:
+        tok_typo['headingFont'] = heading_font
+    if body_font:
+        tok_typo['bodyFont'] = body_font
+    if mono_font:
+        tok_typo['monoFont'] = mono_font
+
+    # Type scale — heading_sizes_px can be a dict {h1: px, ...} or a list [px, ...]
+    type_scale = typo_ev.get('type_scale', {})
+    heading_sizes = {}
+    if isinstance(type_scale, dict):
+        hs = type_scale.get('heading_sizes_px', {})
+        if isinstance(hs, dict):
+            for tag, size in hs.items():
+                heading_sizes[tag] = f"{size}px"
+        elif isinstance(hs, list):
+            for i, size in enumerate(hs[:6], 1):
+                heading_sizes[f'h{i}'] = f"{size}px"
+    if not heading_sizes and typo_details.get('heading_sizes'):
+        for i, size in enumerate(typo_details['heading_sizes'][:6], 1):
+            heading_sizes[f'h{i}'] = str(size)
+
+    body_size = typo_details.get('body_size') or typo_details.get('base_size') or '16px'
+    scale_entry = {}
+    if heading_sizes:
+        scale_entry.update(heading_sizes)
+    scale_entry['body'] = str(body_size)
+
+    weights = typo_details.get('weights', typo_details.get('font_weights', []))
+    if weights:
+        tok_typo['weights'] = [str(w) for w in weights[:8]]
+    if scale_entry:
+        tok_typo['scale'] = scale_entry
+
+    line_heights = typo_details.get('line_heights', [])
+    if line_heights:
+        tok_typo['lineHeights'] = line_heights[:4]
+
+    if tok_typo:
+        tokens['typography'] = tok_typo
+
+    # Spacing
+    spacing_ev = evidence.get('spacing_scale', {})
+    spacing_vals = spacing_ev.get('scale', spacing_ev.get('values', []))
+    spacing_names = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl']
+    tok_spacing = {}
+    if spacing_vals:
+        # Deduplicate and sort
+        deduped = sorted(set(
+            v if isinstance(v, (int, float)) else
+            float(v.replace('px', '').replace('rem', '').replace('em', '') or 0)
+            for v in spacing_vals if v
+        ))
+        for i, val in enumerate(deduped[:len(spacing_names)]):
+            name = spacing_names[i]
+            tok_spacing[name] = f"{val}px"
+    if spacing_ev.get('base_unit'):
+        tok_spacing['base'] = spacing_ev['base_unit']
+    if tok_spacing:
+        tokens['spacing'] = tok_spacing
+
+    # Shadows
+    shadow_ev = evidence.get('shadow_system', {})
+    shadow_levels = shadow_ev.get('levels', [])
+    tok_shadows = {}
+    elevation_names = ['sm', 'md', 'lg', 'xl', 'focus']
+    for i, level in enumerate(shadow_levels[:5]):
+        name = level.get('name') or elevation_names[i] if i < len(elevation_names) else f'level{i}'
+        css = level.get('css') or level.get('value', '')
+        if css:
+            tok_shadows[name] = css
+    if tok_shadows:
+        tokens['shadows'] = tok_shadows
+
+    # Motion
+    motion_ev = evidence.get('motion_tokens', {})
+    tok_motion = {}
+    dur_scale = motion_ev.get('duration_scale', {})
+    if dur_scale:
+        tok_motion['durations'] = {k: v for k, v in list(dur_scale.items())[:6]}
+    easing_palette = motion_ev.get('easing_palette', [])
+    if easing_palette:
+        tok_motion['easings'] = {
+            ep.get('role', f'easing{i}'): ep.get('value', '')
+            for i, ep in enumerate(easing_palette[:5])
+            if ep.get('value')
+        }
+    if tok_motion:
+        tokens['motion'] = tok_motion
+
+    # Border radius — prefer levels[*].value (actual CSS px) over raw scale numbers
+    br_ev = evidence.get('border_radius_scale', {})
+    br_levels = br_ev.get('levels', [])
+    if isinstance(br_levels, list) and br_levels:
+        br_names = ['sm', 'md', 'lg', 'xl', 'full']
+        tokens['radii'] = {}
+        for i, lvl in enumerate(br_levels[:5]):
+            name = br_names[i] if i < len(br_names) else f'r{i}'
+            val = lvl.get('value') or lvl.get('display') or str(lvl.get('px', ''))
+            if val:
+                tokens['radii'][name] = val
+    else:
+        br_vals = br_ev.get('values', br_ev.get('scale', []))
+        if br_vals:
+            br_names = ['sm', 'md', 'lg', 'full']
+            tokens['radii'] = {
+                br_names[i] if i < len(br_names) else f'r{i}': str(v)
+                for i, v in enumerate(br_vals[:4])
+            }
+
+    # ── 2. Component Definitions ───────────────────────────────────────────────
+    components = {}
+    bp_data = evidence.get('component_blueprints', {})
+    blueprints = bp_data.get('blueprints', []) if isinstance(bp_data, dict) else []
+
+    # Fallback: build minimal components from visual_hierarchy if no blueprints
+    if not blueprints:
+        vh = evidence.get('visual_hierarchy', {})
+        hero = vh.get('hero_section', {})
+        if hero.get('detected'):
+            blueprints_synthetic = [{'_synthetic': True, 'label': 'HeroSection', 'category': 'hero', 'description': hero.get('description', 'Hero section')}]
+        else:
+            blueprints_synthetic = []
+    else:
+        blueprints_synthetic = []
+
+    def _infer_props(disc, blue):
+        """Infer json-render prop definitions from blueprint anatomy."""
+        props = {}
+        category = disc.get('category', '')
+        label = disc.get('label', '')
+        anatomy = blue.get('anatomy', {})
+
+        # Always offer children prop
+        props['children'] = {
+            'type': 'node',
+            'description': 'Content to render inside the component',
+        }
+
+        # Category-specific props
+        if category in ('navigation', 'header'):
+            props['logo'] = {'type': 'string', 'description': 'Logo image src or brand name text'}
+            props['links'] = {
+                'type': 'array',
+                'items': {'type': 'object', 'properties': {
+                    'label': {'type': 'string'},
+                    'href': {'type': 'string'},
+                    'active': {'type': 'boolean'},
+                }},
+                'description': 'Navigation link items',
+            }
+            props['ctaText'] = {'type': 'string', 'description': 'Primary CTA button label'}
+            props['ctaHref'] = {'type': 'string', 'description': 'Primary CTA URL'}
+
+        elif category in ('hero', 'banner'):
+            props['headline'] = {'type': 'string', 'required': True, 'description': 'Main hero headline'}
+            props['subtext'] = {'type': 'string', 'description': 'Supporting description below headline'}
+            props['ctaText'] = {'type': 'string', 'description': 'Primary call-to-action button text'}
+            props['ctaHref'] = {'type': 'string', 'description': 'CTA destination URL'}
+            props['secondaryCtaText'] = {'type': 'string', 'description': 'Secondary CTA link text'}
+            props['backgroundImage'] = {'type': 'string', 'description': 'Background image URL (optional)'}
+
+        elif category in ('content_grid', 'features', 'grid'):
+            props['items'] = {
+                'type': 'array',
+                'items': {'type': 'object', 'properties': {
+                    'icon': {'type': 'string'},
+                    'title': {'type': 'string', 'required': True},
+                    'description': {'type': 'string'},
+                    'href': {'type': 'string'},
+                }},
+                'description': 'Grid items (features, cards, etc.)',
+            }
+            props['columns'] = {'type': 'number', 'description': 'Number of columns (default: auto)'}
+            props['title'] = {'type': 'string', 'description': 'Section heading (optional)'}
+
+        elif category in ('footer',):
+            props['columns'] = {
+                'type': 'array',
+                'items': {'type': 'object', 'properties': {
+                    'heading': {'type': 'string'},
+                    'links': {'type': 'array', 'items': {'type': 'object',
+                              'properties': {'label': {'type': 'string'}, 'href': {'type': 'string'}}}},
+                }},
+                'description': 'Footer link columns',
+            }
+            props['copyright'] = {'type': 'string', 'description': 'Copyright line text'}
+            props['socialLinks'] = {'type': 'array', 'description': 'Social media links'}
+
+        elif category in ('form',):
+            props['fields'] = {
+                'type': 'array',
+                'items': {'type': 'object', 'properties': {
+                    'name': {'type': 'string', 'required': True},
+                    'label': {'type': 'string'},
+                    'type': {'type': 'string', 'default': 'text'},
+                    'placeholder': {'type': 'string'},
+                    'required': {'type': 'boolean'},
+                }},
+                'description': 'Form field definitions',
+            }
+            props['submitText'] = {'type': 'string', 'description': 'Submit button label'}
+            props['onSubmit'] = {'type': 'action', 'description': 'Form submission action'}
+
+        else:
+            # Generic content component
+            props['title'] = {'type': 'string', 'description': 'Section or card title'}
+            props['description'] = {'type': 'string', 'description': 'Body text content'}
+            props['image'] = {'type': 'string', 'description': 'Image URL (optional)'}
+            props['href'] = {'type': 'string', 'description': 'Link destination (optional)'}
+
+        return props
+
+    def _build_component_description(disc, blue):
+        """Build a rich natural-language description for an AI to understand the component."""
+        label = disc.get('label', disc.get('category', 'Component'))
+        category = disc.get('category', 'section')
+        bounds = disc.get('bounds', {})
+        w = bounds.get('width', 0)
+        h = bounds.get('height', 0)
+        selector = disc.get('selector', '')
+
+        box = blue.get('boxModel', {})
+        visual = blue.get('visual', {})
+        interactivity = blue.get('interactivity', {})
+        js_info = blue.get('javascript', {})
+        portability = blue.get('portability', {})
+        semantic_name = blue.get('semantic_name', label)
+
+        parts = [f"{semantic_name} ({category})."]
+
+        # Dimensions
+        if w and h:
+            parts.append(f"Dimensions: {w}×{h}px.")
+
+        # Visual
+        bg = visual.get('backgroundColor', '')
+        if bg and bg not in ('rgba(0, 0, 0, 0)', 'transparent', 'none', ''):
+            parts.append(f"Background: {bg}.")
+        shadow = visual.get('boxShadow', '')
+        if shadow and shadow != 'none':
+            parts.append(f"Has elevation shadow.")
+        br = visual.get('borderRadius', '')
+        if br and br not in ('0px', 'none', ''):
+            parts.append(f"Border-radius: {br}.")
+
+        # Interactivity
+        has_transition = interactivity.get('transition', 'none') not in ('none', 'all 0s', '')
+        if has_transition:
+            parts.append(f"Has CSS transition on hover/focus.")
+        if js_info.get('requiresJavaScript'):
+            behaviors = js_info.get('behaviors', {})
+            beh_list = [k.replace('has', '').replace('Handlers', '').replace('Controls', '').lower()
+                        for k, v in behaviors.items() if v and k.startswith('has')]
+            if beh_list:
+                parts.append(f"JS behaviors: {', '.join(beh_list[:4])}.")
+
+        # Reusability
+        score = portability.get('reusability_score', 0)
+        if score:
+            parts.append(f"Reusability: {score}/100.")
+
+        if selector:
+            parts.append(f"Selector: `{selector}`.")
+
+        return ' '.join(parts)
+
+    # Build from real blueprints
+    for bp_entry in blueprints:
+        disc = bp_entry.get('discovery', {})
+        blue = bp_entry.get('blueprint', {})
+        label = disc.get('label', disc.get('category', 'Component'))
+        category = disc.get('category', 'section')
+        selector = disc.get('selector', '')
+
+        # Create a clean component name (PascalCase, no spaces/punctuation)
+        import re
+        raw_name = blue.get('semantic_name') or label.split('—')[0].strip()
+        comp_name = re.sub(r'[^a-zA-Z0-9]', '', raw_name.title().replace(' ', ''))
+        if not comp_name:
+            comp_name = f"Component{len(components)+1}"
+
+        # Deduplicate by semantic name — if we already have a component with the
+        # same name AND same category, skip (prefer the first/largest instance).
+        # Only append index if the name genuinely conflicts across categories.
+        if comp_name in components:
+            existing_cat = components[comp_name].get('category', '')
+            if existing_cat == category:
+                # Same semantic component, different selector — keep the first
+                continue
+            comp_name = f"{comp_name}{len(components)+1}"
+
+        # Code snippets (trimmed for size)
+        code = blue.get('code', {})
+        css_snippet = code.get('css', '')[:500] if code.get('css') else ''
+        react_snippet = code.get('react', '')[:800] if code.get('react') else ''
+
+        components[comp_name] = {
+            'description': _build_component_description(disc, blue),
+            'category': category,
+            'selector': selector,
+            'props': _infer_props(disc, blue),
+            'visual': {
+                k: v for k, v in (blue.get('visual') or {}).items()
+                if v and v not in ('none', 'normal', '0px', 'auto')
+            },
+            'layout': blue.get('layout') or {},
+            'behavior': {
+                'requiresJavaScript': bool(
+                    (blue.get('javascript') or {}).get('requiresJavaScript')),
+                'interactive': bool(
+                    (blue.get('interactivity') or {}).get('transition', 'none') not in ('none', '')),
+            },
+            'codeSnippets': {
+                k: v for k, v in {'css': css_snippet, 'react': react_snippet}.items() if v
+            },
+        }
+
+    # Also add synthetic fallbacks if blueprints is empty
+    for synth in blueprints_synthetic:
+        comp_name = re.sub(r'[^a-zA-Z0-9]', '', synth['label'])
+        components[comp_name] = {
+            'description': synth.get('description', synth['label']),
+            'category': synth.get('category', 'section'),
+            'props': _infer_props({'category': synth.get('category', '')}, {}),
+        }
+
+    # ── 3. Page Patterns (spatial composition) ────────────────────────────────
+    page_patterns = {}
+    sc = evidence.get('spatial_composition', {})
+    page_struct = sc.get('page_structure', {})
+    pattern_type = page_struct.get('pattern_type', '')
+
+    if pattern_type:
+        # Derive a zone sequence from the component list + pattern type
+        comp_names = list(components.keys())
+        page_patterns['default'] = {
+            'description': pattern_type,
+            'zones': comp_names,
+        }
+
+    # Whitespace profile
+    ws = sc.get('whitespace_analysis', {})
+    if ws.get('interpretation'):
+        page_patterns['whitespace'] = {
+            'density': ws.get('interpretation', 'balanced'),
+            'breathingRoom': ws.get('breathing_room_score', 0),
+        }
+
+    # ── 4. Example Spec ────────────────────────────────────────────────────────
+    # Build a minimal but real flat spec using the discovered components
+    example_spec = {'root': 'page', 'elements': {}}
+    comp_names = list(components.keys())
+
+    example_spec['elements']['page'] = {
+        'type': 'Page',
+        'props': {'className': 'page-root'},
+        'children': [c[0].lower() + c[1:] for c in comp_names],
+    }
+
+    for comp_name in comp_names:
+        comp_def = components[comp_name]
+        element_id = comp_name[0].lower() + comp_name[1:]
+        category = comp_def.get('category', 'section')
+
+        # Build minimal example props
+        ex_props = {}
+        props_def = comp_def.get('props', {})
+        for prop_name, prop_def in props_def.items():
+            if prop_name == 'children':
+                continue
+            if prop_def.get('required') or prop_name in (
+                'headline', 'ctaText', 'logo', 'links', 'items', 'title', 'submitText'
+            ):
+                if prop_def.get('type') == 'string':
+                    ex_props[prop_name] = f'{{/* {prop_name} */}}'
+                elif prop_def.get('type') == 'array':
+                    ex_props[prop_name] = []
+                elif prop_def.get('type') == 'number':
+                    ex_props[prop_name] = 3
+                elif prop_def.get('type') == 'boolean':
+                    ex_props[prop_name] = False
+
+        example_spec['elements'][element_id] = {
+            'type': comp_name,
+            'props': ex_props,
+            'children': [],
+        }
+
+    # ── 5. Brand context ───────────────────────────────────────────────────────
+    brand = evidence.get('brand_personality', {})
+    tone = brand.get('tone', 'Professional')
+    energy = brand.get('energy', 'Confident')
+    audience = brand.get('target_audience', '')
+    signals = brand.get('signals', [])
+    signal_str = '; '.join(s.split('→')[0].strip() for s in signals[:3]) if signals else ''
+
+    # CSS sophistication
+    css_an = evidence.get('css_analytics', {})
+    soph_score = css_an.get('sophistication_score', '')
+    modern_features = css_an.get('modern_features', {})
+    active_modern = [k for k, v in modern_features.items() if isinstance(v, bool) and v]
+
+    # ── 6. System Prompt ───────────────────────────────────────────────────────
+    color_summary = ', '.join(
+        f"{k}: {v}" for k, v in list(tok_colors.items())[:4]
+    ) if tok_colors else 'not extracted'
+
+    typo_summary = f"{heading_font or 'system-ui'} (heading), {body_font or 'system-ui'} (body)" if (heading_font or body_font) else 'system-ui'
+
+    system_prompt = (
+        f"You are a UI generator for {site_name}. "
+        f"Use ONLY the components defined in this catalog's `components` field. "
+        f"Apply design tokens from `tokens` consistently — do not invent new colors, fonts, or spacing values. "
+        f"\n\nBrand: {tone} / {energy}. "
+    )
+    if audience:
+        system_prompt += f"Target audience: {audience}. "
+    if signal_str:
+        system_prompt += f"Design signals: {signal_str}. "
+    system_prompt += (
+        f"\n\nDesign tokens summary: colors ({color_summary}). "
+        f"Typography: {typo_summary}. "
+    )
+    if tok_spacing:
+        system_prompt += f"Spacing base: {tok_spacing.get('base', tok_spacing.get('xs', 'unknown'))}. "
+    if soph_score:
+        system_prompt += f"CSS sophistication: {soph_score}/100. "
+    if active_modern:
+        system_prompt += f"Modern CSS features in use: {', '.join(active_modern[:5])}. "
+    system_prompt += (
+        f"\n\nOutput a valid json-render Spec JSON with `root` and `elements` map. "
+        f"Each element must reference a component from the catalog by its exact `type` name. "
+        f"Validate all props against the component's `props` schema. "
+        f"Do not use components not in this catalog."
+    )
+
+    # ── Assemble final catalog ─────────────────────────────────────────────────
+    arch = evidence.get('site_architecture', {})
+    return {
+        'version': '1.0',
+        'format': 'json-render-catalog',
+        'site': site_name,
+        'generated': today,
+        'source_url': url,
+        'meta': {
+            'framework': arch.get('framework', ''),
+            'css_framework': arch.get('css_framework', ''),
+            'sophistication_score': soph_score,
+            'component_count': len(components),
+            'token_categories': list(tokens.keys()),
+        },
+        'tokens': tokens,
+        'components': components,
+        'page_patterns': page_patterns,
+        'example_spec': example_spec,
+        'system_prompt': system_prompt,
+    }
+
+
+@app.route('/api/export-figma-spec', methods=['POST'])
+def export_figma_spec():
+    """Export unified Figma Make specification — markdown with embedded JSON tokens"""
+    data = request.json
+    evidence = data.get('evidence')
+    if not evidence:
+        return jsonify({'error': 'No evidence data provided'}), 400
+    result = generate_figma_spec(evidence)
+    return jsonify({'success': True, 'markdown': result['markdown'], 'tokens': result['tokens']})
+
+
+def generate_figma_spec(evidence):
+    """Generate unified Figma Make spec: markdown brief + embedded JSON design tokens.
+
+    Designed to be pasted directly into Figma Make as a design system prompt.
+    Also produces a standalone tokens JSON for JSON Crack visualization.
+    Target size: <15KB for LLM context compatibility.
+    """
+    import json as _json
+    from urllib.parse import urlparse
+
+    meta = evidence.get('meta_info', {})
+    url = meta.get('url', 'Unknown')
+    parsed = urlparse(url)
+    site_name = parsed.hostname or 'Unknown'
+    site_name = site_name.replace('www.', '').split('.')[0].title()
+
+    # --- Build tokens dict ---
+    tokens = {}
+
+    # Colors
+    colors_data = evidence.get('colors', {})
+    palette = colors_data.get('palette', {})
+    roles = colors_data.get('color_roles', {})
+    color_tokens = {}
+    if isinstance(palette, dict):
+        for bucket in ['primary', 'secondary', 'intentional']:
+            items = palette.get(bucket, [])
+            if isinstance(items, list):
+                hexes = []
+                for c in items[:6]:
+                    if isinstance(c, str):
+                        hexes.append(c)
+                    elif isinstance(c, dict) and c.get('hex'):
+                        hexes.append(c['hex'])
+                if hexes:
+                    color_tokens[bucket] = hexes
+    if isinstance(roles, dict):
+        clean_roles = {}
+        for k, v in roles.items():
+            if isinstance(v, str) and (v.startswith('#') or v.startswith('rgb')):
+                clean_roles[k] = v
+        if clean_roles:
+            color_tokens['roles'] = clean_roles
+    tokens['colors'] = color_tokens
+
+    # Typography
+    typo = evidence.get('typography', {})
+    details = typo.get('details', {})
+    type_scale = typo.get('type_scale', {})
+    typo_tokens = {}
+    families = details.get('font_families', [])
+    if families:
+        typo_tokens['families'] = families[:4]
+    if isinstance(type_scale, dict):
+        if type_scale.get('sizes_px'):
+            typo_tokens['sizes'] = type_scale['sizes_px'][:8]
+        if type_scale.get('ratio'):
+            typo_tokens['ratio'] = type_scale['ratio']
+    weights = details.get('font_weights', [])
+    if weights:
+        typo_tokens['weights'] = weights[:5]
+    body = details.get('body_text', {})
+    if isinstance(body, dict):
+        typo_tokens['body'] = {
+            'size': body.get('size', '16px'),
+            'lineHeight': body.get('line_height', '1.5'),
+        }
+    tokens['typography'] = typo_tokens
+
+    # Spacing
+    spacing = evidence.get('spacing_scale', {})
+    spacing_tokens = {}
+    scale = spacing.get('scale', spacing.get('values', []))
+    if scale:
+        spacing_tokens['scale'] = [str(v) if isinstance(v, (int, float)) else v for v in scale[:10]]
+    if spacing.get('base_unit'):
+        spacing_tokens['base'] = str(spacing['base_unit'])
+    tokens['spacing'] = spacing_tokens
+
+    # Border radius
+    radius = evidence.get('border_radius_scale', {})
+    radius_vals = radius.get('scale', radius.get('values', []))
+    if radius_vals:
+        tokens['borderRadius'] = [str(v) if isinstance(v, (int, float)) else v for v in radius_vals[:6]]
+
+    # Shadows
+    shadows = evidence.get('shadow_system', {})
+    levels = shadows.get('levels', [])
+    if levels:
+        tokens['shadows'] = [{'name': s.get('name', f'shadow-{i}'), 'value': s.get('value', '')}
+                             for i, s in enumerate(levels[:5]) if isinstance(s, dict)]
+
+    # Motion
+    motion = evidence.get('motion_tokens', {})
+    motion_tokens = {}
+    dur_scale = motion.get('duration_scale', {})
+    if isinstance(dur_scale, dict) and dur_scale.get('values'):
+        motion_tokens['durations'] = [f"{v}ms" for v in dur_scale['values'][:5]]
+    easing_pal = motion.get('easing_palette', {})
+    if isinstance(easing_pal, dict):
+        curves = easing_pal.get('curves', [])
+        if curves:
+            motion_tokens['easings'] = [{'value': c.get('value', ''), 'role': c.get('role', '')}
+                                        for c in curves[:4]]
+    if motion_tokens:
+        tokens['motion'] = motion_tokens
+
+    # --- Build markdown ---
+    md = f"# {site_name} Design System Specification\n"
+    md += f"> Source: {url} | Confidence: {evidence.get('_meta', {}).get('overall_confidence', '?')}%\n\n"
+
+    # Design brief
+    playbook = evidence.get('design_playbook', {})
+    brand = evidence.get('brand_personality', {})
+    layout_syn = evidence.get('layout_synthesis', {})
+    brief_parts = []
+    if isinstance(playbook, dict):
+        findings = playbook.get('findings', [])
+        if isinstance(findings, list):
+            for f in findings[:2]:
+                if isinstance(f, dict) and f.get('summary'):
+                    brief_parts.append(f['summary'])
+                elif isinstance(f, str):
+                    brief_parts.append(f)
+    if isinstance(brand, dict) and brand.get('personality_summary'):
+        brief_parts.append(brand['personality_summary'])
+    if isinstance(layout_syn, dict) and layout_syn.get('layout_narrative'):
+        brief_parts.append(layout_syn['layout_narrative'][:200])
+    if brief_parts:
+        md += "## Design Brief\n"
+        md += ' '.join(brief_parts[:3]) + "\n\n"
+
+    # Tokens as JSON blocks
+    md += "## Design Tokens\n\n"
+
+    if tokens.get('colors'):
+        md += "### Colors\n```json\n"
+        md += _json.dumps(tokens['colors'], indent=2) + "\n```\n\n"
+
+    if tokens.get('typography'):
+        md += "### Typography\n```json\n"
+        md += _json.dumps(tokens['typography'], indent=2) + "\n```\n\n"
+
+    if tokens.get('spacing'):
+        md += "### Spacing\n```json\n"
+        md += _json.dumps(tokens['spacing'], indent=2) + "\n```\n\n"
+
+    if tokens.get('borderRadius'):
+        md += "### Border Radius\n```json\n"
+        md += _json.dumps(tokens['borderRadius'], indent=2) + "\n```\n\n"
+
+    if tokens.get('shadows'):
+        md += "### Shadows\n```json\n"
+        md += _json.dumps(tokens['shadows'], indent=2) + "\n```\n\n"
+
+    if tokens.get('motion'):
+        md += "### Motion\n```json\n"
+        md += _json.dumps(tokens['motion'], indent=2) + "\n```\n\n"
+
+    # Layout system
+    spatial = evidence.get('spatial_composition', {})
+    layout = evidence.get('layout', {})
+    breakpoints = evidence.get('responsive_breakpoints', {})
+    md += "## Layout System\n"
+    page_struct = spatial.get('page_structure', {})
+    if isinstance(page_struct, dict) and page_struct.get('pattern_type'):
+        md += f"- **Pattern:** {page_struct['pattern_type']}\n"
+    if isinstance(layout, dict) and layout.get('pattern'):
+        md += f"- **Engine:** {layout['pattern']}\n"
+    ws = spatial.get('whitespace_analysis', {})
+    if isinstance(ws, dict) and ws.get('interpretation'):
+        md += f"- **Density:** {ws['interpretation']}\n"
+    bp_details = breakpoints.get('details', breakpoints)
+    if isinstance(bp_details, dict):
+        bps = bp_details.get('breakpoints', [])
+        if bps:
+            bp_vals = [str(b.get('value', b) if isinstance(b, dict) else b) + 'px' for b in bps[:6]]
+            md += f"- **Breakpoints:** {', '.join(bp_vals)}\n"
+    md += "\n"
+
+    # Component library (top 5)
+    blueprints = evidence.get('component_blueprints', {})
+    if isinstance(blueprints, dict):
+        bps_list = blueprints.get('blueprints', [])
+        if bps_list:
+            md += "## Component Library\n\n"
+            for bp in bps_list[:5]:
+                disc = bp.get('discovery', {})
+                blue = bp.get('blueprint', {})
+                label = disc.get('label', disc.get('category', 'Component'))
+                selector = disc.get('selector', '?')
+                bounds = disc.get('bounds', {})
+                w = bounds.get('width', '?')
+                h = bounds.get('height', '?')
+                cs = blue.get('computedStyles', {})
+                display = cs.get('display', '')
+                flex_dir = cs.get('flexDirection', '')
+                layout_desc = display
+                if flex_dir:
+                    layout_desc += f', {flex_dir}'
+                md += f"### {label}\n"
+                md += f"- **Selector:** `{selector}`\n"
+                md += f"- **Size:** {w} x {h}px\n"
+                if layout_desc:
+                    md += f"- **Layout:** {layout_desc}\n"
+                bg = cs.get('backgroundColor', '')
+                color = cs.get('color', '')
+                if bg:
+                    md += f"- **Background:** {bg}\n"
+                if color:
+                    md += f"- **Color:** {color}\n"
+                md += "\n"
+
+    # Page zones
+    box_model = evidence.get('box_model_export', {})
+    zones = box_model.get('zones', [])
+    if zones:
+        md += "## Page Zones\n\n"
+        md += "| Zone | Size | Layout | Key Properties |\n"
+        md += "|------|------|--------|----------------|\n"
+        for z in zones[:8]:
+            zone_type = z.get('type', '?')
+            w_vw = z.get('widthVw', '?')
+            h_px = z.get('height', '?')
+            disp = z.get('display', '')
+            flex_d = z.get('flexDirection', '')
+            props = []
+            if z.get('gap'):
+                props.append(f"gap: {z['gap']}")
+            if z.get('padding'):
+                props.append(f"padding: {z['padding']}")
+            if z.get('zIndex') and str(z.get('zIndex', '0')) != '0':
+                props.append(f"z-index: {z['zIndex']}")
+            layout_str = disp
+            if flex_d:
+                layout_str += f' {flex_d}'
+            md += f"| {zone_type} | {w_vw}vw x {h_px}px | {layout_str} | {', '.join(props) or '—'} |\n"
+        md += "\n"
+
+    md += "---\n"
+    md += f"*Generated by Web Intelligence Scraper for Figma Make*\n"
+
+    return {'markdown': md, 'tokens': tokens}
+
+
 @app.route('/api/generate-summary', methods=['POST'])
 def generate_ai_summary():
     """
@@ -1533,7 +3102,7 @@ def full_analysis():
         async def run_full():
             # Step 1: Deep scan
             print("\n1️⃣  Running deep scan...")
-            engine = DeepEvidenceEngine(site_url, analysis_mode=analysis_mode)
+            engine = _get_engine_class()(site_url, analysis_mode=analysis_mode)
             evidence = await engine.extract_all()
             return {k: v for k, v in evidence.items() if v is not None}
 
@@ -1677,17 +3246,33 @@ def compare_sites():
         print(f" B: {site_b_url}")
         print('='*70)
 
+        import time as _time
+
         async def run_compare():
-            # Analyze both sites
-            print("\n1️⃣  Analyzing Site A...")
-            engine_a = DeepEvidenceEngine(site_a_url, analysis_mode='single')
-            evidence_a = await engine_a.extract_all()
+            # Check cache first — reuse recent scans
+            cache_a = _evidence_cache.get(site_a_url)
+            cache_b = _evidence_cache.get(site_b_url)
+            now = _time.time()
 
-            print("\n2️⃣  Analyzing Site B...")
-            engine_b = DeepEvidenceEngine(site_b_url, analysis_mode='single')
-            evidence_b = await engine_b.extract_all()
+            if cache_a and (now - cache_a['timestamp']) < _CACHE_TTL:
+                print(f"\n1️⃣  Site A: using cached evidence ({int(now - cache_a['timestamp'])}s old)")
+                ev_a = cache_a['evidence']
+            else:
+                print("\n1️⃣  Analyzing Site A...")
+                engine_a = _get_engine_class()(site_a_url, analysis_mode='single')
+                ev_a = await engine_a.extract_all()
+                _evidence_cache[site_a_url] = {'evidence': ev_a, 'timestamp': now}
 
-            return evidence_a, evidence_b
+            if cache_b and (now - cache_b['timestamp']) < _CACHE_TTL:
+                print(f"\n2️⃣  Site B: using cached evidence ({int(now - cache_b['timestamp'])}s old)")
+                ev_b = cache_b['evidence']
+            else:
+                print("\n2️⃣  Analyzing Site B...")
+                engine_b = _get_engine_class()(site_b_url, analysis_mode='single')
+                ev_b = await engine_b.extract_all()
+                _evidence_cache[site_b_url] = {'evidence': ev_b, 'timestamp': now}
+
+            return ev_a, ev_b
 
         evidence_a, evidence_b = run_async(run_compare())
 
@@ -1742,7 +3327,7 @@ def extract_component_library():
         print(f" Components: {len(selectors)}")
         print('='*70)
 
-        ripper = ComponentRipper(site_url)
+        ripper = _get_ripper_class()(site_url)
         components = run_async(ripper.rip_batch(selectors))
 
         print("\n✅ Component library extraction complete!")
@@ -1795,4 +3380,4 @@ if __name__ == '__main__':
         logger.debug(f"Could not kill old servers (non-critical): {e}")
 
     # Bind to localhost only — never expose to network with debug=True
-    app.run(debug=True, port=8080, host='127.0.0.1')
+    app.run(debug=True, port=8080, host='127.0.0.1', threaded=True)

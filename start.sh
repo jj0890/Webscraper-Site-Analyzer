@@ -50,23 +50,29 @@ if ! python3 -c "import patchright" 2>/dev/null; then
     echo "[WARN] patchright not installed. Run: pip install patchright"
 fi
 
+# Build frontend assets
+if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
+    if [ -d "frontend/node_modules" ]; then
+        echo ""
+        echo "Building frontend..."
+        npm run build --prefix frontend 2>/dev/null
+        echo "[OK] Frontend built"
+    else
+        echo "[WARN] Frontend node_modules missing. Run: cd frontend && npm install"
+    fi
+fi
+
 # Create runtime directories
 mkdir -p .screenshots
 echo "[OK] Directories ready"
 
-# Check if port 8080 is in use
+# Auto-kill anything on port 8080 (no interactive prompt)
 if lsof -ti:8080 > /dev/null 2>&1; then
     echo ""
-    echo "[WARN] Port 8080 is already in use"
-    echo "   Kill existing process? (y/n)"
-    read -r response
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-        kill -9 $(lsof -ti:8080)
-        echo "[OK] Port 8080 cleared"
-    else
-        echo "[ERROR] Cannot start - port 8080 in use"
-        exit 1
-    fi
+    echo "[WARN] Port 8080 in use — killing old process..."
+    kill -9 $(lsof -ti:8080) 2>/dev/null
+    sleep 1
+    echo "[OK] Port 8080 cleared"
 fi
 
 # Start the server

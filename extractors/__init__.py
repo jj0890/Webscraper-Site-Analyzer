@@ -29,6 +29,7 @@ from extractors.cdp_animation_extractor import CdpAnimationExtractor
 from extractors.axe_contrast_extractor import AxeContrastExtractor
 from extractors.css_efficiency import CSSEfficiencyExtractor
 from extractors.css_specificity import CSSSpecificityExtractor
+from extractors.css_analytics import CSSAnalyticsExtractor
 
 # Ordered list: independent extractors first, then state capture, then cross-dependency
 ALL_EXTRACTORS = [
@@ -55,6 +56,7 @@ ALL_EXTRACTORS = [
     # Batch 2b: CSS analysis (needs DOM + stylesheets loaded)
     CSSEfficiencyExtractor,    # CDP rule usage tracking
     CSSSpecificityExtractor,   # specificity + cascade health
+    CSSAnalyticsExtractor,     # raw CSS authoring analytics + DTCG tokens
     # Batch 3: Cross-dependency
     AccessibilityExtractor,   # needs colors
     AnimationExtractor,        # reads _mcp_state_capture, feeds motion_tokens
@@ -70,4 +72,5 @@ __all__ = [
     'AxeContrastExtractor',
     'CSSEfficiencyExtractor',
     'CSSSpecificityExtractor',
+    'CSSAnalyticsExtractor',
 ]

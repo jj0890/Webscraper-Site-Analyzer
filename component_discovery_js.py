@@ -618,14 +618,20 @@ COMPONENT_DISCOVERY_JS = '''() => {
     }
 
     // Scan semantic elements + large visible divs + interactive elements
+    // Uses window.__queryShadowAll (injected by ComponentRipper._inject_shadow_utils) so
+    // components inside <template> content and open shadow DOMs are included.
+    const _qsa = (typeof window.__queryShadowAll === 'function')
+        ? window.__queryShadowAll.bind(window)
+        : (sel) => Array.from(document.querySelectorAll(sel));  // safe fallback
+
     const candidates = [
-        ...document.querySelectorAll('nav, header, footer, main, section, article, aside, form, dialog, details, table, [role="navigation"], [role="banner"], [role="main"], [role="contentinfo"], [role="region"], [role="complementary"], [role="tablist"], [role="dialog"], [role="alertdialog"], [role="alert"], [role="grid"], [role="table"]'),
-        ...Array.from(document.querySelectorAll('div')).filter(function(d) {
+        ..._qsa('nav, header, footer, main, section, article, aside, form, dialog, details, table, [role="navigation"], [role="banner"], [role="main"], [role="contentinfo"], [role="region"], [role="complementary"], [role="tablist"], [role="dialog"], [role="alertdialog"], [role="alert"], [role="grid"], [role="table"]'),
+        ..._qsa('div').filter(function(d) {
             var r = d.getBoundingClientRect();
             return r.width > vw * 0.4 && r.height > 80 && d.children.length >= 2;
         }),
         // Also scan smaller divs that might be interactive components
-        ...Array.from(document.querySelectorAll('div[class*="accordion"], div[class*="tabs"], div[class*="carousel"], div[class*="slider"], div[class*="pricing"], div[class*="timeline"], div[class*="stepper"], div[class*="marquee"], div[class*="faq"], div[class*="breadcrumb"], div[class*="testimonial"], div[class*="newsletter"], div[class*="social-proof"], div[class*="trusted"], div[class*="alert"], div[class*="notification"]'))
+        ..._qsa('div[class*="accordion"], div[class*="tabs"], div[class*="carousel"], div[class*="slider"], div[class*="pricing"], div[class*="timeline"], div[class*="stepper"], div[class*="marquee"], div[class*="faq"], div[class*="breadcrumb"], div[class*="testimonial"], div[class*="newsletter"], div[class*="social-proof"], div[class*="trusted"], div[class*="alert"], div[class*="notification"]')
     ];
 
     for (const el of candidates) {

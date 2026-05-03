@@ -343,7 +343,8 @@ class VisualHierarchyAnalyzer:
 
         return {
             'pattern': f"Visual hierarchy detected: {len(hierarchy_data['topElements'])} key elements",
-            'confidence': 90 if detection_method == 'computer_vision' else 85,
+            'confidence': self._calculate_vh_confidence(
+                detection_method, hero_sections, hierarchy_data),
             'hero_sections': hero_sections,  # CV returns list of candidates
             'hero_section': self._format_hero_section(hero_sections[0] if hero_sections else None),
             'detection_method': detection_method,
@@ -355,6 +356,22 @@ class VisualHierarchyAnalyzer:
             'attention_flow': attention_flow,
             'viewport': hierarchy_data['viewport']
         }
+
+    @staticmethod
+    def _calculate_vh_confidence(detection_method, hero_sections, hierarchy_data):
+        """Formula-based confidence for visual hierarchy."""
+        confidence = 55
+        # Detection method bonus
+        confidence += 15 if detection_method == 'computer_vision' else 10
+        # Hero candidate richness
+        confidence += min(10, len(hero_sections) * 5)
+        # Top element count (more elements analyzed = richer picture)
+        top_count = len(hierarchy_data.get('topElements', []))
+        confidence += min(10, top_count * 2)
+        # CTA detection bonus
+        if hierarchy_data.get('primaryCTA'):
+            confidence += 5
+        return min(95, confidence)
 
     async def _cv_enhanced_hero_detection(self, page) -> List[Dict]:
         """
@@ -551,7 +568,7 @@ class VisualHierarchyAnalyzer:
 # Integration test
 async def test_visual_hierarchy():
     """Test visual hierarchy analysis"""
-    from playwright.async_api import async_playwright
+    from patchright.async_api import async_playwright
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)

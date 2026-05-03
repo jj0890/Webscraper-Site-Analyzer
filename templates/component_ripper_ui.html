@@ -866,6 +866,75 @@
                 padding: var(--space-6);
             }
         }
+
+        /* ── Icon Catalog ─────────────────────────────────────────────── */
+        .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.75rem;
+        }
+        .icon-card {
+            display: flex;
+            flex-direction: column;
+            background: var(--surface-2);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            transition: border-color 0.15s, transform 0.15s;
+        }
+        .icon-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-2px);
+        }
+        .icon-preview {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.25rem;
+            background: var(--surface-3);
+            min-height: 72px;
+        }
+        .icon-preview svg {
+            width: 32px;
+            height: 32px;
+            fill: var(--text-primary);
+            flex-shrink: 0;
+        }
+        .icon-preview svg * {
+            fill: inherit;
+        }
+        .icon-card-body {
+            padding: 0.6rem 0.65rem 0.65rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+        .icon-card-name {
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .icon-copy-btn {
+            margin-top: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.7rem;
+            font-family: var(--font-mono);
+            background: transparent;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+            text-align: center;
+        }
+        .icon-copy-btn:hover {
+            background: var(--accent-muted);
+            color: var(--accent-text);
+            border-color: var(--border-accent);
+        }
     </style>
 </head>
 <body>
@@ -898,6 +967,9 @@
             <button class="mode-btn" data-mode="computed" onclick="setMode('computed')">
                 Computed Styles
             </button>
+            <button class="mode-btn" data-mode="icons" onclick="setMode('icons')">
+                🎨 Extract Icons
+            </button>
         </div>
 
         <div class="input-section">
@@ -925,9 +997,16 @@
                 </p>
             </div>
 
+            <div class="input-group" id="iconsHint" style="display: none;">
+                <p class="computed-hint" style="border-left-color: var(--warning);">
+                    <strong>Icon Extraction</strong> finds every SVG icon on the page — symbol sprites, inline SVGs, and external references.<br>
+                    Each icon comes back as copy-pasteable SVG markup with its name, viewBox, and usage count.
+                </p>
+            </div>
+
             <!-- Advanced options — visible in targeted mode -->
             <div id="advancedOptions" style="display:none; margin-bottom:1rem;">
-                <div style="display:flex; gap:1.5rem; align-items:center; padding:0.75rem 1rem; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06);">
+                <div style="display:flex; gap:1.5rem; align-items:center; padding:0.75rem 1rem; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06); flex-wrap:wrap;">
                     <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-size:0.85rem; color:#aaa;">
                         <input type="checkbox" id="includeStates" style="accent-color:#0a84ff;">
                         <span>⚡ Capture hover/focus states</span>
@@ -941,6 +1020,43 @@
                         🌐 Find Across Site
                     </button>
                 </div>
+
+                <!-- Pre-action: interact before ripping (e.g. click a menu button) -->
+                <details id="preActionDetails" style="margin-top:0.5rem;">
+                    <summary style="cursor:pointer; font-size:0.8rem; color:#666; padding:0.4rem 0; user-select:none; list-style:none; display:flex; align-items:center; gap:0.4rem;">
+                        <span id="preActionSummaryIcon" style="font-size:0.65rem; transition:transform 0.15s;">▶</span>
+                        <span>Pre-action</span>
+                        <span id="preActionBadge" style="display:none; background:rgba(255,183,77,0.2); color:#ffb74d; font-size:0.7rem; padding:1px 6px; border-radius:10px; margin-left:0.25rem;">active</span>
+                        <span style="color:#444; font-size:0.75rem; margin-left:0.25rem;">— interact before ripping (expand menus, open drawers)</span>
+                    </summary>
+                    <div style="margin-top:0.5rem; padding:0.75rem; background:rgba(255,183,77,0.04); border:1px solid rgba(255,183,77,0.15); border-radius:8px;">
+                        <div style="display:grid; grid-template-columns:auto 1fr auto; gap:0.5rem; align-items:center;">
+                            <select id="preActionType"
+                                style="padding:6px 8px; border-radius:6px; background:var(--surface-2,#1a1a1a); border:1px solid rgba(255,255,255,0.1); color:#ccc; font-size:0.82rem; cursor:pointer;">
+                                <option value="click">click</option>
+                                <option value="hover">hover</option>
+                                <option value="focus">focus</option>
+                                <option value="key">key press</option>
+                            </select>
+                            <input type="text" id="preActionTarget"
+                                placeholder="CSS selector (e.g. button:has-text('MENU'), [aria-label='Open nav'])"
+                                style="padding:6px 10px; border-radius:6px; background:var(--surface-2,#1a1a1a); border:1px solid rgba(255,255,255,0.1); color:#eee; font-size:0.82rem; min-width:0;"
+                                oninput="updatePreActionBadge()">
+                            <input type="number" id="preActionWait" value="800" min="0" max="5000" step="100"
+                                title="Wait ms after action"
+                                style="width:72px; padding:6px 8px; border-radius:6px; background:var(--surface-2,#1a1a1a); border:1px solid rgba(255,255,255,0.1); color:#aaa; font-size:0.82rem; text-align:center;"
+                                oninput="updatePreActionBadge()">
+                        </div>
+                        <div style="margin-top:0.4rem; font-size:0.72rem; color:#555; display:flex; gap:1rem; flex-wrap:wrap;">
+                            <span>wait <span style="color:#777;" id="preActionWaitLabel">800</span>ms after action</span>
+                            <span style="color:#444;">Examples:
+                                <a href="#" onclick="setPreAction('click','button:has-text(\\'MENU\\')',800);return false;" style="color:#ffb74d;text-decoration:none;">P&amp;P menu</a> ·
+                                <a href="#" onclick="setPreAction('click','[aria-expanded=\\'false\\']',600);return false;" style="color:#ffb74d;text-decoration:none;">accordion</a> ·
+                                <a href="#" onclick="setPreAction('hover','nav > li:first-child',400);return false;" style="color:#ffb74d;text-decoration:none;">hover nav</a>
+                            </span>
+                        </div>
+                    </div>
+                </details>
             </div>
 
             <button class="btn btn-primary" onclick="ripComponent()" id="ripBtn">
@@ -985,6 +1101,81 @@
     <script>
         let currentMode = 'auto';
 
+        // ── Pre-action helpers ──────────────────────────────────────────────────
+        function setPreAction(type, target, waitMs) {
+            const typeEl = document.getElementById('preActionType');
+            const targetEl = document.getElementById('preActionTarget');
+            const waitEl = document.getElementById('preActionWait');
+            const details = document.getElementById('preActionDetails');
+            if (typeEl) typeEl.value = type;
+            if (targetEl) targetEl.value = target;
+            if (waitEl) waitEl.value = waitMs;
+            if (details) details.open = true;
+            updatePreActionBadge();
+        }
+
+        function updatePreActionBadge() {
+            const target = (document.getElementById('preActionTarget')?.value || '').trim();
+            const badge = document.getElementById('preActionBadge');
+            const icon = document.getElementById('preActionSummaryIcon');
+            const waitLabel = document.getElementById('preActionWaitLabel');
+            const wait = document.getElementById('preActionWait')?.value || '800';
+            if (badge) badge.style.display = target ? 'inline' : 'none';
+            if (waitLabel) waitLabel.textContent = wait;
+            // Rotate arrow when open
+            const details = document.getElementById('preActionDetails');
+            if (icon) icon.style.transform = details?.open ? 'rotate(90deg)' : '';
+        }
+
+        // Sync arrow rotation on details toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const details = document.getElementById('preActionDetails');
+            const icon = document.getElementById('preActionSummaryIcon');
+            if (details && icon) {
+                details.addEventListener('toggle', () => {
+                    icon.style.transform = details.open ? 'rotate(90deg)' : '';
+                });
+            }
+
+            // ── URL param bootstrap ─────────────────────────────────────────────
+            // Supports: /ripper?search=hero          → pre-fill search, switch to Discover
+            //           /ripper?url=https://...      → pre-fill URL input
+            //           /ripper?search=hero&url=...  → both
+            const params = new URLSearchParams(window.location.search);
+            const paramSearch = params.get('search');
+            const paramUrl    = params.get('url');
+
+            if (paramUrl) {
+                const urlInput = document.getElementById('urlInput');
+                if (urlInput) urlInput.value = paramUrl;
+            }
+
+            if (paramSearch) {
+                // Switch to Discover mode so the search bar appears after scan
+                setMode('discover');
+
+                // Pre-fill search box if it already exists (re-entrant case)
+                const existingInput = document.getElementById('componentSearchInput');
+                if (existingInput) {
+                    existingInput.value = paramSearch;
+                    searchComponentsLive(paramSearch);
+                } else {
+                    // Store for after first scan populates the grid
+                    window._pendingSearch = paramSearch;
+                }
+
+                // Show a subtle hint banner
+                const urlGroup = document.getElementById('urlGroup') || document.querySelector('.url-group');
+                if (urlGroup && !document.getElementById('searchHintBanner')) {
+                    const banner = document.createElement('div');
+                    banner.id = 'searchHintBanner';
+                    banner.style.cssText = 'margin-top:0.5rem;padding:0.5rem 0.75rem;background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);border-radius:8px;font-size:0.78rem;color:var(--accent-text);';
+                    banner.innerHTML = `🔍 Scan a URL below — results will be filtered to <strong>"${paramSearch}"</strong> automatically.`;
+                    urlGroup.after(banner);
+                }
+            }
+        });
+
         function setMode(mode) {
             currentMode = mode;
 
@@ -995,20 +1186,21 @@
             const selectorGroup = document.getElementById('selectorGroup');
             const computedHint = document.getElementById('computedHint');
             const discoverHint = document.getElementById('discoverHint');
+            const iconsHint = document.getElementById('iconsHint');
             const advancedOptions = document.getElementById('advancedOptions');
             const ripBtn = document.getElementById('ripBtn');
 
-            if (mode === 'targeted' || mode === 'computed') {
-                selectorGroup.style.display = 'block';
-            } else {
-                selectorGroup.style.display = 'none';
-            }
-
+            selectorGroup.style.display = (mode === 'targeted' || mode === 'computed') ? 'block' : 'none';
             computedHint.style.display = mode === 'computed' ? 'block' : 'none';
             discoverHint.style.display = mode === 'discover' ? 'block' : 'none';
+            iconsHint.style.display = mode === 'icons' ? 'block' : 'none';
             advancedOptions.style.display = mode === 'targeted' ? 'block' : 'none';
 
-            ripBtn.textContent = mode === 'discover' ? 'Scan Page' : 'Extract Blueprint';
+            const btnLabels = {
+                discover: 'Scan Page',
+                icons: 'Extract Icons',
+            };
+            ripBtn.textContent = btnLabels[mode] || 'Extract Blueprint';
         }
 
         const examples = {
@@ -1046,6 +1238,10 @@
                 return discoverComponents(url);
             }
 
+            if (currentMode === 'icons') {
+                return extractIcons(url);
+            }
+
             if (currentMode === 'computed') {
                 const selector = document.getElementById('selectorInput').value;
                 if (!selector) {
@@ -1069,6 +1265,14 @@
                 const includeStates = document.getElementById('includeStates').checked;
                 const figmaOutput = document.getElementById('figmaOutput').checked;
 
+                // Pre-action: read from advanced panel
+                const preActionTarget = (document.getElementById('preActionTarget')?.value || '').trim();
+                const preAction = preActionTarget ? {
+                    type: document.getElementById('preActionType')?.value || 'click',
+                    target: preActionTarget,
+                    wait_ms: parseInt(document.getElementById('preActionWait')?.value || '800', 10),
+                } : null;
+
                 const response = await fetch('/api/rip-component', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1076,7 +1280,8 @@
                         site_url: url,
                         selector: selector,
                         include_states: includeStates,
-                        output_format: figmaOutput ? 'figma' : 'json'
+                        output_format: figmaOutput ? 'figma' : 'json',
+                        ...(preAction ? { pre_action: preAction } : {}),
                     })
                 });
 
@@ -1183,7 +1388,7 @@
                 .join(' ');
 
             summary.innerHTML = `
-                <h2>🔍 ${components.length} Components Found</h2>
+                <h2>🔍 <span class="discovery-summary-count">${components.length} component${components.length !== 1 ? 's' : ''} discovered</span></h2>
                 <p>${data.summary || ''}</p>
                 <div style="margin-top: var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-2);">
                     ${catPills}
@@ -1196,6 +1401,29 @@
             `;
             container.appendChild(summary);
 
+            // Text search bar
+            const searchBar = document.createElement('div');
+            searchBar.style.cssText = 'display:flex; gap:var(--space-2); margin-top:var(--space-3); align-items:center;';
+            searchBar.innerHTML = `
+                <input type="text" id="componentSearchInput"
+                    placeholder="Search components — name, category, text (e.g. nav, hero, Sign Up)..."
+                    style="flex:1; padding:var(--space-2) var(--space-3); border:1px solid var(--border);
+                           border-radius:var(--radius-md); background:var(--surface-1); color:var(--text-primary);
+                           font-size:var(--text-sm);"
+                    oninput="searchComponentsLive(this.value)"
+                    onkeydown="if(event.key==='Enter') searchComponentsByText()">
+                <button class="btn btn-secondary" onclick="searchComponentsByText()"
+                    style="white-space:nowrap; padding:var(--space-2) var(--space-3);" id="textSearchBtn">
+                    🔍 Deep Search
+                </button>
+                <button class="btn" onclick="clearComponentSearch()" id="clearSearchBtn"
+                    style="display:none; white-space:nowrap; padding:var(--space-2) var(--space-3);
+                           background:var(--surface-2); color:var(--text-secondary); border:1px solid var(--border);">
+                    ✕ Clear
+                </button>
+            `;
+            container.appendChild(searchBar);
+
             // Component grid
             const grid = document.createElement('div');
             grid.className = 'discovery-grid';
@@ -1205,7 +1433,7 @@
                 card.className = 'discovery-card';
 
                 const thumbContent = comp.screenshot
-                    ? `<img src="data:image/png;base64,${comp.screenshot}" alt="${comp.label}">`
+                    ? `<img data-src="data:image/png;base64,${comp.screenshot}" alt="${comp.label}" style="opacity:0;transition:opacity 0.2s">`
                     : `<div class="no-preview">No preview available</div>`;
 
                 const previewText = comp.preview?.text
@@ -1250,6 +1478,227 @@
             });
 
             container.appendChild(grid);
+
+            // Lazy-load discovery card thumbnails with IntersectionObserver
+            const lazyImgs = grid.querySelectorAll('img[data-src]');
+            if (lazyImgs.length > 0) {
+                const imgObserver = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const img = entry.target;
+                            img.src = img.dataset.src;
+                            img.removeAttribute('data-src');
+                            img.onload = () => { img.style.opacity = '1'; };
+                            imgObserver.unobserve(img);
+                        }
+                    });
+                }, { rootMargin: '300px' });
+                lazyImgs.forEach(img => imgObserver.observe(img));
+            }
+
+            // Apply pending search from ?search= URL param (set before grid existed)
+            if (window._pendingSearch) {
+                const input = document.getElementById('componentSearchInput');
+                if (input) {
+                    input.value = window._pendingSearch;
+                    searchComponentsLive(window._pendingSearch);
+                    window._pendingSearch = null;
+                }
+            }
+        }
+
+        // Store discovered components for filtering
+        let _discoveredComponents = [];
+
+        // ── Live client-side filter (instant, no server) ──────────────────────
+        // Runs on every keystroke when a discovery grid is already populated.
+        // Matches against: label, category, selector, preview text.
+        // Falls back to server-side TreeWalker search (Deep Search) only when
+        // there are no cards yet OR the user explicitly clicks the button.
+
+        function searchComponentsLive(query) {
+            query = (query || '').trim().toLowerCase();
+            const clearBtn = document.getElementById('clearSearchBtn');
+
+            const container = document.getElementById('discoveryResults') ||
+                document.getElementById('resultsPanel');
+            const grid = container?.querySelector('.discovery-grid');
+            if (!grid) return; // No grid yet — nothing to filter
+
+            const cards = grid.querySelectorAll('.discovery-card');
+            if (!cards.length) return;
+
+            let visibleCount = 0;
+            cards.forEach(card => {
+                if (!query) {
+                    // Empty query — show all, reset highlights
+                    card.style.display = '';
+                    card.style.outline = '';
+                    card.dataset.searchHit = '';
+                    return;
+                }
+
+                // Build a searchable string from the card's visible data:
+                //   label + category pill text + selector + preview text
+                const label = (card.querySelector('.discovery-card-label')?.textContent || '').toLowerCase();
+                const pills = [...card.querySelectorAll('.discovery-pill')].map(p => p.textContent.toLowerCase()).join(' ');
+                const selector = (card.querySelector('.discovery-card-selector')?.textContent || '').toLowerCase();
+                const preview = (card.querySelector('.discovery-card-preview, .discovery-card-text')?.textContent || '').toLowerCase();
+
+                // Score: exact label/category match ranks higher than selector/text
+                const labelHit = label.includes(query);
+                const pillHit = pills.includes(query);
+                const selectorHit = selector.includes(query);
+                const previewHit = preview.includes(query);
+                const hit = labelHit || pillHit || selectorHit || previewHit;
+
+                card.style.display = hit ? '' : 'none';
+                card.dataset.searchHit = hit ? '1' : '';
+
+                // Highlight matched cards with a subtle ring
+                card.style.outline = hit ? '2px solid rgba(255,183,77,0.6)' : '';
+                card.style.outlineOffset = hit ? '2px' : '';
+                if (hit) visibleCount++;
+            });
+
+            if (clearBtn) clearBtn.style.display = query ? 'inline-block' : 'none';
+
+            // Update summary label if it exists
+            const summaryEl = container?.querySelector('.discovery-summary-count');
+            if (summaryEl && query) {
+                summaryEl.textContent = `${visibleCount} of ${cards.length} matching "${query}"`;
+            } else if (summaryEl) {
+                const total = cards.length;
+                summaryEl.textContent = `${total} component${total !== 1 ? 's' : ''} discovered`;
+            }
+        }
+
+        // Deep Search: re-navigates page and uses CSS Custom Highlight API +
+        // TreeWalker to find components by their actual rendered text content.
+        // Use this when: no discovery grid yet, or you need to find text that
+        // isn't visible in the card labels (e.g. hidden-behind-JS content).
+        function searchComponentsByText() {
+            const searchText = document.getElementById('componentSearchInput')?.value?.trim();
+            if (!searchText) return;
+
+            // If there's already a grid, just live-filter it
+            const container = document.getElementById('discoveryResults') ||
+                document.getElementById('resultsPanel');
+            const existingGrid = container?.querySelector('.discovery-grid');
+            const cards = existingGrid?.querySelectorAll('.discovery-card') || [];
+            if (cards.length > 0) {
+                searchComponentsLive(searchText);
+                return;
+            }
+
+            // No grid — fall back to server-side TreeWalker text search
+            const url = document.getElementById('urlInput').value.trim();
+            if (!url) { alert('Enter a URL first, then click Scan Page to discover components.'); return; }
+
+            const btn = document.getElementById('textSearchBtn');
+            const origText = btn.textContent;
+            btn.textContent = '⏳ Searching...';
+            btn.disabled = true;
+
+            fetch('/api/search-components', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ site_url: url, search_text: searchText })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.textContent = origText;
+                btn.disabled = false;
+
+                if (!data.success || !data.matches?.length) {
+                    // Give a helpful nudge: run Discover first
+                    const hint = document.createElement('div');
+                    hint.style.cssText = 'margin-top:1rem; padding:0.75rem 1rem; background:rgba(255,183,77,0.08); border:1px solid rgba(255,183,77,0.2); border-radius:8px; font-size:0.85rem; color:#aaa;';
+                    hint.innerHTML = `No components containing <strong style="color:#ffb74d;">"${searchText}"</strong> found in the static DOM. ` +
+                        `Try <strong>Scan Page</strong> first to discover all components, then search the results — ` +
+                        `or the text may be hidden behind a click (use Pre-action to expand it first).`;
+                    const resultsPanel = document.getElementById('resultsPanel') || document.getElementById('discoveryResults');
+                    resultsPanel?.appendChild(hint);
+                    return;
+                }
+
+                document.getElementById('clearSearchBtn').style.display = 'inline-block';
+
+                // Build cards from server results (no grid exists yet)
+                const resultsPanel = document.getElementById('resultsPanel') || document.getElementById('discoveryResults');
+                if (!resultsPanel) return;
+
+                const grid = document.createElement('div');
+                grid.className = 'discovery-grid';
+
+                data.matches.forEach(match => {
+                    const card = document.createElement('div');
+                    card.className = 'discovery-card';
+                    card.style.outline = '2px solid rgba(255,183,77,0.6)';
+                    card.style.outlineOffset = '2px';
+
+                    const safeText = (match.matchedText || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const safeSel = (match.selector || '').replace(/'/g, "\\'");
+
+                    card.innerHTML = `
+                        <div class="discovery-card-body">
+                            <div class="discovery-card-label">${match.label || match.selector}</div>
+                            <div class="discovery-card-meta">
+                                <span class="discovery-pill cat-section">text match</span>
+                                ${match.bounds ? `<span class="discovery-card-dims">${match.bounds.width}×${match.bounds.height}px</span>` : ''}
+                            </div>
+                            <div class="discovery-card-text" style="background:rgba(255,183,77,0.08); padding:4px 8px; border-radius:4px; margin-top:4px; font-size:0.78rem; color:#aaa;">
+                                "…${safeText}…"
+                            </div>
+                            <div class="discovery-card-selector" title="${match.selector}">${match.selector}</div>
+                        </div>
+                        <div class="discovery-card-actions">
+                            <button class="btn-rip" onclick="ripDiscovered('${safeSel}', event)">⚡ Rip Blueprint</button>
+                            <button class="btn-rip-figma" onclick="ripDiscoveredFigma('${safeSel}', event)">◆ Figma</button>
+                        </div>
+                    `;
+
+                    card.addEventListener('click', (e) => {
+                        if (e.target.closest('.discovery-card-actions')) return;
+                        setMode('targeted');
+                        document.getElementById('selectorInput').value = match.selector;
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    });
+
+                    grid.appendChild(card);
+                });
+
+                resultsPanel.appendChild(grid);
+            })
+            .catch(err => {
+                btn.textContent = origText;
+                btn.disabled = false;
+                alert('Search failed: ' + err);
+            });
+        }
+
+        function clearComponentSearch() {
+            const input = document.getElementById('componentSearchInput');
+            if (input) input.value = '';
+            const clearBtn = document.getElementById('clearSearchBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+
+            // Show all cards, reset highlights, reset summary
+            const container = document.getElementById('discoveryResults') ||
+                document.getElementById('resultsPanel');
+            if (!container) return;
+            const cards = container.querySelectorAll('.discovery-card');
+            cards.forEach(card => {
+                card.style.display = '';
+                card.style.outline = '';
+                card.style.outlineOffset = '';
+                delete card.dataset.searchHit;
+            });
+
+            const summaryEl = container.querySelector('.discovery-summary-count');
+            if (summaryEl) {
+                summaryEl.textContent = `${cards.length} component${cards.length !== 1 ? 's' : ''} discovered`;
+            }
         }
 
         function ripDiscovered(selector, event) {
@@ -1344,6 +1793,180 @@
                 btn.textContent = 'Failed — try Rip Blueprint instead';
                 btn.disabled = false;
             });
+        }
+
+        // ─── ICON EXTRACTION ──────────────────────────────────────────────────
+        async function extractIcons(url) {
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const ripBtn = document.getElementById('ripBtn');
+
+            loading.classList.add('active');
+            results.classList.remove('active');
+            ripBtn.disabled = true;
+            ripBtn.textContent = 'Extracting…';
+
+            try {
+                const resp = await fetch('/api/extract-icons', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ site_url: url })
+                });
+                const data = await resp.json();
+
+                loading.classList.remove('active');
+                results.classList.add('active');
+
+                if (!data.success || data.error) {
+                    results.innerHTML = `<div class="error-state"><p>❌ ${data.error || 'Icon extraction failed'}</p></div>`;
+                    return;
+                }
+
+                renderIconCatalog(data, results);
+            } catch (err) {
+                loading.classList.remove('active');
+                results.innerHTML = `<div class="error-state"><p>❌ ${err.message}</p></div>`;
+            } finally {
+                ripBtn.disabled = false;
+                ripBtn.textContent = 'Extract Icons';
+            }
+        }
+
+        function renderIconCatalog(data, container) {
+            const { total, method, symbols = [], inline = [], external = [],
+                    roots_searched = [] } = data;
+            const domain = (new URL(document.getElementById('urlInput').value)).hostname;
+
+            // Method badge colour
+            const methodColor = {
+                symbol_sprite: 'var(--success)',
+                inline_svgs: 'var(--accent)',
+                mixed: 'var(--warning)',
+                none: 'var(--text-tertiary)'
+            }[method] || 'var(--accent)';
+
+            let html = `
+            <div style="padding:1.5rem 2rem 0.75rem; border-bottom:1px solid var(--border-subtle);">
+                <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+                    <h2 style="margin:0; font-size:1.25rem; font-weight:600;">
+                        🎨 ${total} icon${total !== 1 ? 's' : ''} — ${domain}
+                    </h2>
+                    <span style="font-size:0.75rem; padding:0.2rem 0.6rem; border-radius:99px;
+                        background:rgba(255,255,255,0.06); color:${methodColor}; font-family:var(--font-mono);">
+                        ${method}
+                    </span>
+                    ${symbols.length ? `<span style="font-size:0.8rem; color:var(--text-secondary);">${symbols.length} symbols · ${inline.length} inline · ${external.length} external</span>` : ''}
+                    ${roots_searched.length > 1 || (roots_searched[0] && roots_searched[0] !== 'main document only')
+                        ? `<span style="font-size:0.72rem; padding:0.15rem 0.5rem; border-radius:99px;
+                            background:rgba(56,189,248,0.1); color:var(--info);" title="Extra DOM roots searched">
+                            + ${roots_searched.join(', ')}
+                          </span>`
+                        : ''}
+                </div>
+            </div>`;
+
+            // ── Symbol sprites ──────────────────────────────────────────────
+            if (symbols.length > 0) {
+                html += `<div style="padding:1.25rem 2rem 0.5rem;">
+                    <h3 style="margin:0 0 1rem; font-size:0.8rem; font-weight:600; text-transform:uppercase;
+                        letter-spacing:0.08em; color:var(--text-tertiary);">
+                        Symbol Sprites (${symbols.length})
+                    </h3>
+                    <div class="icon-grid">`;
+
+                symbols.forEach(s => {
+                    html += iconCard(s.name, s.svg, s.viewBox, s.usage_count, 'symbol');
+                });
+                html += `</div></div>`;
+            }
+
+            // ── Inline SVGs ─────────────────────────────────────────────────
+            if (inline.length > 0) {
+                html += `<div style="padding:1.25rem 2rem 0.5rem;">
+                    <h3 style="margin:0 0 1rem; font-size:0.8rem; font-weight:600; text-transform:uppercase;
+                        letter-spacing:0.08em; color:var(--text-tertiary);">
+                        Inline SVGs (${inline.length})
+                    </h3>
+                    <div class="icon-grid">`;
+
+                inline.forEach(i => {
+                    const dims = (i.width && i.height) ? `${i.width}×${i.height}` : null;
+                    html += iconCard(i.label || i.name, i.svg, i.viewBox, null, 'inline', dims);
+                });
+                html += `</div></div>`;
+            }
+
+            // ── External SVG files ───────────────────────────────────────────
+            if (external.length > 0) {
+                html += `<div style="padding:1.25rem 2rem 1.5rem;">
+                    <h3 style="margin:0 0 0.75rem; font-size:0.8rem; font-weight:600; text-transform:uppercase;
+                        letter-spacing:0.08em; color:var(--text-tertiary);">
+                        External SVG Files (${external.length})
+                    </h3>
+                    <div style="display:flex; flex-direction:column; gap:0.4rem;">`;
+
+                external.forEach(e => {
+                    html += `<div style="display:flex; align-items:center; gap:0.75rem; padding:0.5rem 0.75rem;
+                        background:var(--surface-2); border-radius:6px; font-size:0.8rem;">
+                        <span style="color:var(--text-tertiary);">🔗</span>
+                        <span style="color:var(--text-primary); font-family:var(--font-mono); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${e.url}</span>
+                        <span style="color:var(--text-secondary);">${e.name}</span>
+                        ${e.alt ? `<span style="color:var(--text-tertiary);">alt: ${e.alt}</span>` : ''}
+                    </div>`;
+                });
+                html += `</div></div>`;
+            }
+
+            if (total === 0) {
+                html += `<div style="padding:3rem; text-align:center; color:var(--text-tertiary);">
+                    <p>No SVG icons found on this page.</p>
+                    <p style="font-size:0.8rem;">The site may use icon fonts (FontAwesome, Material Icons) or CSS sprites instead.</p>
+                </div>`;
+            }
+
+            container.innerHTML = html;
+
+            // Copy-to-clipboard for each card
+            container.querySelectorAll('.icon-copy-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const svg = decodeURIComponent(btn.dataset.svg);
+                    navigator.clipboard.writeText(svg).then(() => {
+                        const orig = btn.textContent;
+                        btn.textContent = '✓ Copied';
+                        btn.style.color = 'var(--success)';
+                        setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1500);
+                    });
+                });
+            });
+        }
+
+        function iconCard(name, svgStr, viewBox, usageCount, type, dims) {
+            // Trim overly long names (aria-label + adjacent text concatenation artifact)
+            const displayName = (name || 'unnamed').substring(0, 40).trim();
+            const encodedSvg = encodeURIComponent(svgStr || '');
+            const usageBadge = usageCount != null
+                ? `<span style="font-size:0.7rem; padding:0.15rem 0.45rem; border-radius:99px;
+                    background:rgba(52,211,153,0.12); color:var(--success);">${usageCount}×</span>`
+                : '';
+            const dimBadge = dims
+                ? `<span style="font-size:0.7rem; color:var(--text-tertiary);">${dims}</span>`
+                : '';
+
+            return `
+            <div class="icon-card">
+                <div class="icon-preview">
+                    ${svgStr || '<span style="color:var(--text-tertiary);font-size:0.7rem;">no preview</span>'}
+                </div>
+                <div class="icon-card-body">
+                    <div class="icon-card-name" title="${displayName}">${displayName}</div>
+                    <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+                        ${usageBadge}
+                        ${dimBadge}
+                        ${viewBox ? `<span style="font-size:0.65rem; color:var(--text-tertiary); font-family:var(--font-mono);">${viewBox}</span>` : ''}
+                    </div>
+                    <button class="icon-copy-btn" data-svg="${encodedSvg}">Copy SVG</button>
+                </div>
+            </div>`;
         }
 
         async function extractComputedStyles(url, selector) {
@@ -1705,6 +2328,24 @@
                 html += `</div>`;
             }
 
+            // Network Activity
+            if (data.network_activity && data.network_activity.api_calls && data.network_activity.api_calls.length > 0) {
+                html += `<div style="margin-top:1.5rem; padding:1rem; background:rgba(50,205,50,0.06); border-radius:8px; border-left:3px solid #32cd32;">`;
+                html += `<h4 style="margin:0 0 0.75rem; color:#32cd32; font-size:0.9rem;">🔌 Data Fetching (${data.network_activity.api_calls.length} API call${data.network_activity.api_calls.length > 1 ? 's' : ''})</h4>`;
+                html += `<div style="font-family:'SF Mono',monospace; font-size:0.75rem; line-height:1.8;">`;
+                data.network_activity.api_calls.forEach(call => {
+                    const method = call.method || 'GET';
+                    const methodColor = method === 'GET' ? '#4fc3f7' : method === 'POST' ? '#ff9f0a' : '#ccc';
+                    let displayUrl = call.url;
+                    try {
+                        const u = new URL(call.url);
+                        displayUrl = u.pathname + u.search;
+                    } catch(e) {}
+                    html += `<div><span style="color:${methodColor}; font-weight:600;">${method}</span> <span style="color:#aaa;">${displayUrl}</span></div>`;
+                });
+                html += `</div></div>`;
+            }
+
             // Figma Export Panel (unified)
             if (data.figma_markdown || data.figma_prompt || data.figma_html) {
                 var figmaUrl = '/api/figma-html?url=' + encodeURIComponent(data.metadata?.url || document.getElementById('urlInput').value) + '&selector=' + encodeURIComponent(data.metadata?.selector || document.getElementById('selectorInput').value);
@@ -1743,38 +2384,63 @@
                 `;
             }
 
-            // Download buttons
+            // Download buttons — store data in a lookup to avoid inline JSON overflow
+            if (!window._blueprintStore) window._blueprintStore = {};
+            const storeKey = name.replace(/[^a-zA-Z0-9]/g, '_') + '_' + Date.now();
+            window._blueprintStore[storeKey] = data;
             html += `<div class="download-bar">`;
             if (data.markdown) {
-                html += `<button class="btn-download btn-download-secondary" onclick="downloadMarkdown('${name}', ${JSON.stringify(JSON.stringify(data.markdown))})">Download Markdown Docs</button>`;
+                html += `<button class="btn-download btn-download-secondary" onclick="downloadMarkdown('${storeKey}')">Download Markdown Docs</button>`;
             }
-            html += `<button class="btn-download btn-download-primary" onclick="downloadBlueprint('${name}', ${JSON.stringify(JSON.stringify(data))})">Download Full Blueprint JSON</button>`;
+            html += `<button class="btn-download btn-download-primary" onclick="downloadBlueprint('${storeKey}')">Download Full Blueprint JSON</button>`;
+            if (data.figma_markdown) {
+                html += `<button class="btn-download btn-download-secondary" onclick="downloadFigmaFromStore('${storeKey}')">Download Figma Markdown</button>`;
+            }
             html += `</div>`;
 
             card.innerHTML = html;
             return card;
         }
 
-        function downloadBlueprint(name, dataStr) {
-            const data = JSON.parse(dataStr);
+        function downloadBlueprint(storeKey) {
+            const data = window._blueprintStore?.[storeKey];
+            if (!data) { alert('Blueprint data not found — try ripping again'); return; }
+            const cleanName = storeKey.replace(/_\d+$/, '').toLowerCase();
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${name.toLowerCase()}-blueprint.json`;
+            a.download = `${cleanName}-blueprint.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }
 
-        function downloadMarkdown(name, markdownStr) {
-            const markdown = JSON.parse(markdownStr);
-            const blob = new Blob([markdown], { type: 'text/markdown' });
+        function downloadMarkdown(storeKey) {
+            const data = window._blueprintStore?.[storeKey];
+            if (!data?.markdown) { alert('Markdown not found — try ripping again'); return; }
+            const cleanName = storeKey.replace(/_\d+$/, '').toLowerCase();
+            const blob = new Blob([data.markdown], { type: 'text/markdown' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${name.toLowerCase()}-component.md`;
+            a.download = `${cleanName}-component.md`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadFigmaFromStore(storeKey) {
+            const data = window._blueprintStore?.[storeKey];
+            if (!data?.figma_markdown) { alert('Figma markdown not found — try with Figma mode'); return; }
+            const cleanName = storeKey.replace(/_\d+$/, '').toLowerCase();
+            const blob = new Blob([data.figma_markdown], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${cleanName}-figma.md`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1937,6 +2603,19 @@
                     if (data.url) document.getElementById('urlInput').value = data.url;
                     if (data.selector) document.getElementById('selectorInput').value = data.selector;
                     if (data.mode) setMode(data.mode);
+                }
+                // Simple URL prefill from dashboard "Rip Components" button
+                const prefillUrl = sessionStorage.getItem('prefill_url');
+                if (prefillUrl) {
+                    sessionStorage.removeItem('prefill_url');
+                    document.getElementById('urlInput').value = prefillUrl;
+                    // Auto-switch to discover mode so user gets guided experience
+                    if (typeof setMode === 'function') setMode('discover');
+                }
+                const prefillSelector = sessionStorage.getItem('prefill_selector');
+                if (prefillSelector) {
+                    sessionStorage.removeItem('prefill_selector');
+                    document.getElementById('selectorInput').value = prefillSelector;
                 }
             } catch (e) { /* ignore */ }
         })();

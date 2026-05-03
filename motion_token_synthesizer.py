@@ -324,8 +324,8 @@ class MotionTokenSynthesizer:
         property_found = None
 
         for token in tokens:
-            # Check for cubic-bezier or steps
-            if token.startswith('cubic-bezier(') or token.startswith('steps('):
+            # Check for cubic-bezier, steps, or linear() function
+            if token.startswith('cubic-bezier(') or token.startswith('steps(') or token.startswith('linear('):
                 easing_found = token
             elif token in self.EASING_KEYWORDS:
                 easing_found = token
@@ -555,6 +555,39 @@ class MotionTokenSynthesizer:
 
         return best_match
 
+    def _is_spring_linear(self, easing_str: str) -> bool:
+        """Detect if a CSS linear() function approximates spring physics.
+
+        Spring-like linear() functions have values that overshoot (>1) or undershoot (<0),
+        or oscillate (change direction multiple times) — hallmarks of spring bounce.
+        """
+        match = re.match(r'linear\((.+)\)', easing_str)
+        if not match:
+            return False
+        try:
+            # Parse the stop values, ignoring percentages
+            parts = match.group(1).split(',')
+            values = []
+            for part in parts:
+                nums = re.findall(r'-?[\d.]+', part.strip())
+                if nums:
+                    values.append(float(nums[0]))
+            if len(values) < 3:
+                return False
+            # Check for overshoot/undershoot
+            has_overshoot = any(v > 1.02 or v < -0.02 for v in values)
+            # Check for oscillation (direction changes)
+            direction_changes = 0
+            for i in range(2, len(values)):
+                prev_dir = values[i-1] - values[i-2]
+                curr_dir = values[i] - values[i-1]
+                if prev_dir * curr_dir < 0:  # sign change
+                    direction_changes += 1
+            # Spring = overshoot OR 2+ direction changes (bounce)
+            return has_overshoot or direction_changes >= 2
+        except (ValueError, IndexError):
+            return False
+
     def _assign_easing_roles(self, curves: List[Dict]):
         """Assign purpose-based roles (default, entrance, exit, continuous) to curves."""
         if not curves:
@@ -576,10 +609,18 @@ class MotionTokenSynthesizer:
                 c['role'] = 'entrance'
             elif easing == 'ease-in':
                 c['role'] = 'exit'
+            elif easing.startswith('linear('):
+                # CSS linear() with oscillation = spring approximation
+                if self._is_spring_linear(easing):
+                    c['role'] = 'spring'
+                    c['spring_like'] = True
+                else:
+                    c['role'] = 'custom'
             elif bezier:
                 # Overshoot (y values > 1 or < 0) = spring — check first
                 if bezier[1] > 1 or bezier[1] < 0 or bezier[3] > 1.1:
                     c['role'] = 'spring'
+                    c['spring_like'] = True
                 # Decelerate-heavy = entrance
                 # Low initial acceleration (x1 < 0.3) + high final value (y2 > 0.9)
                 # OR y1 > 0.7 (strong early pull toward end state)

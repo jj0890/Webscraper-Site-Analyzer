@@ -14,7 +14,7 @@ Instead of returning useless class names, we return EXACT values:
 """
 
 import asyncio
-from playwright.async_api import Page
+from patchright.async_api import Page
 from typing import Dict, List, Optional
 import json
 
@@ -282,7 +282,7 @@ async def demo_computed_styles():
     """
     Demo: Extract exact styles from real sites
     """
-    from playwright.async_api import async_playwright
+    from patchright.async_api import async_playwright
 
     print("\n" + "="*70)
     print(" 🎨 COMPUTED STYLE EXTRACTOR DEMO")

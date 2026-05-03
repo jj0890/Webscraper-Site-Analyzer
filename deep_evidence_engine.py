@@ -19,7 +19,7 @@ Instead of just 5 basic metrics, we extract EVERYTHING:
 
 import asyncio
 import time
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 from urllib.parse import urlparse, urljoin
 import json
 import re
@@ -39,16 +39,42 @@ from extractors.cdp_animation_extractor import CdpAnimationExtractor
 from extractors.axe_contrast_extractor import AxeContrastExtractor
 from extractors.css_efficiency import CSSEfficiencyExtractor
 from extractors.css_specificity import CSSSpecificityExtractor
+from extractors.css_analytics import CSSAnalyticsExtractor
 from extractors.security import SecurityExtractor
 from extractors.performance import PerformanceExtractor
 
-# Import stealth mode for bot-protected sites
-try:
-    from playwright_stealth import stealth_async
-    STEALTH_AVAILABLE = True
-except ImportError:
-    STEALTH_AVAILABLE = False
-    print("⚠️  playwright-stealth not installed - bot detection bypass unavailable")
+# playwright_stealth is not used — patchright provides CDP-level stealth natively
+STEALTH_AVAILABLE = False
+
+# --- Stealth Configuration ---
+import random
+
+STEALTH_ARGS = [
+    '--disable-blink-features=AutomationControlled',
+    '--disable-dev-shm-usage',
+    '--disable-infobars',
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-popup-blocking',
+    '--disable-extensions',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--metrics-recording-only',
+    '--no-service-autorun',
+]
+
+USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+]
+
+def _pick_ua() -> str:
+    return random.choice(USER_AGENTS)
 
 
 # Focus-to-extractor mapping for Smart Nav focused scans.
@@ -59,11 +85,12 @@ FOCUS_EXTRACTORS = {
         'layout', 'dom_depth', 'site_architecture', 'interactive_elements', 'accessibility',
         'accessibility_tree',
         'visual_hierarchy', 'spatial_composition', 'component_map', 'content_extraction',
-        'responsive_breakpoints', 'z_index_stack', 'visual_patterns',
+        'responsive_breakpoints', 'z_index_stack', 'visual_patterns', 'component_blueprints',
+        'responsive_screenshots', 'box_model_export',
         'meta_info', 'llm_helper', 'architecture_diagrams',
     },
     'design': {
-        'typography', 'colors', 'css_tricks', 'animations',
+        'typography', 'colors', 'css_tricks', 'css_analytics', 'animations',
         'spacing_scale', 'responsive_breakpoints', 'shadow_system',
         'z_index_stack', 'border_radius_scale',
         'motion_tokens', 'accessibility_tree',
@@ -376,7 +403,8 @@ class DeepEvidenceEngine:
                         except Exception:
                             continue
 
-                    # Wait for CSS transition / menu reveal
+                    # Flush microtasks (framework updates) then wait for CSS transitions
+                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
                     await _aio.sleep(0.4)
 
                     # Optionally wait for aria-expanded="true"
@@ -680,8 +708,13 @@ class DeepEvidenceEngine:
         """
         from patchright.async_api import async_playwright
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+            browser = await p.chromium.launch(headless=True, args=STEALTH_ARGS)
+            context = await browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent=_pick_ua(),
+                locale='en-US',
+            )
+            page = await context.new_page()
             try:
                 await page.goto(url, wait_until='domcontentloaded', timeout=20000)
                 await asyncio.sleep(2)
@@ -952,10 +985,18 @@ class DeepEvidenceEngine:
         print('='*70)
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            ua = _pick_ua()
+            browser = await p.chromium.launch(headless=True, args=STEALTH_ARGS)
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                user_agent=ua,
+                locale='en-US',
+                extra_http_headers={
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"macOS"' if 'Mac' in ua else '"Windows"',
+                },
             )
             page = await context.new_page()
             page.set_default_timeout(60000)
@@ -1025,15 +1066,26 @@ class DeepEvidenceEngine:
         _extractor_timings = {}  # Track per-extractor duration
         _extraction_start = time.perf_counter()
 
-        # Helper function to safely extract metrics (with timing)
-        async def safe_extract(name, coro_or_func, *args):
+        # Helper function to safely extract metrics (with timing + timeout)
+        _EXTRACTOR_TIMEOUT = 30  # seconds per extractor
+
+        async def safe_extract(name, coro_or_func, *args, timeout=None):
+            _timeout = timeout or _EXTRACTOR_TIMEOUT
             t0 = time.perf_counter()
             try:
                 if asyncio.iscoroutinefunction(coro_or_func):
-                    result = await coro_or_func(*args)
+                    result = await asyncio.wait_for(coro_or_func(*args), timeout=_timeout)
                 else:
                     result = coro_or_func(*args)
                 return result
+            except asyncio.TimeoutError:
+                elapsed = time.perf_counter() - t0
+                print(f"   ⏱️  {name} timed out after {elapsed:.1f}s (limit: {_timeout}s)")
+                return {
+                    'pattern': f'{name} timed out',
+                    'confidence': 0,
+                    'error': f'Timeout after {_timeout}s'
+                }
             except Exception as e:
                 print(f"   ⚠️  Warning: {name} extraction failed: {str(e)[:100]}")
                 return {
@@ -1150,6 +1202,12 @@ class DeepEvidenceEngine:
                 evidence['shadow_system'] = await safe_extract('Shadow System', design_metrics.extract_shadow_system)
             if _should_extract('z_index_stack'):
                 evidence['z_index_stack'] = await safe_extract('Z-Index Stack', design_metrics.extract_z_index_stack)
+                # Capture per-tier isolated screenshots while page is still live
+                if evidence.get('z_index_stack', {}).get('layers'):
+                    try:
+                        await self._capture_z_tier_screenshots(page, evidence['z_index_stack'])
+                    except Exception as e:
+                        print(f"   ⚠️  Z-tier screenshots failed: {e}")
             if _should_extract('border_radius_scale'):
                 evidence['border_radius_scale'] = await safe_extract('Border Radius', design_metrics.extract_border_radius_scale)
 
@@ -1177,9 +1235,15 @@ class DeepEvidenceEngine:
             # Capture interactive states for top VH regions
             if evidence.get('visual_hierarchy') and evidence['visual_hierarchy'].get('visual_weight_map'):
                 print("   ⚡ Capturing VH region interactive states...")
-                evidence['visual_hierarchy']['region_states'] = await self._capture_vh_region_states(
-                    page, evidence['visual_hierarchy']['visual_weight_map'][:5]
-                )
+                try:
+                    evidence['visual_hierarchy']['region_states'] = await asyncio.wait_for(
+                        self._capture_vh_region_states(
+                            page, evidence['visual_hierarchy']['visual_weight_map'][:5]
+                        ), timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    print("   ⏱️  VH region states timed out after 30s")
+                    evidence['visual_hierarchy']['region_states'] = []
 
         # Spatial Composition Analysis (fills the 50-60% gap)
         if _should_extract('spatial_composition'):
@@ -1198,6 +1262,16 @@ class DeepEvidenceEngine:
                 evidence.get('interaction_states', {}),
                 raw_keyframes=raw_keyframes
             )
+
+        # Enrich motion_tokens with View Transitions API and linear() easing signals from CSS analytics
+        if evidence.get('motion_tokens') and evidence.get('css_analytics'):
+            modern = evidence['css_analytics'].get('details', {}).get('modernFeatures', {})
+            if modern.get('viewTransitions'):
+                evidence['motion_tokens']['view_transitions_api'] = True
+                print("   ✅ View Transitions API detected in stylesheets")
+            if modern.get('linearEasing'):
+                evidence['motion_tokens']['linear_easing_function'] = True
+                print("   ✅ CSS linear() easing function detected")
 
         # CDP Animation Capture (runtime JS-driven animations — fills gap left by CSS-only extractor)
         if _should_extract('cdp_animations'):
@@ -1222,6 +1296,12 @@ class DeepEvidenceEngine:
             print("\n🎯 Analyzing CSS specificity...")
             _css_spec_ctx = ExtractionContext(page=page, url=url, html_content=html_content, evidence=evidence)
             evidence['css_specificity'] = await safe_extract('CSS Specificity', CSSSpecificityExtractor().extract, _css_spec_ctx)
+
+        # CSS Analytics (raw authoring patterns + DTCG tokens)
+        if _should_extract('css_analytics'):
+            print("\n🔬 Analyzing CSS architecture...")
+            _css_anal_ctx = ExtractionContext(page=page, url=url, html_content=html_content, evidence=evidence)
+            evidence['css_analytics'] = await safe_extract('CSS Analytics', CSSAnalyticsExtractor().extract, _css_anal_ctx)
 
         # Screenshot with Annotations — only if visual_hierarchy was extracted
         if _should_extract('visual_hierarchy') and evidence.get('visual_hierarchy') and evidence['visual_hierarchy'].get('pattern'):
@@ -1308,6 +1388,50 @@ class DeepEvidenceEngine:
                     'pattern': 'Visual pattern discovery failed'
                 }
 
+        # Auto-rip top 5 components (reuses page, no extra browser launch)
+        if _should_extract('component_blueprints'):
+            print("\n⚡ Auto-ripping top 5 components...")
+            try:
+                from component_ripper import ComponentRipper
+                ripper = ComponentRipper(url)
+                auto_rip_result = await asyncio.wait_for(
+                    ripper.auto_rip_top_n(page=page, n=5), timeout=60
+                )
+                evidence['component_blueprints'] = {
+                    'blueprints': auto_rip_result.get('blueprints', []),
+                    'total_discovered': auto_rip_result.get('total_discovered', 0),
+                    'total_ripped': auto_rip_result.get('total_ripped', 0),
+                    'confidence': min(95, 40 + auto_rip_result.get('total_ripped', 0) * 10),
+                    'pattern': f"Auto-ripped {auto_rip_result.get('total_ripped', 0)} of {auto_rip_result.get('total_discovered', 0)} discovered components"
+                }
+                print(f"   Ripped {auto_rip_result.get('total_ripped', 0)} components")
+            except asyncio.TimeoutError:
+                print(f"   ⏱️ Auto-rip timed out after 60s")
+                evidence['component_blueprints'] = {
+                    'blueprints': [], 'total_discovered': 0, 'total_ripped': 0,
+                    'confidence': 0, 'pattern': 'Auto-rip timed out'
+                }
+            except Exception as e:
+                print(f"   ⚠️ Auto-rip failed: {e}")
+                evidence['component_blueprints'] = {
+                    'blueprints': [], 'total_discovered': 0, 'total_ripped': 0,
+                    'confidence': 0, 'pattern': 'Auto-rip failed'
+                }
+
+        # Box Model Export — enrich spatial zones with computed styles
+        if _should_extract('box_model_export') and evidence.get('spatial_composition'):
+            print("\n📦 Exporting box model for key zones...")
+            try:
+                evidence['box_model_export'] = await self._synthesize_box_model_export(page, evidence)
+                zone_count = len(evidence['box_model_export'].get('zones', []))
+                print(f"   Exported {zone_count} zones with computed styles")
+            except Exception as e:
+                print(f"   ⚠️ Box model export failed: {e}")
+                evidence['box_model_export'] = {
+                    'zones': [], 'confidence': 0,
+                    'pattern': 'Box model export failed'
+                }
+
         # Extract all links for LLM guidance
         print("\n🔗 Discovering navigation links...")
         discovered_links = await self._discover_links(page, url)
@@ -1383,13 +1507,387 @@ class DeepEvidenceEngine:
         except Exception as e:
             print(f"   ⚠️  Design harmony analysis failed: {e}")
 
+        # Layout Synthesis - translate raw container counts into actionable descriptions
+        try:
+            evidence['layout_synthesis'] = self._synthesize_layout_description(evidence)
+            print(f"   📐 Layout synthesis: {evidence['layout_synthesis'].get('pattern', '')}")
+        except Exception as e:
+            print(f"   ⚠️  Layout synthesis failed: {e}")
+
+        # Dynamic Design Playbook - surface most notable/distinctive findings
+        try:
+            evidence['design_playbook'] = self._generate_design_playbook(evidence)
+            finding_count = len(evidence['design_playbook'].get('findings', []))
+            print(f"   📋 Design playbook: {finding_count} notable findings")
+        except Exception as e:
+            print(f"   ⚠️  Design playbook generation failed: {e}")
+
+        # Design Intent — one-sentence tonal summary for dashboard hero
+        try:
+            evidence['design_intent'] = self._synthesize_design_intent(evidence, url)
+            print(f"   🎯 Design intent: {evidence['design_intent']}")
+        except Exception as e:
+            print(f"   ⚠️  Design intent synthesis failed: {e}")
+
         # LLM Helper - Suggest next steps for deeper analysis
         evidence['llm_helper'] = self._generate_llm_suggestions(
             url,
             discovered_links,
             evidence.get('content_extraction', {}),
-            evidence.get('component_map', {})
+            evidence.get('component_map', {}),
+            evidence
         )
+
+        # Promote url_patterns to top-level evidence (fixes Mermaid diagram generation)
+        llm_url_patterns = evidence.get('llm_helper', {}).get('url_patterns')
+        if llm_url_patterns:
+            clusters = llm_url_patterns.get('clusters', [])
+            # Confidence scales with cluster count and coverage
+            conf = min(90, 40 + len(clusters) * 8) if clusters else 70
+            # Pattern summary: prefer cluster-based description
+            if clusters:
+                top = clusters[0]
+                summary = (f"{len(clusters)} URL structure{'s' if len(clusters) != 1 else ''} detected "
+                           f"across {sum(c.get('count', 0) for c in clusters)} paths "
+                           f"— top: {top.get('template', '?')} ({top.get('semantic_hint', '')})")
+            else:
+                summary = f"{len(llm_url_patterns)} URL patterns detected"
+            evidence['url_patterns'] = {
+                'pattern': summary,
+                'confidence': conf,
+                'details': {
+                    'clusters': clusters,
+                    # Legacy flat dict of named patterns (articles, tags, etc.)
+                    'named_patterns': {k: v for k, v in llm_url_patterns.items() if k != 'clusters'},
+                    'all': [link for link in
+                            evidence.get('llm_helper', {}).get('discovered_links', {}).get('all', [])]
+                }
+            }
+
+        # Alias: tech_stack points to site_architecture for clarity
+        if evidence.get('site_architecture'):
+            evidence['tech_stack'] = evidence['site_architecture']
+
+        # LLM Summary - structured quick-read for API/LLM consumers (not displayed in dashboard)
+        try:
+            evidence['llm_summary'] = self._generate_llm_summary(evidence, url)
+        except Exception as e:
+            print(f"   ⚠️  LLM summary generation failed: {e}")
+
+        # Multi-breakpoint responsive screenshots (AFTER all extraction to avoid metric interference)
+        if _should_extract('responsive_screenshots'):
+            print("\n📱 Capturing responsive breakpoint screenshots...")
+            try:
+                evidence['responsive_screenshots'] = await asyncio.wait_for(
+                    self._capture_breakpoint_screenshots(page, url), timeout=60
+                )
+                bp_count = len(evidence['responsive_screenshots'].get('breakpoints', []))
+                print(f"   Captured {bp_count} breakpoint screenshots")
+            except asyncio.TimeoutError:
+                print(f"   ⏱️ Breakpoint screenshots timed out after 60s")
+                evidence['responsive_screenshots'] = {
+                    'breakpoints': [], 'confidence': 0,
+                    'pattern': 'Responsive screenshots timed out'
+                }
+            except Exception as e:
+                print(f"   ⚠️ Breakpoint screenshots failed: {e}")
+                evidence['responsive_screenshots'] = {
+                    'breakpoints': [], 'confidence': 0,
+                    'pattern': 'Responsive screenshots failed'
+                }
+
+        # Overall confidence rollup
+        skip_for_rollup = {'meta_info', 'llm_helper', 'llm_summary', 'tech_stack',
+                           'url_patterns', 'architecture_diagrams', 'design_playbook',
+                           'layout_synthesis', '_meta', 'responsive_screenshots'}
+        confidences = [
+            v.get('confidence', 0)
+            for k, v in evidence.items()
+            if isinstance(v, dict) and 'confidence' in v
+            and v['confidence'] is not None and k not in skip_for_rollup
+        ]
+        evidence['_meta'] = {
+            'overall_confidence': round(sum(confidences) / len(confidences)) if confidences else 0,
+            'metrics_above_80': sum(1 for c in confidences if c >= 80),
+            'total_metrics': len(confidences),
+        }
+        print(f"   📊 Overall confidence: {evidence['_meta']['overall_confidence']}% "
+              f"({evidence['_meta']['metrics_above_80']}/{evidence['_meta']['total_metrics']} ≥80%)")
+
+        return evidence
+
+    def _select_template_representatives(
+        self, links_data: Dict, base_url: str, max_templates: int = 6
+    ) -> Dict[str, str]:
+        """
+        Choose one representative URL per distinct URLPattern template cluster.
+
+        Strategy:
+        1. Use URLPattern clusters from _discover_links() if available.
+           Each cluster represents a distinct page template (e.g. /releases/:slug,
+           /profiles/:slug, /hubs/:slug).  Pick the first (most-linked) URL per cluster.
+        2. Fall back to path-diversity selection if no clusters.
+        3. Always add the homepage as a baseline.
+        4. Cap at max_templates total.
+
+        Returns {label: url} dict.
+        """
+        from urllib.parse import urlparse as _up, urljoin
+
+        base_origin = _up(base_url).scheme + '://' + _up(base_url).netloc
+        representatives: Dict[str, str] = {}
+        seen_urls: set = {base_url}
+
+        clusters = links_data.get('url_pattern_clusters', [])
+
+        if clusters:
+            for cluster in clusters:
+                if len(representatives) >= max_templates - 1:  # -1 reserves slot for homepage
+                    break
+                template = cluster.get('template', '')
+                examples = cluster.get('examples', [])
+                count = cluster.get('count', 0)
+                hint = cluster.get('semantic_hint', 'page')
+                depth = cluster.get('depth', 1)
+
+                # Skip utility/auth templates
+                skip_words = ('login', 'signup', 'register', 'auth', 'logout',
+                              'password', 'terms', 'privacy', 'cookie')
+                if any(w in template.lower() for w in skip_words):
+                    continue
+
+                # Pick the first example URL as the representative
+                if examples:
+                    ex_path = examples[0].get('path', '')
+                    if not ex_path:
+                        continue
+                    candidate = base_origin + ex_path if ex_path.startswith('/') else urljoin(base_url, ex_path)
+                else:
+                    continue
+
+                if candidate in seen_urls:
+                    continue
+
+                # Derive a human-readable label from the template + hint
+                # e.g. template="/releases/:slug", hint="Content pages" → "releases_detail"
+                path_prefix = template.lstrip('/').split('/')[0] if template else 'page'
+                param_suffix = 'detail' if ':' in template else 'index'
+                label = f"{path_prefix}_{param_suffix}" if path_prefix else hint.lower().replace(' ', '_')
+                # Deduplicate labels
+                base_label = label
+                i = 2
+                while label in representatives:
+                    label = f"{base_label}_{i}"
+                    i += 1
+
+                representatives[label] = candidate
+                seen_urls.add(candidate)
+
+        else:
+            # Fallback: pick from nav + sections, sorted by path depth diversity
+            all_links = [
+                l.get('url', '') for l in links_data.get('all', [])
+                if isinstance(l, dict) and l.get('url')
+            ]
+            nav_links = links_data.get('navigation', [])
+            section_links = links_data.get('sections', [])
+            article_links = links_data.get('articles', [])
+
+            # Priority: articles > sections > nav (more content-rich usually)
+            candidates = article_links[:2] + section_links[:2] + nav_links[:3]
+            for url in candidates:
+                if len(representatives) >= max_templates - 1:
+                    break
+                if url in seen_urls:
+                    continue
+                path = _up(url).path.strip('/').split('/')[0] or 'page'
+                label = path
+                i = 2
+                while label in representatives:
+                    label = f"{path}_{i}"
+                    i += 1
+                representatives[label] = url
+                seen_urls.add(url)
+
+        return representatives
+
+    def _synthesize_cross_page(
+        self, page_results: Dict[str, Dict], base_url: str = ''
+    ) -> Dict:
+        """
+        Extract the actual design system from N template scans.
+
+        The core insight: what is consistent across ALL templates = the design system.
+        What varies = template-specific overrides.
+
+        Returns a top-level evidence dict with:
+        - All standard single-page evidence keys (from homepage, as baseline)
+        - design_system: extracted cross-page consistent tokens
+        - template_map: per-template evidence and variance signals
+        - cross_page_analysis: the synthesis layer
+        """
+        def _sg(d, *keys, default=None):
+            for k in keys:
+                if not isinstance(d, dict):
+                    return default
+                d = d.get(k)
+                if d is None:
+                    return default
+            return d
+
+        valid = {k: v for k, v in page_results.items() if not v.get('error')}
+        n = len(valid)
+
+        # ── Baseline: start from homepage evidence (or first valid page) ──
+        baseline_key = 'homepage' if 'homepage' in valid else (list(valid.keys())[0] if valid else None)
+        baseline = valid.get(baseline_key, {}).copy() if baseline_key else {}
+
+        # ── Typography: find fonts present on every page ──
+        font_sets = []
+        scale_ratios = []
+        for ev in valid.values():
+            fonts = _sg(ev, 'typography', 'fonts') or _sg(ev, 'typography', 'font_families') or []
+            if fonts:
+                font_sets.append(set(fonts))
+            ratio = _sg(ev, 'typography', 'type_scale', 'ratio') or _sg(ev, 'typography', 'type_scale')
+            if isinstance(ratio, (int, float)) and 1.0 < ratio < 2.0:
+                scale_ratios.append(ratio)
+
+        system_fonts = list(set.intersection(*font_sets)) if len(font_sets) > 1 else (list(font_sets[0]) if font_sets else [])
+        page_only_fonts = {
+            label: list(fonts - set(system_fonts))
+            for label, ev in valid.items()
+            for fonts in [set(_sg(ev, 'typography', 'fonts') or _sg(ev, 'typography', 'font_families') or [])]
+            if fonts - set(system_fonts)
+        }
+        scale_ratio = round(sum(scale_ratios) / len(scale_ratios), 3) if scale_ratios else None
+
+        # ── Colors: find colors present on all pages ──
+        color_sets = []
+        for ev in valid.values():
+            palette = _sg(ev, 'colors', 'palette') or {}
+            all_colors = set()
+            if isinstance(palette, dict):
+                for bucket in palette.values():
+                    if isinstance(bucket, list):
+                        all_colors.update(c.get('hex', c) if isinstance(c, dict) else c for c in bucket)
+            elif isinstance(palette, list):
+                all_colors.update(c.get('hex', c) if isinstance(c, dict) else c for c in palette)
+            if all_colors:
+                color_sets.append(all_colors)
+
+        system_colors = list(set.intersection(*color_sets)) if len(color_sets) > 1 else (list(color_sets[0]) if color_sets else [])
+
+        # ── Spacing: find base unit that's consistent ──
+        base_units = []
+        for ev in valid.values():
+            bu = _sg(ev, 'spacing_scale', 'base_unit')
+            if bu:
+                base_units.append(str(bu))
+        from collections import Counter as _Counter
+        base_unit = _Counter(base_units).most_common(1)[0][0] if base_units else None
+
+        # ── Layout patterns per template ──
+        layout_by_template = {
+            label: _sg(ev, 'layout', 'pattern', default='unknown')
+            for label, ev in valid.items()
+        }
+        layout_types = list(set(layout_by_template.values()) - {'unknown'})
+        layout_consistent = len(layout_types) <= 1
+
+        # ── API endpoints per template ──
+        api_by_template = {}
+        all_api_templates = set()
+        for label, ev in valid.items():
+            rel_map = _sg(ev, 'api_patterns', 'relationship_map') or {}
+            endpoints = rel_map.get('endpoints', [])
+            templates = [e.get('template', e.get('path', '')) for e in endpoints]
+            api_by_template[label] = templates
+            all_api_templates.update(templates)
+
+        apis_on_all = set(api_by_template.get(list(valid.keys())[0], []))
+        for templates in api_by_template.values():
+            apis_on_all &= set(templates)
+
+        # ── Build per-template summary cards ──
+        template_map = {}
+        for label, ev in valid.items():
+            url_val = _sg(ev, 'meta_info', 'url') or ''
+            template_map[label] = {
+                'url': url_val,
+                'template_label': ev.get('_template_label', label),
+                'page_type': _sg(ev, 'content_extraction', 'page_type', default='unknown'),
+                'layout_pattern': _sg(ev, 'layout', 'pattern', default='unknown'),
+                'api_endpoints': api_by_template.get(label, []),
+                'unique_fonts': page_only_fonts.get(label, []),
+                'visual_hero': _sg(ev, 'visual_hierarchy', 'hero_section', 'detected', default=False),
+                'primary_cta': _sg(ev, 'visual_hierarchy', 'primary_cta', 'text', default=''),
+                'confidence': round(sum(
+                    v.get('confidence', 0) for v in ev.values() if isinstance(v, dict) and 'confidence' in v
+                ) / max(1, sum(1 for v in ev.values() if isinstance(v, dict) and 'confidence' in v))),
+            }
+
+        # ── Consistency scores (0-100) per metric ──
+        def _consistency(values):
+            unique = len(set(str(v) for v in values if v))
+            total = len([v for v in values if v])
+            return 100 if unique == 1 else (100 - round((unique / max(1, total)) * 100))
+
+        consistency_scores = {
+            'typography': _consistency([_sg(ev, 'typography', 'fonts', default=[None])[0]
+                                        if _sg(ev, 'typography', 'fonts') else None
+                                        for ev in valid.values()]),
+            'spacing_base': _consistency(base_units),
+            'layout': _consistency(list(layout_by_template.values())),
+            'color_count': _consistency([len(_sg(ev, 'colors', 'palette', default={}) or {})
+                                         for ev in valid.values()]),
+        }
+
+        # ── Summary sentence ──
+        summary_parts = [f"{n} page templates analyzed"]
+        if system_fonts:
+            summary_parts.append(f"consistent typography: {', '.join(system_fonts[:3])}")
+        if base_unit:
+            summary_parts.append(f"spacing base {base_unit}")
+        if scale_ratio:
+            summary_parts.append(f"type scale {scale_ratio}")
+        if layout_consistent and layout_types:
+            summary_parts.append(f"uniform {layout_types[0]} layout")
+        else:
+            summary_parts.append(f"{len(layout_types)} distinct layout patterns")
+
+        # ── Assemble evidence ──
+        # Start from baseline, then overlay with cross-page insights
+        evidence = baseline.copy()
+        evidence.update({
+            'analysis_mode': 'multi-template',
+            'pages_analyzed': n,
+            'template_map': template_map,
+            'design_system': {
+                'pattern': ' — '.join(summary_parts),
+                'confidence': min(95, 50 + n * 8),
+                'consistent_fonts': system_fonts,
+                'consistent_colors': system_colors[:10],
+                'base_spacing_unit': base_unit,
+                'type_scale_ratio': scale_ratio,
+                'apis_on_all_pages': list(apis_on_all),
+                'pages_analyzed': n,
+                'consistency_scores': consistency_scores,
+                'note': 'Values present on every scanned template = design system. Remainder = template-specific.',
+            },
+            'cross_page_analysis': {
+                'pattern': f"{n} templates — {len(system_fonts)} shared fonts, {len(system_colors)} shared colors, {len(layout_types)} layout pattern{'s' if len(layout_types) != 1 else ''}",
+                'confidence': min(90, 40 + n * 10),
+                'template_count': n,
+                'layout_by_template': layout_by_template,
+                'layout_consistent': layout_consistent,
+                'api_by_template': api_by_template,
+                'apis_site_wide': list(apis_on_all),
+                'font_variance': page_only_fonts,
+                'consistency_scores': consistency_scores,
+                'summary': ' — '.join(summary_parts),
+            },
+        })
 
         return evidence
 
@@ -1568,6 +2066,12 @@ class DeepEvidenceEngine:
                 _sg(p, 'site_architecture', 'details', 'capabilities', 'prefetching', default=False)
             )
             validated['prefetches_pages'] = {'pages_seen': n, 'of': total, 'confirmed': n > total / 2}
+
+            # Uses Speculation Rules API (prerender/prefetch — ics.media, Apr 2026)
+            n = _seen_on(lambda p:
+                _sg(p, 'site_architecture', 'details', 'capabilities', 'speculation_rules', default=False)
+            )
+            validated['uses_speculation_rules'] = {'pages_seen': n, 'of': total, 'confirmed': n > total / 2}
 
         synthesis['validated_capabilities'] = validated
 
@@ -1984,13 +2488,12 @@ class DeepEvidenceEngine:
                f"creating a layered, professional interface."
 
     def _summarize_typography(self, evidence: Dict) -> str:
-        """Generate plain English summary for typography"""
-        typo = evidence.get('typography', {})
-        if not isinstance(typo, dict):
-            return "Typography analysis incomplete."
-
-        families = typo.get('font_families', typo.get('details', {}).get('all_fonts', []))
-        sizes = typo.get('font_sizes', typo.get('details', {}).get('all_sizes', []))
+        """Generate plain English summary for typography.
+        Note: `evidence` here IS the typography metric dict (not top-level evidence).
+        """
+        families = evidence.get('font_families', evidence.get('fonts', evidence.get('details', {}).get('all_fonts', [])))
+        sizes = evidence.get('font_sizes', evidence.get('details', {}).get('all_sizes', []))
+        type_scale = evidence.get('type_scale', {})
 
         if not families:
             return "Typography analysis incomplete."
@@ -1999,24 +2502,36 @@ class DeepEvidenceEngine:
         if isinstance(families[0], dict):
             primary_family = families[0].get('name', 'Unknown')
         else:
-            # Raw CSS font-family string — extract first font name
             primary_family = str(families[0]).split(',')[0].strip().replace('"', '').replace("'", '')
 
-        size_count = len(sizes)
-        if size_count <= 3:
-            size_desc = "limited text sizes (may feel monotonous)"
-        elif size_count <= 6:
-            size_desc = "a balanced range of text sizes"
-        else:
-            size_desc = "many text sizes (may feel inconsistent)"
+        # Build a richer sentence with type scale if available
+        ratio = type_scale.get('ratio') if isinstance(type_scale, dict) else type_scale
+        sizes_px = type_scale.get('sizes_px', []) if isinstance(type_scale, dict) else []
 
-        return f"This site uses {len(families)} font family/families with {size_desc}. " \
-               f"Primary font: {primary_family}."
+        size_range = ''
+        if sizes_px:
+            size_range = f" ({min(sizes_px)}-{max(sizes_px)}px)"
+        elif sizes:
+            numeric = [s for s in sizes if isinstance(s, (int, float))]
+            if numeric:
+                size_range = f" ({min(numeric)}-{max(numeric)}px)"
+
+        ratio_desc = ''
+        if ratio and isinstance(ratio, (int, float)) and ratio > 1.0:
+            ratio_desc = f" with a {ratio:.2f} scale ratio"
+
+        return f"Uses {primary_family} across {len(families)} font families{size_range}{ratio_desc}. " \
+               f"{len(sizes)} distinct sizes detected."
 
     def _summarize_colors(self, evidence: Dict) -> str:
-        """Generate plain English summary for colors"""
-        primary_colors = len(evidence.get('primary_colors', []))
-        total_colors = evidence.get('total_unique_colors', 0)
+        """Generate plain English summary for colors.
+        Note: `evidence` here IS the colors metric dict.
+        """
+        palette = evidence.get('palette', {})
+        primary_colors = len(palette.get('primary', [])) if isinstance(palette, dict) else 0
+        total_colors = sum(len(v) for v in palette.values() if isinstance(v, list)) if isinstance(palette, dict) else 0
+        css_vars = evidence.get('css_variables', {})
+        roles = evidence.get('color_roles', {})
 
         if primary_colors <= 3:
             palette_desc = "minimal, focused palette"
@@ -2025,8 +2540,15 @@ class DeepEvidenceEngine:
         else:
             palette_desc = "diverse color palette"
 
-        return f"This site uses a {palette_desc} with {primary_colors} primary colors " \
-               f"and {total_colors} total shades. This suggests {'a strict design system' if total_colors < 20 else 'flexible color usage'}."
+        extras = []
+        if css_vars and isinstance(css_vars, dict) and len(css_vars) > 0:
+            extras.append(f"{len(css_vars)} CSS custom properties")
+        if roles and isinstance(roles, dict) and len(roles) > 0:
+            role_names = ', '.join(list(roles.keys())[:4])
+            extras.append(f"semantic roles: {role_names}")
+
+        suffix = f" ({'; '.join(extras)})" if extras else ''
+        return f"Uses a {palette_desc} with {primary_colors} primary colors and {total_colors} total shades{suffix}."
 
     def _summarize_spacing(self, evidence: Dict) -> str:
         """Generate plain English summary for spacing"""
@@ -2130,30 +2652,55 @@ class DeepEvidenceEngine:
         """Run full deep extraction with robust error handling"""
         async with async_playwright() as p:
             # Launch browser with stealth args
+            ua = _pick_ua()
             browser = await p.chromium.launch(
                 headless=True,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                ] if STEALTH_AVAILABLE else []
+                args=STEALTH_ARGS,
             )
 
             # Create context with realistic settings
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                user_agent=ua,
                 locale='en-US',
                 extra_http_headers={
                     'Accept-Language': 'en-US,en;q=0.9',
-                } if STEALTH_AVAILABLE else {}
+                    'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"macOS"' if 'Mac' in ua else '"Windows"',
+                },
             )
             page = await context.new_page()
             page.set_default_timeout(60000)  # 60s default timeout
 
             # Apply stealth patches if available
             if STEALTH_AVAILABLE:
-                print("   🥷 Stealth mode enabled - bot detection bypass active")
                 await stealth_async(page)
+            print(f"   🥷 Stealth: {ua.split('Chrome/')[1].split(' ')[0] if 'Chrome/' in ua else 'active'}")
+
+            # SPA route interception — capture pushState/replaceState before frameworks init
+            try:
+                await page.evaluate_on_new_document('''() => {
+                    window.__wiRouteLog = [];
+                    var origPush = history.pushState;
+                    var origReplace = history.replaceState;
+                    history.pushState = function() {
+                        window.__wiRouteLog.push({ type: 'push', url: arguments[2], ts: Date.now() });
+                        return origPush.apply(this, arguments);
+                    };
+                    history.replaceState = function() {
+                        window.__wiRouteLog.push({ type: 'replace', url: arguments[2], ts: Date.now() });
+                        return origReplace.apply(this, arguments);
+                    };
+                    window.addEventListener('popstate', function() {
+                        window.__wiRouteLog.push({ type: 'popstate', url: location.href, ts: Date.now() });
+                    });
+                    window.addEventListener('hashchange', function(e) {
+                        window.__wiRouteLog.push({ type: 'hash', url: e.newURL, ts: Date.now() });
+                    });
+                }''')
+            except Exception as e:
+                print(f"      ⚠️  pushState interception failed: {str(e)[:80]}")
 
             # Network monitoring
             self.network_requests = []
@@ -2198,44 +2745,76 @@ class DeepEvidenceEngine:
             print(f"\n🌐 Loading {self.url}...")
             access_strategy = 'playwright_full'
             degraded_mode = False
+            blocked_by = None          # None | 'http_403' | 'http_401' | 'cloudflare' | 'bot_challenge' | 'auth_wall' | 'page_load_error' | 'soft_gate'
+            blocked_detail = None      # Human-readable detail string
             _page_load_start = time.perf_counter()
 
             try:
-                # Try networkidle first (best for SPAs)
-                response = await page.goto(self.url, wait_until='networkidle', timeout=60000)
+                # Load with domcontentloaded first (fast, reliable for all sites)
+                response = await page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
+                _load_elapsed = time.perf_counter() - _page_load_start
+                print(f"   ✅ DOM loaded in {_load_elapsed:.1f}s")
+
+                # Wait for network to settle (short cap — streaming sites like
+                # NTS.live have permanent connections that prevent networkidle
+                # from ever firing)
+                try:
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    print(f"      ✅ Network idle reached")
+                except Exception:
+                    print(f"      ⏳ Network still active after 10s (streaming/SPA) — continuing")
+                # Flush framework render queue (React Concurrent / Vue async)
+                # Two nested queueMicrotasks drain nested scheduling passes
+                await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
 
                 # Check for bot protection
                 if response and response.status in [403, 401]:
                     print(f"   🚫 {response.status} detected - Entering degraded mode (MRI scan)")
                     degraded_mode = True
+                    blocked_by = f'http_{response.status}'
+                    blocked_detail = f'Server returned HTTP {response.status}'
 
             except Exception as e:
-                print(f"   ⚠️  NetworkIdle timeout, trying domcontentloaded...")
-                try:
-                    # Fallback to domcontentloaded (faster, works for heavy sites)
-                    response = await page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
-
-                    # Wait for SPA hydration + JS-triggered API calls
-                    import asyncio as _aio
-                    await _aio.sleep(4)
-                    print(f"      ✅ Waited 4s for SPA hydration after domcontentloaded")
-
-                    # Check for bot protection
-                    if response and response.status in [403, 401]:
-                        print(f"   🚫 {response.status} detected - Entering degraded mode (MRI scan)")
-                        degraded_mode = True
-
-                except Exception as e2:
-                    print(f"   ❌ Page load failed: {str(e2)[:100]}")
-                    degraded_mode = True
+                print(f"   ❌ Page load failed: {str(e)[:100]}")
+                degraded_mode = True
+                blocked_by = 'page_load_error'
+                blocked_detail = str(e)[:200]
 
             # Check for challenge pages (Cloudflare, etc.)
             if not degraded_mode:
                 try:
                     html_content = await page.content()
-                    if self._is_challenge_page(html_content):
-                        print(f"   🛡️  Bot protection challenge detected - Entering degraded mode (MRI scan)")
-                        degraded_mode = True
+                    challenge_result = self._is_challenge_page(html_content, detail=True)
+                    if challenge_result:
+                        print(f"   🛡️  Bot protection challenge detected ({challenge_result}) - trying gate dismissal first")
+                        # ── DOM Mutation Pre-Pass ──
+                        # Before giving up, try dismissing soft gates (modals,
+                        # cookie banners, overlays). This unblocks sites like
+                        # pi.fyi that have client-side modal gates, not server-
+                        # side auth. Only attempt if the challenge looks "soft"
+                        # (client-side overlay rather than full-page Cloudflare).
+                        gate_dismissed = False
+                        if challenge_result not in ('cloudflare_full', 'perimeterx', 'datadome'):
+                            gate_dismissed = await self._try_dismiss_gate(page)
+                            if gate_dismissed:
+                                html_content = await page.content()
+                                recheck = self._is_challenge_page(html_content, detail=True)
+                                if not recheck:
+                                    print(f"   ✅ Gate dismissed — page is accessible now")
+                                else:
+                                    print(f"   ⚠️  Gate dismissal didn't clear challenge ({recheck})")
+                                    gate_dismissed = False
+
+                        if not gate_dismissed:
+                            degraded_mode = True
+                            # Classify the block type
+                            if 'cloudflare' in challenge_result:
+                                blocked_by = 'cloudflare'
+                            elif challenge_result in ('perimeterx', 'datadome'):
+                                blocked_by = challenge_result
+                            else:
+                                blocked_by = 'bot_challenge'
+                            blocked_detail = f'Challenge detected: {challenge_result}'
                 except Exception as e:
                     import logging
                     logging.getLogger(__name__).debug(f"Challenge page check failed (continuing): {e}")
@@ -2249,12 +2828,28 @@ class DeepEvidenceEngine:
 
                     auth_indicators = [
                         'log in', 'login', 'sign in', 'signin',
+                        'sign up', 'signup', 'join today',
                         'password', 'enter password', 'email required',
-                        'create account', 'authentication required'
+                        'create account', 'create your account',
+                        'authentication required',
                     ]
 
-                    is_auth_page = any(indicator in page_title or indicator in page_content_sample
-                                       for indicator in auth_indicators)
+                    # Check title + first 3KB of HTML + visible body text
+                    # (large SPAs like x.com put auth text in body, not <head>)
+                    visible_text = ''
+                    try:
+                        visible_text = (await page.evaluate(
+                            '() => (document.body ? document.body.innerText : "").substring(0, 3000)'
+                        )).lower()
+                    except Exception:
+                        pass
+
+                    is_auth_page = any(
+                        indicator in page_title
+                        or indicator in page_content_sample
+                        or indicator in visible_text
+                        for indicator in auth_indicators
+                    )
 
                     # Additional check: look for password input fields
                     password_inputs = await page.query_selector_all('input[type="password"]')
@@ -2264,10 +2859,67 @@ class DeepEvidenceEngine:
                     login_forms = await page.query_selector_all('form[action*="login"], form[action*="signin"], form[id*="login"], form[class*="login"]')
                     has_login_form = len(login_forms) > 0
 
-                    if (is_auth_page and has_password_field) or (has_login_form and has_password_field):
-                        print(f"   🔒 Auth wall detected (login/signup page) - Entering degraded mode (MRI scan)")
+                    # ── OAuth-only auth walls (x.com, Instagram, etc.) ──
+                    # These pages have NO password field — just "Sign in with Google/Apple"
+                    # buttons. Detect by: auth text present + OAuth buttons + very few nav links
+                    # (a real landing page would have navigation, not just login buttons).
+                    oauth_auth_wall = False
+                    if is_auth_page and not has_password_field:
+                        oauth_signals = await page.evaluate('''() => {
+                            const text = document.body ? document.body.innerText.toLowerCase() : '';
+                            const oauthPhrases = [
+                                'sign up with google', 'sign up with apple',
+                                'sign in with google', 'sign in with apple',
+                                'continue with google', 'continue with apple',
+                                'continue with facebook', 'sign in with facebook',
+                                'log in with google', 'log in with apple',
+                                'sign up with phone', 'create your account',
+                            ];
+                            const oauthHits = oauthPhrases.filter(p => text.includes(p)).length;
+
+                            // Count real navigation links (not auth-related)
+                            const allLinks = [...document.querySelectorAll('a[href]')];
+                            const navLinks = allLinks.filter(a => {
+                                const href = a.getAttribute('href') || '';
+                                const linkText = (a.textContent || '').toLowerCase();
+                                // Exclude auth, TOS, privacy links
+                                const authish = /sign|log|login|register|password|terms|privacy|cookie|help/i;
+                                return !authish.test(linkText) && !authish.test(href)
+                                    && href.startsWith('/') && href.length > 1;
+                            });
+
+                            // Check for "happening now" / trending (x.com specific)
+                            const hasMainContent = !!(
+                                document.querySelector('main article') ||
+                                document.querySelectorAll('article').length > 2 ||
+                                document.querySelector('[role="feed"]')
+                            );
+
+                            return {
+                                oauthHits,
+                                navLinkCount: navLinks.length,
+                                hasMainContent,
+                                bodyTextLength: text.length,
+                            };
+                        }''')
+
+                        # Auth wall if: OAuth buttons present + few real nav links + no feed content
+                        if (oauth_signals.get('oauthHits', 0) >= 2
+                                and oauth_signals.get('navLinkCount', 0) < 5
+                                and not oauth_signals.get('hasMainContent', False)):
+                            oauth_auth_wall = True
+                        # Also catch: very short body text (< 500 chars of visible text) + OAuth
+                        elif (oauth_signals.get('oauthHits', 0) >= 1
+                              and oauth_signals.get('bodyTextLength', 9999) < 500):
+                            oauth_auth_wall = True
+
+                    if (is_auth_page and has_password_field) or (has_login_form and has_password_field) or oauth_auth_wall:
+                        auth_type = 'oauth_login_wall' if oauth_auth_wall else 'password_login_form'
+                        print(f"   🔒 Auth wall detected ({auth_type}) - Entering degraded mode (MRI scan)")
                         access_strategy = 'mri_mode_auth_wall'
                         degraded_mode = True
+                        blocked_by = 'auth_wall'
+                        blocked_detail = f'Auth wall detected: {auth_type}'
                 except Exception as e:
                     import logging
                     logging.getLogger(__name__).debug(f"Auth wall check failed (continuing): {e}")
@@ -2284,9 +2936,58 @@ class DeepEvidenceEngine:
                     print(f"   ⏭️  Web font wait timed out (no web fonts or slow loading)")
                     pass
 
+            # RETRY: If blocked, try once more with a different user-agent profile
+            if degraded_mode and access_strategy != 'mri_mode_auth_wall':
+                retry_ua = _pick_ua()
+                while retry_ua == ua:
+                    retry_ua = _pick_ua()
+                print(f"   🔄 Retrying with different profile: Chrome/{retry_ua.split('Chrome/')[1].split(' ')[0] if 'Chrome/' in retry_ua else '?'}")
+                try:
+                    retry_ctx = await browser.new_context(
+                        viewport={'width': 1920, 'height': 1080},
+                        user_agent=retry_ua,
+                        locale='en-US',
+                        extra_http_headers={
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+                            'Sec-Ch-Ua-Mobile': '?0',
+                            'Sec-Ch-Ua-Platform': '"macOS"' if 'Mac' in retry_ua else '"Windows"',
+                        },
+                    )
+                    retry_page = await retry_ctx.new_page()
+                    if STEALTH_AVAILABLE:
+                        await stealth_async(retry_page)
+                    retry_resp = await retry_page.goto(self.url, wait_until='domcontentloaded', timeout=30000)
+                    try:
+                        await retry_page.wait_for_load_state('networkidle', timeout=8000)
+                    except Exception:
+                        pass
+                    await retry_page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                    retry_html = await retry_page.content()
+
+                    if retry_resp and retry_resp.status not in [403, 401] and not self._is_challenge_page(retry_html):
+                        print(f"   ✅ Retry succeeded — switching to retry page")
+                        degraded_mode = False
+                        page = retry_page
+                        context = retry_ctx
+                        html_content = retry_html
+                        response = retry_resp
+                        ua = retry_ua
+                    else:
+                        print(f"   ❌ Retry also blocked")
+                        await retry_ctx.close()
+                except Exception as e:
+                    print(f"   ❌ Retry failed: {str(e)[:80]}")
+
             # DEGRADED MODE: Try Scrapling stealth before falling back to MRI
             if degraded_mode:
                 await browser.close()
+
+                # Auth walls can't be bypassed by stealth — skip straight to MRI
+                if blocked_by == 'auth_wall':
+                    print(f"   🔒 Auth wall — skipping stealth retry, going to MRI")
+                    print(f"   🔬 Running Metadata MRI scan... (blocked_by={blocked_by})")
+                    return await self._mri_scan(blocked_by=blocked_by, blocked_detail=blocked_detail)
 
                 # Phase 2: Try Scrapling StealthyFetcher (stealth browser with anti-detection)
                 try:
@@ -2296,7 +2997,11 @@ class DeepEvidenceEngine:
                     async def _scrapling_page_action(page):
                         """Run inside Scrapling's stealth browser — extract full evidence"""
                         await page.wait_for_load_state('domcontentloaded')
-                        await asyncio.sleep(3)  # Let JS render
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=8000)
+                        except Exception:
+                            pass
+                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
 
                         # Check if we actually got the real page
                         _html = await page.content()
@@ -2332,22 +3037,35 @@ class DeepEvidenceEngine:
                     print(f"   ⚠️  Scrapling stealth failed: {str(e)[:100]} — falling back to MRI")
 
                 # Final fallback: MRI metadata-only scan
-                print(f"   🔬 Running Metadata MRI scan...")
-                return await self._mri_scan()
+                print(f"   🔬 Running Metadata MRI scan... (blocked_by={blocked_by})")
+                return await self._mri_scan(blocked_by=blocked_by, blocked_detail=blocked_detail)
 
             # FULL ACCESS MODE: Continue with normal extraction
-            await asyncio.sleep(3)  # Let JS render
+            # networkidle was already awaited above; flush any remaining
+            # framework micro-task scheduling (React Concurrent, Vue async)
+            await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
             _page_load_seconds = round(time.perf_counter() - _page_load_start, 2)
             print(f"   ⏱️  Page loaded in {_page_load_seconds}s")
 
             # Get page HTML
             html_content = await page.content()
 
+            # ── Pre-flight: page quality assessment ──────────────────────────
+            # Quick DOM scan (~0.3s) before spending 2-3 minutes on extraction.
+            # If this URL is a sparse feed/landing page with little design signal,
+            # surface a better alternative from link discovery so the LLM can
+            # redirect before committing to a full scan.
+            preflight = await self._preflight_page_quality(page, self.url)
+            self._preflight = preflight  # stash for evidence injection below
+
             # MODE BRANCHING
             if self.analysis_mode == 'single':
                 # Single page analysis (original behavior)
                 print(f"   🔍 Single page analysis mode")
                 self.evidence = await self._analyze_single_page(page, self.url, html_content)
+                # Inject preflight assessment into evidence
+                if hasattr(self, '_preflight') and self._preflight:
+                    self.evidence['entry_point'] = self._preflight
                 # Inject page load timing into scan_timing
                 if 'scan_timing' in self.evidence:
                     self.evidence['scan_timing']['page_load_seconds'] = _page_load_seconds
@@ -2378,7 +3096,11 @@ class DeepEvidenceEngine:
 
                     try:
                         await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                        await asyncio.sleep(3)
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=8000)
+                        except Exception:
+                            pass
+                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
                         html_content = await page.content()
 
                         page_results[label] = await self._analyze_single_page(page, url, html_content)
@@ -2410,6 +3132,65 @@ class DeepEvidenceEngine:
                         'cloudflare_urls': len(_cf_pool),
                         'pages_analyzed': len(urls_to_analyze),
                     }
+
+            elif self.analysis_mode == 'multi-template':
+                # Comprehensive site scan: discover all distinct page templates,
+                # scan one representative per template, synthesize across all.
+                print(f"\n   🗂️  Multi-template mode — discovering page templates...")
+
+                # Step 1: Discover all internal links from the loaded homepage
+                links_data = await self._discover_links(page, self.url)
+
+                # Step 2: Pick one URL per distinct URLPattern template cluster
+                representatives = self._select_template_representatives(
+                    links_data, self.url, max_templates=6
+                )
+                print(f"   📋 {len(representatives)} template representatives selected:")
+                for label, url in representatives.items():
+                    print(f"      {label}: {url}")
+
+                # Step 3: Scan each representative sequentially
+                page_results = {}
+
+                # Include the already-loaded homepage first (free — already in memory)
+                page_results['homepage'] = await self._analyze_single_page(
+                    page, self.url, html_content
+                )
+                page_results['homepage']['_template_label'] = 'homepage'
+                print(f"   ✅ homepage analyzed")
+
+                for label, rep_url in representatives.items():
+                    if rep_url == self.url:
+                        continue  # skip if representative is the homepage itself
+                    print(f"\n   📄 [{len(page_results)}/{len(representatives)+1}] {label}: {rep_url}")
+                    self.network_requests = []
+                    self.network_responses = []
+                    try:
+                        await page.goto(rep_url, wait_until='domcontentloaded', timeout=30000)
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=8000)
+                        except Exception:
+                            pass
+                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                        rep_html = await page.content()
+                        ev = await self._analyze_single_page(page, rep_url, rep_html)
+                        ev['_template_label'] = label
+                        page_results[label] = ev
+                        print(f"   ✅ {label} analyzed ({len(ev)} evidence keys)")
+                    except Exception as e:
+                        print(f"   ❌ {label} failed: {str(e)[:80]}")
+                        page_results[label] = {
+                            'error': str(e)[:200],
+                            '_template_label': label,
+                            'meta_info': {'url': rep_url}
+                        }
+
+                # Step 4: Cross-page synthesis
+                print(f"\n   🔗 Synthesizing across {len(page_results)} templates...")
+                self.evidence = self._synthesize_cross_page(page_results, self.url)
+                # Inject preflight if we ran it
+                if hasattr(self, '_preflight') and self._preflight:
+                    self.evidence['entry_point'] = self._preflight
 
             elif self.analysis_mode == 'interactive':
                 # Interactive discovery: click menus, discover pages, select diverse subset, analyze
@@ -2454,7 +3235,11 @@ class DeepEvidenceEngine:
 
                     try:
                         await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                        await asyncio.sleep(3)
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=8000)
+                        except Exception:
+                            pass
+                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
                         html_content = await page.content()
 
                         page_results[label] = await self._analyze_single_page(page, url, html_content)
@@ -2679,6 +3464,14 @@ class DeepEvidenceEngine:
         all_sizes = typo_data.get('all_sizes', [])
         all_weights = typo_data.get('all_weights', [])
 
+        # Expose canonical aliases inside details too, so downstream consumers
+        # that look under typography.details.font_sizes / font_weights / fonts
+        # don't get empty arrays when the JS-side names differ.
+        typo_data['fonts'] = all_fonts
+        typo_data['font_families'] = all_fonts
+        typo_data['font_sizes'] = all_sizes
+        typo_data['font_weights'] = all_weights
+
         # Build enriched type_scale dict (was bare float)
         type_scale_dict = None
         if type_scale is not None:
@@ -2711,6 +3504,7 @@ class DeepEvidenceEngine:
             'details': typo_data,
             'type_scale': type_scale_dict if type_scale_dict else type_scale,
             'font_families': all_fonts,
+            'fonts': all_fonts,  # Canonical alias — LLM consumers expect this key
             'font_sizes': all_sizes,
             'font_weights': all_weights,
             'code_snippets': self._generate_typo_snippets(typo_data)
@@ -2784,14 +3578,24 @@ class DeepEvidenceEngine:
             except Exception as e:
                 print(f"      ⚠️  Preview generation failed: {str(e)[:100]}")
 
-        # Combine old and new analysis
+        # Derive semantic color roles from CSS custom properties
+        color_roles = self._derive_color_roles(color_data.get('css_variables', {}))
+
+        # Confidence: CSS variable roles boost confidence significantly
+        base_conf = 50
+        primary_bonus = min(20, len(palette.get('primary', [])) * 4)
+        var_bonus = min(20, len(color_data.get('css_variables', {})) * 2)
+        role_bonus = min(15, len(color_roles) * 3)
+        confidence = min(95, base_conf + primary_bonus + var_bonus + role_bonus)
+
         result = {
             'pattern': f"{len(palette['primary'])} primary colors detected",
-            'confidence': color_intelligence.get('confidence', 80) if color_intelligence else 80,
-            'palette': palette,  # OLD: For backwards compatibility
+            'confidence': confidence,
+            'palette': palette,
             'css_variables': color_data['css_variables'],
+            'color_roles': color_roles,
             'code_snippets': self._generate_color_snippets(palette),
-            'preview': preview_analysis  # Keep for UI visual display
+            'preview': preview_analysis
         }
 
         # Add intelligent analysis if available
@@ -3491,7 +4295,22 @@ class DeepEvidenceEngine:
                     prefetching: false,
                     websockets: false,
                     service_worker: false,
-                    i18n: false
+                    i18n: false,
+                    speculation_rules: false
+                },
+
+                // --- Speculation Rules API details (prerender/prefetch) ---
+                // Populated from <script type="speculationrules"> blocks
+                speculation_rules: {
+                    supported: 'HTMLScriptElement' in window &&
+                               HTMLScriptElement.supports &&
+                               HTMLScriptElement.supports('speculationrules') || false,
+                    prerender_rules: 0,
+                    prefetch_rules: 0,
+                    eagerness_levels: [],
+                    target_patterns: [],
+                    has_exclusions: false,
+                    raw_rules: []
                 },
 
                 // --- Evidence trail (what proved each conclusion) ---
@@ -3679,21 +4498,94 @@ class DeepEvidenceEngine:
                 }
             }
 
+            // ── 11. Speculation Rules API (prerender/prefetch) ──
+            // <script type="speculationrules">{ "prerender": [...], "prefetch": [...] }</script>
+            try {
+                const specScripts = document.querySelectorAll('script[type="speculationrules"]');
+                for (const s of specScripts) {
+                    const text = (s.textContent || '').trim();
+                    if (!text) continue;
+                    let rules = null;
+                    try { rules = JSON.parse(text); } catch(e) { continue; }
+                    if (!rules || typeof rules !== 'object') continue;
+
+                    const prerender = Array.isArray(rules.prerender) ? rules.prerender : [];
+                    const prefetch  = Array.isArray(rules.prefetch)  ? rules.prefetch  : [];
+
+                    result.speculation_rules.prerender_rules += prerender.length;
+                    result.speculation_rules.prefetch_rules  += prefetch.length;
+
+                    const collect = (entry) => {
+                        if (!entry || typeof entry !== 'object') return;
+                        if (entry.eagerness) {
+                            if (!result.speculation_rules.eagerness_levels.includes(entry.eagerness)) {
+                                result.speculation_rules.eagerness_levels.push(entry.eagerness);
+                            }
+                        }
+                        // Target patterns — can be in where.href_matches, urls, or where.not.href_matches
+                        const w = entry.where || {};
+                        const pushPat = (p) => {
+                            if (!p) return;
+                            const arr = Array.isArray(p) ? p : [p];
+                            for (const v of arr) {
+                                if (typeof v === 'string' &&
+                                    !result.speculation_rules.target_patterns.includes(v)) {
+                                    result.speculation_rules.target_patterns.push(v);
+                                }
+                            }
+                        };
+                        pushPat(w.href_matches);
+                        pushPat(entry.urls);
+                        if (w.not && (w.not.href_matches || w.not.selector_matches)) {
+                            result.speculation_rules.has_exclusions = true;
+                        }
+                    };
+                    prerender.forEach(collect);
+                    prefetch.forEach(collect);
+
+                    // Store raw rule (truncated) as evidence
+                    if (result.speculation_rules.raw_rules.length < 3) {
+                        result.speculation_rules.raw_rules.push(text.substring(0, 400));
+                    }
+                }
+
+                const sr = result.speculation_rules;
+                if (sr.prerender_rules > 0 || sr.prefetch_rules > 0) {
+                    result.capabilities.speculation_rules = true;
+                    result.capabilities.prefetching = true; // implies prefetching at minimum
+                    const parts = [];
+                    if (sr.prerender_rules) parts.push(sr.prerender_rules + ' prerender');
+                    if (sr.prefetch_rules)  parts.push(sr.prefetch_rules + ' prefetch');
+                    if (sr.eagerness_levels.length)
+                        parts.push('eagerness: ' + sr.eagerness_levels.join('/'));
+                    result.evidence.push('Speculation Rules API: ' + parts.join(', '));
+                }
+            } catch(e) { /* speculation rules parse failed — leave defaults */ }
+
             return result;
         }''')
 
-        # Compute confidence: more evidence = higher confidence
+        # Compute confidence: scale honestly with evidence count
         evidence_count = len(arch_data.get('evidence', []))
-        confidence = min(40 + evidence_count * 12, 95)  # 40 base + 12 per signal, cap 95
+        if evidence_count == 0:
+            confidence = 15  # Honest: we found nothing
+        elif evidence_count == 1:
+            confidence = 35  # Single signal, could be a false positive
+        else:
+            confidence = min(35 + evidence_count * 15, 95)
 
-        # If literally nothing was detected, still return a useful "vanilla" result
+        # When nothing detected, be honest instead of guessing
         if not arch_data.get('framework'):
-            arch_data['framework'] = 'vanilla / unknown'
+            arch_data['framework_note'] = (
+                'No framework signals found — site may use obfuscated '
+                'or proprietary tooling (e.g. Squarespace, Wix)'
+            )
 
         return {
-            'pattern': arch_data.get('framework', 'unknown'),
+            'pattern': arch_data.get('framework') or 'Not detected',
             'confidence': confidence,
-            'details': arch_data
+            'details': arch_data,
+            'framework_note': arch_data.get('framework_note')
         }
 
     async def _extract_css_tricks(self, page):
@@ -4307,6 +5199,8 @@ class DeepEvidenceEngine:
         return {
             'pattern': f'{total_detections} interaction states detected ({", ".join(pattern_parts)}) via {" + ".join(detection_method)}',
             'confidence': confidence,
+            'hover_count': hover_count,
+            'focus_count': focus_count,
             'state_deltas': state_deltas,
             'utility_classes': utility_classes,
             'computed_states': computed_summary,
@@ -4407,12 +5301,14 @@ class DeepEvidenceEngine:
             return "Traditional Layout"
 
     def _calculate_layout_confidence(self, data):
-        if data['grid_count'] > 5 or data['flex_count'] > 5:
-            return 95
-        elif data['grid_count'] > 0 or data['flex_count'] > 0:
-            return 80
-        else:
-            return 60
+        grid = data.get('grid_count', 0)
+        flex = data.get('flex_count', 0)
+        confidence = 40
+        confidence += min(25, grid * 4)
+        confidence += min(25, flex * 4)
+        if grid > 0 and flex > 0:
+            confidence += 5
+        return min(95, confidence)
 
     def _determine_typo_pattern(self, data):
         body = data.get('body', {})
@@ -4441,6 +5337,46 @@ class DeepEvidenceEngine:
             'primary': colors[:5],
             'secondary': colors[5:10] if len(colors) > 5 else []
         }
+
+    def _derive_color_roles(self, css_variables: Dict) -> Dict:
+        """Derive semantic color roles from CSS custom property names.
+
+        Matches common naming patterns: --color-primary, --bg-surface,
+        --text-muted, --accent, --brand, etc.
+        """
+        if not css_variables or not isinstance(css_variables, dict):
+            return {}
+
+        import re
+        role_patterns = {
+            'primary': re.compile(r'(primary|brand|main)', re.I),
+            'secondary': re.compile(r'(secondary|alt)', re.I),
+            'accent': re.compile(r'(accent|highlight|emphasis)', re.I),
+            'background': re.compile(r'(background|bg|surface|canvas)', re.I),
+            'text': re.compile(r'(text|foreground|fg|body|content)', re.I),
+            'border': re.compile(r'(border|divider|separator|stroke)', re.I),
+            'error': re.compile(r'(error|danger|destructive|red)', re.I),
+            'success': re.compile(r'(success|positive|green)', re.I),
+            'warning': re.compile(r'(warning|caution|yellow|orange)', re.I),
+            'muted': re.compile(r'(muted|subtle|disabled|dim)', re.I),
+            'link': re.compile(r'(link|anchor|href)', re.I),
+            'hover': re.compile(r'(hover|active|focus)', re.I),
+        }
+
+        roles = {}
+        for var_name, value in css_variables.items():
+            if not isinstance(value, str):
+                continue
+            name = str(var_name)
+            for role, pattern in role_patterns.items():
+                if pattern.search(name):
+                    if role not in roles:
+                        roles[role] = []
+                    roles[role].append({'variable': var_name, 'value': value})
+                    break
+
+        # Deduplicate: keep max 3 per role
+        return {role: entries[:3] for role, entries in roles.items()}
 
     def _extract_hex_colors(self, color_list):
         """Extract hex colors from rgb/rgba strings"""
@@ -4651,33 +5587,253 @@ class DeepEvidenceEngine:
             recs.append(f"Consider lazy loading images ({resources['image']} images)")
         return recs
 
-    def _is_challenge_page(self, html: str) -> bool:
+    async def _try_dismiss_gate(self, page) -> bool:
         """
-        Detect bot protection challenge pages
-        (Cloudflare, PerimeterX, Akamai, etc.)
-        """
-        challenge_indicators = [
-            'cloudflare',
-            'cf-browser-verification',
-            'challenge-platform',
-            'perimeterx',
-            'px-captcha',
-            'distil',
-            'datadome',
-            'just a moment',
-            'checking your browser',
-            'please wait while we verify',
-            'enable javascript and cookies'
-        ]
+        DOM mutation pre-pass: attempt to dismiss soft gates (modals, cookie
+        banners, overlay walls) before giving up and falling to MRI mode.
 
+        This handles sites like pi.fyi that show a client-side modal gate on
+        first visit. It does NOT solve server-side challenges (Cloudflare
+        Turnstile, PerimeterX) — those are filtered out by the caller.
+
+        Strategy (ordered by aggressiveness):
+          1. Click common dismiss buttons (Accept, Close, Continue, Got it, ×)
+          2. Remove modal/overlay DOM elements by selector
+          3. Reset body overflow/pointer-events so the page scrolls
+
+        Returns True if the page appears unblocked after the pass.
+        """
+        try:
+            dismissed = await page.evaluate('''() => {
+                let acted = false;
+
+                // ── Phase 1: Click dismiss buttons ──
+                // Common accept/close/continue buttons on cookie banners & gates
+                const dismissPatterns = [
+                    // Text content matches (case-insensitive)
+                    'accept', 'accept all', 'agree', 'allow', 'allow all',
+                    'got it', 'i agree', 'i understand', 'ok', 'okay',
+                    'continue', 'close', 'dismiss', 'no thanks',
+                    'reject all', 'decline',  // cookie banners
+                ];
+
+                // Find clickable elements (buttons, links, spans with role=button)
+                const clickables = [
+                    ...document.querySelectorAll('button, a, [role="button"], [role="link"]'),
+                    ...document.querySelectorAll('[class*="close"], [class*="dismiss"], [class*="accept"]'),
+                    ...document.querySelectorAll('[aria-label*="close" i], [aria-label*="dismiss" i], [aria-label*="accept" i]'),
+                ];
+
+                // Deduplicate
+                const seen = new Set();
+                const unique = clickables.filter(el => {
+                    if (seen.has(el)) return false;
+                    seen.add(el);
+                    return true;
+                });
+
+                for (const el of unique) {
+                    const text = (el.textContent || '').trim().toLowerCase();
+                    const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || '').toLowerCase();
+
+                    // Check if this looks like a dismiss button
+                    const matchText = dismissPatterns.some(p =>
+                        text === p || ariaLabel === p || title === p
+                    );
+
+                    // Also match × / ✕ / ✖ close icons
+                    const isCloseIcon = /^[×✕✖xX]$/.test(text.trim()) ||
+                        el.classList.toString().match(/close|dismiss/i);
+
+                    if (matchText || isCloseIcon) {
+                        // Only click if the element is visible and in a modal/overlay context
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            const ancestor = el.closest(
+                                '[role="dialog"], [role="alertdialog"], ' +
+                                '[class*="modal"], [class*="overlay"], [class*="banner"], ' +
+                                '[class*="cookie"], [class*="consent"], [class*="gate"], ' +
+                                '[class*="popup"], [class*="notice"], [id*="cookie"], ' +
+                                '[id*="consent"], [id*="modal"], [id*="gate"]'
+                            );
+                            if (ancestor || isCloseIcon) {
+                                try { el.click(); acted = true; } catch(e) {}
+                            }
+                        }
+                    }
+                }
+
+                // ── Phase 2: Remove overlay/modal DOM elements ──
+                const gateSelectors = [
+                    '[role="dialog"]', '[role="alertdialog"]',
+                    '[class*="modal"]', '[class*="overlay"]',
+                    '[class*="gate"]', '[class*="wall"]',
+                    '[class*="cookie-banner"]', '[class*="cookie-consent"]',
+                    '[class*="consent-banner"]', '[class*="consent-modal"]',
+                    '[class*="popup"]', '[class*="interstitial"]',
+                    '[id*="cookie"]', '[id*="consent"]',
+                    '[id*="modal"]', '[id*="gate"]',
+                    '[id*="overlay"]', '[id*="popup"]',
+                ];
+
+                for (const sel of gateSelectors) {
+                    const els = document.querySelectorAll(sel);
+                    for (const el of els) {
+                        // Don't remove the main content — only remove if it looks like
+                        // a floating overlay (position fixed/absolute/sticky, or z-index > 100)
+                        const style = window.getComputedStyle(el);
+                        const isOverlay = (
+                            style.position === 'fixed' ||
+                            style.position === 'absolute' ||
+                            style.position === 'sticky' ||
+                            parseInt(style.zIndex) > 100
+                        );
+                        // Also check if it covers a significant portion of the viewport
+                        const rect = el.getBoundingClientRect();
+                        const coversViewport = (
+                            rect.width > window.innerWidth * 0.5 &&
+                            rect.height > window.innerHeight * 0.3
+                        );
+
+                        if (isOverlay || coversViewport) {
+                            el.remove();
+                            acted = true;
+                        }
+                    }
+                }
+
+                // ── Phase 3: Reset body scroll/pointer locks ──
+                const body = document.body;
+                const html = document.documentElement;
+                const bodyStyle = window.getComputedStyle(body);
+                const htmlStyle = window.getComputedStyle(html);
+
+                if (bodyStyle.overflow === 'hidden' || htmlStyle.overflow === 'hidden') {
+                    body.style.overflow = 'auto';
+                    html.style.overflow = 'auto';
+                    acted = true;
+                }
+                if (bodyStyle.pointerEvents === 'none') {
+                    body.style.pointerEvents = 'auto';
+                    acted = true;
+                }
+                // Remove any blur/filter on body that gates use to obscure content
+                if (bodyStyle.filter && bodyStyle.filter !== 'none') {
+                    body.style.filter = 'none';
+                    acted = true;
+                }
+
+                // ── Phase 4: Check if real content is now visible ──
+                // If we acted, verify that meaningful content exists
+                if (acted) {
+                    const hasContent = !!(
+                        document.querySelector('nav, main, article, section, h1, h2, header') ||
+                        document.querySelectorAll('p').length > 2 ||
+                        document.querySelectorAll('a[href]').length > 5
+                    );
+                    return hasContent;
+                }
+
+                return false;
+            }''')
+
+            if dismissed:
+                # Wait a beat for any CSS transitions to settle
+                import asyncio
+                await asyncio.sleep(500 / 1000)  # 500ms
+                print(f"   🔓 Gate dismissal attempted — checking if content is accessible")
+
+            return bool(dismissed)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Gate dismissal failed: {e}")
+            return False
+
+    def _is_challenge_page(self, html: str, page=None, detail: bool = False):
+        """
+        Detect bot protection challenge pages.
+
+        Args:
+            html: Page HTML content
+            page: Optional Playwright page (unused, kept for API compat)
+            detail: If True, return the specific indicator string instead of bool.
+                    Returns False/None when no challenge detected.
+
+        Returns:
+            bool (when detail=False) or str|None (when detail=True)
+        """
         html_lower = html.lower()
-        return any(indicator in html_lower for indicator in challenge_indicators)
 
-    async def _mri_scan(self) -> Dict:
+        # ── Tier 1: High-confidence full-page challenge (Cloudflare, PerimeterX, etc.)
+        # These are definitive — the page is a challenge interstitial, not real content.
+        cf_indicators = [
+            ('cf-browser-verification', 'cloudflare_full'),
+            ('challenge-platform', 'cloudflare_full'),
+            ('challenge-running', 'cloudflare_full'),
+            ('cf-chl-bypass', 'cloudflare_full'),
+            ('managed-challenge', 'cloudflare_full'),
+            ('_cf_chl_opt', 'cloudflare_full'),
+            ('px-captcha', 'perimeterx'),
+            ('perimeterx', 'perimeterx'),
+            ('datadome', 'datadome'),
+        ]
+        for indicator, label in cf_indicators:
+            if indicator in html_lower:
+                return label if detail else True
+
+        # ── Tier 2: Challenge-like phrases (moderately confident)
+        # Only match if these phrases appear *prominently* — e.g., in a title
+        # or as the main body text, not buried in a footer privacy policy.
+        phrase_indicators = [
+            ('just a moment', 'cloudflare_interstitial'),
+            ('checking your browser', 'bot_check'),
+            ('please wait while we verify', 'bot_check'),
+            ('enable javascript and cookies', 'bot_check'),
+            ('attention required', 'cloudflare_attention'),
+        ]
+        for phrase, label in phrase_indicators:
+            if phrase in html_lower:
+                # Only trigger if the phrase is near the beginning (first 3KB)
+                # or the page is short. A long page mentioning "just a moment"
+                # in body copy is NOT a challenge page.
+                idx = html_lower.index(phrase)
+                if idx < 3000 or len(html) < 8000:
+                    return label if detail else True
+
+        # ── Tier 3: Cloudflare ray-id (common on challenge pages but also on
+        # real pages that are served via CF). Only trigger if page is also short.
+        if 'ray id' in html_lower and len(html) < 15000:
+            return 'cloudflare_ray_id' if detail else True
+
+        # ── Tier 4: Very short page heuristic (tightened)
+        # OLD: len < 5000 + "check"/"verify" → huge false positive rate
+        # NEW: Only trigger on truly empty pages (< 2000 chars) that lack ANY
+        # real content markers (no nav, no headings, no paragraph text)
+        if len(html) < 2000:
+            has_real_content = any(tag in html_lower for tag in [
+                '<nav', '<main', '<article', '<section',
+                '<h1', '<h2', '<h3', '<p>', '<ul', '<ol',
+                '<header', '<footer',
+            ])
+            has_form = '<form' in html_lower
+            div_count = html_lower.count('<div')
+            if not has_real_content and not has_form and div_count < 5:
+                return 'empty_interstitial' if detail else True
+
+        return None if detail else False
+
+    async def _mri_scan(self, blocked_by: str = None, blocked_detail: str = None) -> Dict:
         """
-        Run Metadata MRI scan when full access is blocked
+        Run Metadata MRI scan when full access is blocked.
 
-        Returns evidence dict with MRI results
+        Args:
+            blocked_by: Category of what blocked us ('cloudflare', 'bot_challenge',
+                        'auth_wall', 'http_403', 'page_load_error', etc.)
+            blocked_detail: Human-readable detail string
+
+        Returns evidence dict with MRI results + explicit degradation reason
         """
         scanner = MetadataMRI(self.url)
         mri_result = scanner.scan()
@@ -4685,6 +5841,9 @@ class DeepEvidenceEngine:
         # Convert MRI results to evidence format
         evidence = {
             'access_strategy': 'metadata_mri',
+            'blocked_by': blocked_by or 'unknown',
+            'blocked_detail': blocked_detail or 'Full analysis blocked — fell back to metadata-only MRI scan',
+            'degraded': True,
             'success': mri_result['success'],
             'confidence': mri_result['confidence'],
             'limitations': mri_result['limitations']
@@ -4944,11 +6103,14 @@ class DeepEvidenceEngine:
                 }
             }
 
-            # Meta info
+            # Meta info — include blocked_by so the dashboard can show specifics
             evidence['meta_info'] = {
                 'access_strategy': 'metadata_mri',
                 'bot_protection_detected': True,
                 'full_analysis_unavailable': True,
+                'blocked_by': blocked_by or 'unknown',
+                'blocked_detail': blocked_detail or 'Full analysis blocked — fell back to metadata-only MRI scan',
+                'degraded': True,
                 'what_we_can_see': [
                     'Meta tags (Open Graph, Twitter Cards)',
                     'External stylesheet references',
@@ -5027,7 +6189,7 @@ class DeepEvidenceEngine:
                 # Hover
                 try:
                     await locator.hover(timeout=2000)
-                    await page.wait_for_timeout(150)
+                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
                     hover_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
                         if (!el) return null;
@@ -5044,9 +6206,8 @@ class DeepEvidenceEngine:
                 # Focus
                 try:
                     await page.mouse.move(0, 0)
-                    await page.wait_for_timeout(100)
                     await locator.focus(timeout=2000)
-                    await page.wait_for_timeout(100)
+                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
                     focus_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
                         if (!el) return null;
@@ -5081,6 +6242,171 @@ class DeepEvidenceEngine:
             pass
 
         return results
+
+    async def _preflight_page_quality(self, page, url: str) -> Dict:
+        """
+        Lightweight DOM assessment (~0.3s) that runs BEFORE the main extraction.
+
+        Answers: "Is this a good entry point, or should the LLM use a different URL?"
+
+        Signals checked:
+        - Page type: is it a feed/stream of repeated items, or a layout-rich page?
+        - Design signal density: unique element roles, layout containers, distinct sections
+        - Link inventory: how many internal paths are available as alternatives?
+        - Suggested alternatives: scored by structural diversity
+
+        Returns a dict included in evidence['entry_point'] so LLM consumers
+        see the quality assessment immediately, before reading other metrics.
+        """
+        print("   🔭 Pre-flight page quality assessment...")
+        try:
+            signals = await page.evaluate('''() => {
+                const body = document.body;
+                if (!body) return { error: "no body" };
+
+                // ── Feed detection ──────────────────────────────────────────
+                // A feed is a page where >40% of visible elements are repetitions
+                // of the same structural pattern (same tag + class signature).
+                const allEls = Array.from(body.querySelectorAll('*'));
+                const sig = el => el.tagName + (el.className && typeof el.className === 'string'
+                    ? '.' + el.className.trim().split(/\s+/)[0] : '');
+                const sigCount = {};
+                allEls.forEach(el => {
+                    const s = sig(el);
+                    sigCount[s] = (sigCount[s] || 0) + 1;
+                });
+                const maxRepeat = Math.max(...Object.values(sigCount));
+                const totalEls = allEls.length || 1;
+                const repetitionRatio = maxRepeat / totalEls;
+
+                // ── Layout richness ─────────────────────────────────────────
+                const layoutContainers = body.querySelectorAll(
+                    '[class*="grid"], [class*="flex"], [class*="layout"], [class*="container"],' +
+                    'section, article, aside, main, nav, header, footer'
+                ).length;
+                const uniqueRoles = new Set(
+                    Array.from(body.querySelectorAll('[role]')).map(e => e.getAttribute('role'))
+                ).size;
+                const headings = body.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+                const buttons = body.querySelectorAll('button,[role="button"],a.btn,[class*="button"]').length;
+                const images = body.querySelectorAll('img,svg,[class*="icon"]').length;
+
+                // ── Internal link harvest ──────────────────────────────────
+                const base = new URL(location.href);
+                const internalPaths = [...new Set(
+                    Array.from(document.querySelectorAll('a[href]'))
+                        .map(a => { try { const u = new URL(a.href); return u.host === base.host ? u.pathname : null; } catch(e) { return null; } })
+                        .filter(p => p && p !== '/' && p !== location.pathname && !p.match(/\\.(jpg|png|svg|pdf|gif|ico)$/i))
+                )];
+
+                // Score each path by structural richness heuristic:
+                // depth-2 paths (e.g. /explore, /releases) > depth-1 (/about) > root
+                function pathScore(p) {
+                    const depth = p.split('/').filter(Boolean).length;
+                    const isContentWord = /explore|discover|browse|catalog|releases|products|gallery|collection|works|shows|archive|community|feed/i.test(p);
+                    const isUtility = /login|signup|register|terms|privacy|faq|contact|help|support/i.test(p);
+                    if (isUtility) return 0;
+                    return (depth === 2 ? 4 : depth === 1 ? 2 : 1) + (isContentWord ? 3 : 0);
+                }
+
+                const scoredPaths = internalPaths
+                    .map(p => ({ path: p, score: pathScore(p) }))
+                    .filter(x => x.score > 0)
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, 8);
+
+                return {
+                    element_count: totalEls,
+                    repetition_ratio: Math.round(repetitionRatio * 100) / 100,
+                    max_repeat_signature: Object.entries(sigCount).sort((a,b) => b[1]-a[1])[0]?.[0] || '',
+                    layout_containers: layoutContainers,
+                    unique_roles: uniqueRoles,
+                    headings,
+                    buttons,
+                    images,
+                    internal_path_count: internalPaths.length,
+                    candidate_paths: scoredPaths,
+                    is_homepage: location.pathname === '/' || location.pathname === '',
+                    title: document.title.substring(0, 80),
+                };
+            }''')
+
+            if 'error' in signals:
+                return {'assessed': False, 'error': signals['error']}
+
+            # ── Score the current page ─────────────────────────────────────
+            repetition   = signals.get('repetition_ratio', 0)
+            layout_score = min(10, signals.get('layout_containers', 0))
+            role_score   = min(5, signals.get('unique_roles', 0))
+            heading_score = min(5, signals.get('headings', 0))
+
+            # High repetition + low layout = feed/stream
+            is_feed = repetition > 0.25 and layout_score < 4
+            # No sections + low headings = sparse landing page
+            is_sparse = layout_score < 3 and heading_score < 2
+
+            # Design richness 0-100
+            richness = min(100, round(
+                (layout_score * 5)
+                + (role_score * 4)
+                + (heading_score * 4)
+                + (min(5, signals.get('buttons', 0)) * 2)
+                + (20 if not is_feed else 0)
+                + (15 if not is_sparse else 0)
+            ))
+
+            page_character = (
+                'feed — high element repetition, low layout variety'  if is_feed else
+                'sparse — few layout signals, limited structural diversity' if is_sparse else
+                'rich — varied layout, good design signal density'
+            )
+
+            # ── Build recommendations ──────────────────────────────────────
+            candidates = signals.get('candidate_paths', [])
+            recommendation = None
+            better_urls = []
+
+            if (is_feed or is_sparse or richness < 50) and candidates:
+                from urllib.parse import urlparse as _up
+                base_origin = _up(url).scheme + '://' + _up(url).netloc
+                better_urls = [
+                    {'url': base_origin + c['path'], 'path': c['path'], 'score': c['score']}
+                    for c in candidates[:3]
+                ]
+                recommendation = (
+                    f"This URL ({_up(url).path or '/'}) appears to be a {page_character}. "
+                    f"For a richer design system analysis, consider scanning: "
+                    + ', '.join(c['path'] for c in candidates[:3])
+                )
+                print(f"      💡 Entry point advisory: {page_character} (richness={richness}/100)")
+                if better_urls:
+                    print(f"      📍 Better alternatives: {[c['path'] for c in candidates[:3]]}")
+            else:
+                print(f"      ✅ Entry point looks good (richness={richness}/100)")
+
+            return {
+                'assessed': True,
+                'url': url,
+                'page_character': page_character,
+                'richness_score': richness,
+                'is_feed': is_feed,
+                'is_sparse': is_sparse,
+                'signals': {
+                    'element_count': signals.get('element_count'),
+                    'repetition_ratio': signals.get('repetition_ratio'),
+                    'layout_containers': signals.get('layout_containers'),
+                    'unique_roles': signals.get('unique_roles'),
+                    'headings': signals.get('headings'),
+                    'internal_paths_available': signals.get('internal_path_count'),
+                },
+                'recommendation': recommendation,
+                'better_entry_points': better_urls,
+                'confidence': 75 if (is_feed or is_sparse) else 60,
+            }
+
+        except Exception as e:
+            print(f"      ⚠️  Pre-flight skipped: {e}")
+            return {'assessed': False, 'error': str(e)[:100]}
 
     async def _discover_links(self, page, base_url: str) -> Dict:
         """
@@ -5188,6 +6514,213 @@ class DeepEvidenceEngine:
             return categorized;
         }''', base_url)
 
+        # Harvest SPA route transitions captured by pushState/replaceState hooks
+        try:
+            spa_routes = await page.evaluate('window.__wiRouteLog || []')
+            if spa_routes:
+                seen_urls = set(l.get('url', '') for l in links_data.get('all', []) if isinstance(l, dict))
+                for route in spa_routes:
+                    route_url = route.get('url', '')
+                    if not route_url or route_url in seen_urls:
+                        continue
+                    try:
+                        full_url = urljoin(base_url, route_url)
+                        parsed = urlparse(full_url)
+                        base_parsed = urlparse(base_url)
+                        if parsed.netloc == base_parsed.netloc:
+                            links_data['all'].append({
+                                'url': full_url,
+                                'text': f'[SPA: {route.get("type", "push")}]',
+                                'path': parsed.path,
+                                'source': 'pushState'
+                            })
+                            seen_urls.add(route_url)
+                    except Exception:
+                        pass
+                spa_count = sum(1 for l in links_data.get('all', [])
+                                if isinstance(l, dict) and l.get('source') == 'pushState')
+                if spa_count > 0:
+                    print(f"      📍 Captured {spa_count} SPA routes via pushState interception")
+        except Exception:
+            pass
+
+        # ── URLPattern-based structural inference ──────────────────────────
+        # Extract all internal paths, then use the native URLPattern API (Chromium)
+        # to infer parametric templates with named groups from real URLs.
+        # This replaces/augments the hardcoded Python _detect_url_patterns().
+        try:
+            internal_paths = [
+                l['path'] for l in links_data.get('all', [])
+                if isinstance(l, dict) and l.get('path') and not l.get('url', '').startswith('http') or
+                   isinstance(l, dict) and l.get('path') and
+                   urlparse(l.get('url', '')).netloc == urlparse(base_url).netloc
+            ]
+            internal_paths = list(dict.fromkeys(p for p in internal_paths if p and p != '/'))
+
+            if len(internal_paths) >= 3:
+                clusters = await page.evaluate('''(paths) => {
+                    // ── Segment classifier ────────────────────────────────────────
+                    function classifySegment(seg) {
+                        if (/^\\d+$/.test(seg))
+                            return { type: "id" };
+                        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg))
+                            return { type: "uuid" };
+                        if (/^v?\\d+(\\.\\d+)+$/.test(seg))
+                            return { type: "version" };
+                        // Locale: 2-letter lang code (en, fr, ja) with optional country (en-US, zh-TW)
+                        // Deliberately NOT 3-letter to avoid false-positives on "web", "api", "css"
+                        if (/^[a-z]{2}(-[A-Z]{2})?$/.test(seg))
+                            return { type: "locale" };
+                        // Prefixed-ID: cus_123, sub_abc4, pay_xyz — common in SaaS APIs
+                        if (/^[a-z]{2,8}_[a-zA-Z0-9]+$/.test(seg))
+                            return { type: "prefixed-id" };
+                        if (/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(seg))
+                            return { type: "slug" };
+                        return { type: "param" }; // generic fallback — known variable, unknown format
+                    }
+
+                    // Build a URLPattern-compatible template from typed parts.
+                    // URLPattern requires unique group names — suffix duplicates with index.
+                    function buildTemplate(parts) {
+                        const nameCount = {};
+                        return "/" + parts.map(p => {
+                            if (p.type === "literal") return p.value;
+                            const base = p.type === "id" ? "id"
+                                       : p.type === "prefixed-id" ? "key"
+                                       : p.type;
+                            nameCount[base] = (nameCount[base] || 0) + 1;
+                            const name = nameCount[base] === 1 ? base : base + nameCount[base];
+                            if (p.type === "id") return `:${name}(\\\\d+)`;
+                            return `:${name}`;
+                        }).join("/");
+                    }
+
+                    // ── Semantic label from literal segments ──────────────────────
+                    function semanticHint(parts) {
+                        const literals = parts.filter(p => p.type === "literal").map(p => p.value || "");
+                        const map = {
+                            blog: "Blog posts", post: "Blog posts", article: "Articles",
+                            news: "News", story: "Stories", editorial: "Editorial",
+                            product: "Products", shop: "E-commerce", store: "Store",
+                            docs: "Documentation", guide: "Guides", api: "API reference",
+                            help: "Help articles", support: "Support",
+                            user: "User profiles", profile: "Profiles",
+                            category: "Category pages", categories: "Category pages",
+                            tag: "Tag pages", tags: "Tag pages",
+                            search: "Search results",
+                            feed: "Feed pages",
+                        };
+                        for (const [key, label] of Object.entries(map)) {
+                            if (literals.some(l => l === key || l.startsWith(key + "-"))) return label;
+                        }
+                        const hasId        = parts.some(p => p.type === "id");
+                        const hasUUID      = parts.some(p => p.type === "uuid");
+                        const hasSlug      = parts.some(p => p.type === "slug");
+                        const hasPrefixId  = parts.some(p => p.type === "prefixed-id");
+                        if (hasUUID)                    return "Entity detail pages";
+                        if (hasPrefixId)                return "Resource detail pages";
+                        if (hasId && hasSlug)           return "Detail pages (id + slug)";
+                        if (hasId)                      return "Numeric ID pages";
+                        if (hasSlug)                    return "Content pages";
+                        return "Section pages";
+                    }
+
+                    // ── Infer typed parts for a group of same-depth segment arrays ─
+                    function inferParts(segGroups, depth) {
+                        const parts = [];
+                        for (let i = 0; i < depth; i++) {
+                            const vals = segGroups.map(s => s[i] || "");
+                            const unique = [...new Set(vals)];
+                            if (unique.length === 1 && unique[0]) {
+                                parts.push({ type: "literal", value: unique[0] });
+                            } else {
+                                const classified = vals.map(classifySegment);
+                                const typeCounts = {};
+                                classified.forEach(c => typeCounts[c.type] = (typeCounts[c.type]||0)+1);
+                                const dominant = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1])[0][0];
+                                parts.push(classified.find(c => c.type === dominant) || classified[0]);
+                            }
+                        }
+                        return parts;
+                    }
+
+                    // ── Cluster and compile ───────────────────────────────────────
+                    function compileCluster(segGroups, parts) {
+                        const templateStr = buildTemplate(parts);
+                        let examples = [];
+                        try {
+                            const pat = new URLPattern({ pathname: templateStr });
+                            examples = segGroups.slice(0, 3).map(segs => {
+                                const path = "/" + segs.join("/");
+                                try {
+                                    const m = pat.exec({ pathname: path });
+                                    return { path, groups: m ? m.pathname.groups : {} };
+                                } catch(e) { return { path, groups: {} }; }
+                            });
+                        } catch(e) {
+                            examples = segGroups.slice(0, 3).map(s => ({ path: "/" + s.join("/"), groups: {} }));
+                        }
+                        return {
+                            template: templateStr,
+                            count: segGroups.length,
+                            depth: parts.length,
+                            segment_types: parts.map(p => p.type),
+                            semantic_hint: semanticHint(parts),
+                            examples,
+                        };
+                    }
+
+                    // ── Group paths by depth, then sub-cluster by dominant literals ──
+                    const byDepth = {};
+                    paths.forEach(p => {
+                        const segs = p.split("/").filter(Boolean);
+                        if (!segs.length) return;
+                        const key = segs.length;
+                        if (!byDepth[key]) byDepth[key] = [];
+                        byDepth[key].push(segs);
+                    });
+
+                    const results = [];
+
+                    Object.entries(byDepth).forEach(([depthStr, segGroups]) => {
+                        if (segGroups.length < 2) return;
+                        const depth = parseInt(depthStr);
+                        const parts = inferParts(segGroups, depth);
+
+                        // If position 0 is variable but has a small set of dominant literals
+                        // (e.g. "docs", "blog", "products") — sub-cluster by that literal
+                        const pos0 = segGroups.map(s => s[0] || "");
+                        const pos0Unique = [...new Set(pos0)];
+                        const allSlugs = pos0.every(v => /^[a-z0-9][a-z0-9-]*$/.test(v));
+                        const fewDistinct = pos0Unique.length >= 2 && pos0Unique.length <= Math.ceil(segGroups.length * 0.6);
+
+                        if (depth >= 2 && allSlugs && fewDistinct) {
+                            // Split into per-prefix sub-clusters
+                            const byPrefix = {};
+                            segGroups.forEach(segs => {
+                                const prefix = segs[0];
+                                if (!byPrefix[prefix]) byPrefix[prefix] = [];
+                                byPrefix[prefix].push(segs);
+                            });
+                            Object.entries(byPrefix).forEach(([prefix, subGroup]) => {
+                                if (subGroup.length < 2) return; // lone URL — skip
+                                const subParts = inferParts(subGroup, depth);
+                                results.push(compileCluster(subGroup, subParts));
+                            });
+                        } else {
+                            results.push(compileCluster(segGroups, parts));
+                        }
+                    });
+
+                    // Sort by URL count descending
+                    return results.sort((a, b) => b.count - a.count);
+                }''', internal_paths)
+
+                if clusters:
+                    links_data['url_pattern_clusters'] = clusters
+        except Exception as e:
+            print(f"      ⚠️  URLPattern inference skipped: {e}")
+
         return links_data
 
     def _generate_architecture_diagrams(self, url: str, evidence: Dict) -> Dict:
@@ -5222,7 +6755,7 @@ class DeepEvidenceEngine:
 
         # Framework
         fw = details.get('framework')
-        if fw and fw != 'vanilla / unknown':
+        if fw and fw != 'Not detected':
             n = nid()
             lines.append(f'    {site_id} --> {n}["{esc(fw)}"]')
             lines.append(f'    style {n} fill:#1a73e8,stroke:#fff,color:#fff')
@@ -5350,134 +6883,1345 @@ class DeepEvidenceEngine:
 
         return result
 
-    def _generate_llm_suggestions(self, url: str, links: Dict, content: Dict, components: Dict) -> Dict:
+    async def _synthesize_box_model_export(self, page, evidence: Dict) -> Dict:
         """
-        Generate suggestions for LLMs on what to analyze next
+        Enrich spatial composition zones with computed styles for replication.
+        Uses elementFromPoint on zone centers to find the actual DOM element,
+        then extracts display, flex/grid props, dimensions, padding, z-index, selector.
 
-        Args:
-            url: Current URL being analyzed
-            links: Discovered links from _discover_links
-            content: Content extraction results
-            components: Component map results
+        Output: structured "Header: 100vw × 64px, flex-row, space-between, z-index 100" style data.
+        """
+        zones = evidence.get('spatial_composition', {}).get('component_zones', [])
+        if not zones:
+            return {'zones': [], 'confidence': 30, 'pattern': 'No zones to export'}
 
-        Returns:
-            {
-                'discovered_links': {...},
-                'suggested_next_steps': [...],
-                'url_patterns': {...},
-                'analysis_tips': [...]
+        # Query computed styles by matching zone types to semantic elements
+        zone_styles = await page.evaluate('''(zones) => {
+            const results = [];
+
+            // Map zone types to CSS selectors for semantic lookup
+            const zoneSelectors = {
+                'header': 'header, [role="banner"], nav:first-of-type',
+                'hero': 'main > section:first-child, main > div:first-child, [class*="hero"], [class*="Hero"]',
+                'footer': 'footer, [role="contentinfo"]',
+                'features': '[class*="feature"], [class*="Feature"], main > section:nth-child(2)',
+                'content': 'main, [role="main"], article',
+                'navigation': 'nav, [role="navigation"]',
+            };
+
+            for (const zone of zones) {
+                const zoneType = zone.type || 'unknown';
+                const selectorStr = zoneSelectors[zoneType];
+                if (!selectorStr) { results.push(null); continue; }
+
+                // Try each selector variant
+                let target = null;
+                for (const sel of selectorStr.split(',')) {
+                    target = document.querySelector(sel.trim());
+                    if (target) break;
+                }
+
+                if (!target || target === document.body || target === document.documentElement) {
+                    results.push(null);
+                    continue;
+                }
+
+                const cs = window.getComputedStyle(target);
+                const rect = target.getBoundingClientRect();
+
+                // Build selector
+                let selector = target.tagName.toLowerCase();
+                if (target.id) selector = '#' + CSS.escape(target.id);
+                else if (typeof target.className === 'string' && target.className.trim())
+                    selector = target.tagName.toLowerCase() + '.' +
+                        target.className.trim().split(/\\s+/).map(c => CSS.escape(c)).join('.');
+
+                results.push({
+                    selector: selector,
+                    tag: target.tagName.toLowerCase(),
+                    dimensions: {
+                        width: Math.round(rect.width) + 'px',
+                        height: Math.round(rect.height) + 'px',
+                        widthVw: Math.round(rect.width / window.innerWidth * 100) + 'vw',
+                    },
+                    display: cs.display,
+                    position: cs.position,
+                    flexDirection: cs.flexDirection !== 'row' ? cs.flexDirection : (cs.display === 'flex' ? 'row' : null),
+                    justifyContent: cs.display === 'flex' || cs.display === 'grid' ? cs.justifyContent : null,
+                    alignItems: cs.display === 'flex' || cs.display === 'grid' ? cs.alignItems : null,
+                    gap: cs.gap !== 'normal' ? cs.gap : null,
+                    gridTemplateColumns: cs.display === 'grid' ? cs.gridTemplateColumns : null,
+                    padding: cs.padding !== '0px' ? cs.padding : null,
+                    margin: cs.margin !== '0px' ? cs.margin : null,
+                    zIndex: cs.zIndex !== 'auto' ? parseInt(cs.zIndex) : null,
+                    backgroundColor: cs.backgroundColor,
+                    maxWidth: cs.maxWidth !== 'none' ? cs.maxWidth : null,
+                    overflow: cs.overflow !== 'visible' ? cs.overflow : null,
+                });
             }
+            return results;
+        }''', zones)
+
+        # Merge zone metadata with computed styles
+        enriched_zones = []
+        for i, zone in enumerate(zones):
+            style_data = zone_styles[i] if i < len(zone_styles) else None
+            if style_data is None:
+                continue
+
+            # Build human-readable description
+            parts = [zone.get('type', 'unknown').capitalize()]
+            dims = style_data.get('dimensions', {})
+            parts.append(f"{dims.get('widthVw', '?')} × {dims.get('height', '?')}")
+
+            display = style_data.get('display', '')
+            if display in ('flex', 'grid'):
+                flex_dir = style_data.get('flexDirection')
+                justify = style_data.get('justifyContent')
+                layout_desc = display
+                if flex_dir and flex_dir != 'row':
+                    layout_desc += f'-{flex_dir}'
+                if justify:
+                    layout_desc += f', {justify}'
+                parts.append(layout_desc)
+
+            if style_data.get('zIndex') is not None:
+                parts.append(f"z-index {style_data['zIndex']}")
+
+            enriched_zones.append({
+                'zone_type': zone.get('type', 'unknown'),
+                'bbox': zone.get('bbox', {}),
+                'elements_inside': zone.get('elements_inside', 0),
+                'computed': style_data,
+                'description': ', '.join(parts),
+            })
+
+        return {
+            'zones': enriched_zones,
+            'total_zones': len(enriched_zones),
+            'confidence': min(95, 40 + len(enriched_zones) * 15),
+            'pattern': f"Box model exported for {len(enriched_zones)} zones"
+        }
+
+    async def _capture_breakpoint_screenshots(self, page, url: str) -> Dict:
+        """
+        Capture full-page screenshots at three responsive breakpoints.
+        Saves/restores the original viewport to avoid interfering with other extraction.
+
+        Breakpoints:
+        - Mobile: 375×667 (iPhone SE)
+        - Tablet: 768×1024 (iPad)
+        - Desktop: 1440×900 (standard laptop)
+        """
+        import base64
+
+        breakpoints = [
+            {'name': 'mobile', 'width': 375, 'height': 667},
+            {'name': 'tablet', 'width': 768, 'height': 1024},
+            {'name': 'desktop', 'width': 1440, 'height': 900},
+        ]
+
+        # Save original viewport
+        original_viewport = page.viewport_size or {'width': 1920, 'height': 1080}
+
+        results = []
+        for bp in breakpoints:
+            try:
+                await page.set_viewport_size({'width': bp['width'], 'height': bp['height']})
+                await asyncio.sleep(1)  # Let layout reflow
+
+                screenshot_bytes = await page.screenshot(full_page=True, type='png', timeout=15000)
+                results.append({
+                    'breakpoint': bp['name'],
+                    'width': bp['width'],
+                    'height': bp['height'],
+                    'screenshot_b64': base64.b64encode(screenshot_bytes).decode('utf-8'),
+                    'size_bytes': len(screenshot_bytes),
+                })
+                print(f"   📸 {bp['name']} ({bp['width']}px): {len(screenshot_bytes) // 1024}KB")
+            except Exception as e:
+                print(f"   ⚠️ {bp['name']} screenshot failed: {e}")
+                results.append({
+                    'breakpoint': bp['name'],
+                    'width': bp['width'],
+                    'height': bp['height'],
+                    'screenshot_b64': None,
+                    'error': str(e)[:100],
+                })
+
+        # Restore original viewport
+        try:
+            await page.set_viewport_size(original_viewport)
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
+        return {
+            'breakpoints': results,
+            'url': url,
+            'confidence': min(95, 40 + sum(1 for r in results if r.get('screenshot_b64')) * 18),
+            'pattern': f"Responsive screenshots at {len([r for r in results if r.get('screenshot_b64')])} breakpoints"
+        }
+
+    async def _capture_z_tier_screenshots(self, page, z_index_data: Dict):
+        """Capture isolated screenshots for each z-index tier.
+
+        Uses JavaScript to directly find and tag elements by computed z-index,
+        then hides non-target elements via inline styles. This avoids CSS selector
+        round-trip issues (escaping, specificity, encoding).
+
+        Stores base64 PNG + viewport coverage % in each tier's data.
+        """
+        import base64
+
+        layers = z_index_data.get('layers', {})
+        if not layers:
+            return
+
+        # Collect tiers worth capturing
+        tiers_to_capture = []
+        for tier_key, tier_data in layers.items():
+            tier_name = tier_data.get('tier', '')
+            count = tier_data.get('count', 0)
+
+            if tier_name == 'Ghost':
+                continue
+            if tier_name == 'Base' and count > 50:
+                continue
+            # Need z-value range to identify elements
+            z_values = tier_data.get('z_values', [])
+            if not z_values:
+                continue
+
+            tiers_to_capture.append((tier_key, tier_data))
+
+        tiers_to_capture = tiers_to_capture[:5]
+        if not tiers_to_capture:
+            return
+
+        print(f"   📸 Capturing {len(tiers_to_capture)} z-tier screenshots...")
+
+        viewport = page.viewport_size or {'width': 1280, 'height': 720}
+        vp_area = viewport['width'] * viewport['height']
+
+        for tier_key, tier_data in tiers_to_capture:
+            try:
+                z_values = tier_data.get('z_values', [])
+
+                # Use JS to hide everything except elements at target z-index values.
+                # Works by scanning all elements, checking computed z-index,
+                # and setting inline visibility. No CSS selectors needed.
+                matched_count = await page.evaluate('''(targetZValues) => {
+                    const targets = new Set(targetZValues.map(String));
+                    const allEls = document.querySelectorAll('*');
+                    let matched = 0;
+
+                    // First pass: hide everything and set dark background
+                    document.body.style.setProperty('background', '#0f0f0f', 'important');
+                    for (const el of allEls) {
+                        el.setAttribute('data-z-orig-vis', el.style.visibility || '');
+                        el.style.setProperty('visibility', 'hidden', 'important');
+                    }
+
+                    // Second pass: show elements at target z-index + their descendants
+                    for (const el of allEls) {
+                        const z = window.getComputedStyle(el).zIndex;
+                        if (z !== 'auto' && targets.has(z)) {
+                            // Show this element
+                            el.style.setProperty('visibility', 'visible', 'important');
+                            matched++;
+                            // Show all descendants
+                            el.querySelectorAll('*').forEach(child => {
+                                child.style.setProperty('visibility', 'visible', 'important');
+                            });
+                            // Show all ancestors (so the element is reachable in the render tree)
+                            let parent = el.parentElement;
+                            while (parent) {
+                                parent.style.setProperty('visibility', 'visible', 'important');
+                                parent = parent.parentElement;
+                            }
+                        }
+                    }
+
+                    return matched;
+                }''', z_values)
+
+                # Wait for paint — requestAnimationFrame syncs to render cycle, not JS microtasks
+                await page.evaluate("() => new Promise(r => requestAnimationFrame(r))")
+
+                # Capture viewport screenshot
+                screenshot_bytes = await page.screenshot(type='png')
+
+                # Restore all elements
+                await page.evaluate('''() => {
+                    const allEls = document.querySelectorAll('*');
+                    for (const el of allEls) {
+                        const orig = el.getAttribute('data-z-orig-vis');
+                        if (orig) {
+                            el.style.visibility = orig;
+                        } else {
+                            el.style.removeProperty('visibility');
+                        }
+                        el.removeAttribute('data-z-orig-vis');
+                    }
+                    document.body.style.removeProperty('background');
+                }''')
+
+                # Calculate viewport coverage from bounding boxes
+                covered_area = 0
+                elements = tier_data.get('elements', [])
+                for el in elements:
+                    bounds = el.get('bounds', {})
+                    w = bounds.get('width', 0)
+                    h = bounds.get('height', 0)
+                    if w > 0 and h > 0:
+                        covered_area += w * h
+                coverage_pct = round(min(covered_area / vp_area * 100, 100)) if vp_area > 0 else 0
+
+                tier_data['screenshot_b64'] = base64.b64encode(screenshot_bytes).decode('utf-8')
+                tier_data['viewport_coverage_pct'] = coverage_pct
+
+                tier_name = tier_data.get('tier', tier_key)
+                print(f"      ✅ {tier_name}: {matched_count} elements matched, {coverage_pct}% viewport")
+
+            except Exception as e:
+                print(f"      ⚠️  Failed to capture {tier_key}: {e}")
+                # Restore page state on failure
+                try:
+                    await page.evaluate('''() => {
+                        document.querySelectorAll('*').forEach(el => {
+                            const orig = el.getAttribute('data-z-orig-vis');
+                            if (orig !== null) {
+                                if (orig) el.style.visibility = orig;
+                                else el.style.removeProperty('visibility');
+                                el.removeAttribute('data-z-orig-vis');
+                            }
+                        });
+                        document.body.style.removeProperty('background');
+                    }''')
+                except Exception:
+                    pass
+
+    def _synthesize_layout_description(self, evidence: Dict) -> Dict:
+        """Translate raw container counts + spatial data into actionable layout descriptions.
+
+        Walks component_zones top-to-bottom, describes each zone's layout method,
+        and derives key architectural decisions from the evidence.
+        """
+        spatial = evidence.get('spatial_composition', {})
+        page_structure = spatial.get('page_structure', {})
+        container_hier = spatial.get('container_hierarchy', {})
+        zones = spatial.get('component_zones', [])
+        whitespace = spatial.get('whitespace_analysis', {})
+        above_fold = spatial.get('above_fold_layout', {})
+        layout = evidence.get('layout', {})
+        layout_details = layout.get('details', {}) if isinstance(layout, dict) else {}
+
+        pattern_type = page_structure.get('pattern_type', 'Standard Web Layout')
+
+        # Container counts
+        flex_info = container_hier.get('flex_containers', {}) if isinstance(container_hier, dict) else {}
+        grid_info = container_hier.get('grid_containers', {}) if isinstance(container_hier, dict) else {}
+        flex_count = flex_info.get('count', 0) if isinstance(flex_info, dict) else 0
+        grid_count = grid_info.get('count', 0) if isinstance(grid_info, dict) else 0
+
+        # Determine layout strategy
+        if grid_count > flex_count and grid_count > 10:
+            strategy = 'Grid-first'
+        elif flex_count > 100 and grid_count < 5:
+            strategy = 'Flow-based'
+        elif flex_count > 20 and grid_count > 5:
+            strategy = 'Hybrid (Grid + Flex)'
+        elif flex_count < 10 and grid_count < 3:
+            strategy = 'Minimal / document flow'
+        else:
+            strategy = 'Flex-dominant'
+
+        # Build composition recipe from zones (top to bottom)
+        recipe = []
+        if isinstance(zones, list) and zones:
+            # Sort zones by vertical position
+            sorted_zones = sorted(zones, key=lambda z: z.get('bounds', {}).get('top', 0)
+                                  if isinstance(z, dict) else 0)
+            for zone in sorted_zones:
+                if not isinstance(zone, dict):
+                    continue
+                zone_type = zone.get('type', zone.get('name', 'section'))
+                bounds = zone.get('bounds', {})
+                height = bounds.get('height', 0) if isinstance(bounds, dict) else 0
+                width = bounds.get('width', 0) if isinstance(bounds, dict) else 0
+
+                desc = self._describe_zone(zone_type, height, width)
+                if desc:
+                    recipe.append(desc)
+
+        # If no zones detected, build from landmarks
+        if not recipe:
+            landmarks = page_structure.get('landmarks', {})
+            if isinstance(landmarks, dict):
+                if landmarks.get('header', {}).get('detected'):
+                    h = landmarks['header'].get('height', '')
+                    recipe.append(f"Header with navigation{f' ({h}px tall)' if h else ''}")
+                if landmarks.get('hero', {}).get('detected'):
+                    recipe.append("Hero section with primary content")
+                multi_col = page_structure.get('multi_column_sections', [])
+                if isinstance(multi_col, list):
+                    for section in multi_col[:3]:
+                        cols = section.get('column_count', '?')
+                        recipe.append(f"{cols}-column content section")
+                if landmarks.get('footer', {}).get('detected'):
+                    recipe.append("Footer")
+
+        if not recipe:
+            recipe = [f"{pattern_type} — insufficient zone data for detailed recipe"]
+
+        # Key decisions
+        decisions = []
+
+        # Layout method decision
+        if grid_count > 0 and flex_count > 0:
+            if grid_count > flex_count:
+                decisions.append("CSS Grid for page structure and content areas, Flexbox for component internals")
+            else:
+                decisions.append("Flexbox-driven layout with CSS Grid for specific content sections")
+        elif grid_count > 0:
+            decisions.append("CSS Grid throughout — structured, editorial approach")
+        elif flex_count > 0:
+            decisions.append("Flexbox throughout — flexible, flow-based approach")
+
+        # Density decision
+        density_pct = whitespace.get('content_density_pct', whitespace.get('content_density'))
+        if density_pct and isinstance(density_pct, (int, float)):
+            if density_pct >= 90:
+                decisions.append(f"Content density: {density_pct:.0f}% — dashboard-dense, every pixel used")
+            elif density_pct >= 75:
+                decisions.append(f"Content density: {density_pct:.0f}% — content-rich, moderate whitespace")
+            elif density_pct >= 55:
+                decisions.append(f"Content density: {density_pct:.0f}% — balanced, editorial feel")
+            else:
+                decisions.append(f"Content density: {density_pct:.0f}% — spacious, generous whitespace")
+
+        # Gap consistency
+        all_gaps = container_hier.get('all_gaps', []) if isinstance(container_hier, dict) else []
+        if isinstance(all_gaps, list) and len(all_gaps) >= 3:
+            # Parse px values
+            gap_vals = []
+            for g in all_gaps:
+                if isinstance(g, str):
+                    try:
+                        gap_vals.append(float(g.replace('px', '').strip()))
+                    except (ValueError, AttributeError):
+                        pass
+                elif isinstance(g, (int, float)):
+                    gap_vals.append(float(g))
+            if gap_vals:
+                from collections import Counter
+                common = Counter(gap_vals).most_common(1)
+                if common:
+                    most_common_gap = common[0][0]
+                    freq = common[0][1] / len(gap_vals) * 100
+                    if freq > 40:
+                        decisions.append(f"Consistent {most_common_gap:.0f}px gap across {freq:.0f}% of containers")
+
+        # Above fold
+        primary_focus = above_fold.get('primary_focus', '') if isinstance(above_fold, dict) else ''
+        if primary_focus:
+            decisions.append(f"Above-fold priority: {primary_focus}")
+
+        # Confidence: average spatial + layout
+        confidences = []
+        if spatial.get('confidence') is not None:
+            confidences.append(spatial['confidence'])
+        if layout.get('confidence') is not None:
+            confidences.append(layout['confidence'])
+        avg_conf = sum(confidences) / len(confidences) if confidences else 50
+
+        narrative = f"{strategy} {pattern_type.lower()}"
+        if recipe and len(recipe) > 1:
+            narrative += f" with {len(recipe)} distinct sections"
+
+        return {
+            'pattern': f"Layout synthesis: {pattern_type}, {strategy}",
+            'confidence': round(avg_conf),
+            'layout_narrative': narrative,
+            'composition_recipe': recipe,
+            'key_decisions': decisions
+        }
+
+    def _describe_zone(self, zone_type: str, height: int, width: int) -> str:
+        """Convert a zone type + dimensions into a human-readable description."""
+        zone_type_lower = zone_type.lower() if isinstance(zone_type, str) else ''
+        size_hint = f" ({height}px)" if height and height > 0 else ""
+
+        if 'header' in zone_type_lower or 'banner' in zone_type_lower:
+            return f"Header / navigation bar{size_hint}"
+        elif 'hero' in zone_type_lower:
+            return f"Hero section — primary visual + headline{size_hint}"
+        elif 'feature' in zone_type_lower:
+            return f"Feature / benefit grid{size_hint}"
+        elif 'content' in zone_type_lower:
+            return f"Content section{size_hint}"
+        elif 'footer' in zone_type_lower:
+            return f"Footer{size_hint}"
+        elif 'nav' in zone_type_lower or 'sidebar' in zone_type_lower:
+            return f"Navigation / sidebar{size_hint}"
+        elif 'cta' in zone_type_lower or 'action' in zone_type_lower:
+            return f"Call-to-action section{size_hint}"
+        elif 'media' in zone_type_lower or 'image' in zone_type_lower or 'video' in zone_type_lower:
+            return f"Media section{size_hint}"
+        elif zone_type_lower and zone_type_lower != 'unknown':
+            return f"{zone_type} section{size_hint}"
+        return None
+
+    def _synthesize_design_intent(self, evidence: Dict, url: str) -> str:
+        """Produce a single readable sentence describing the site's design personality.
+
+        Example: "A brutalist radio platform with industrial typography, monochrome
+        palette, and dense information layout optimized for content discovery."
+        """
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+
+        # Gather signals
+        typo = evidence.get('typography', {})
+        colors = evidence.get('colors', {})
+        spatial = evidence.get('spatial_composition', {})
+        content = evidence.get('content_extraction', {})
+        motion = evidence.get('motion_tokens', {})
+        shadows = evidence.get('shadow_system', {})
+
+        # Font character
+        fonts = typo.get('font_families', typo.get('fonts', []))
+        primary_font = ''
+        if fonts:
+            f = fonts[0]
+            primary_font = f.get('name', str(f).split(',')[0].strip().replace('"', '')) if isinstance(f, dict) else str(f).split(',')[0].strip().replace('"', '').replace("'", '')
+
+        type_scale = typo.get('type_scale', {})
+        ratio = type_scale.get('ratio') if isinstance(type_scale, dict) else type_scale
+
+        # Color character
+        palette = colors.get('palette', {})
+        primary_count = len(palette.get('primary', [])) if isinstance(palette, dict) else 0
+        css_vars = colors.get('css_variables', {})
+        color_roles = colors.get('color_roles', {})
+
+        # Layout character
+        page_struct = spatial.get('page_structure', {})
+        layout_type = page_struct.get('pattern_type', '')
+        whitespace = spatial.get('whitespace_analysis', {})
+        density = whitespace.get('content_density_pct', whitespace.get('content_density', 0))
+
+        # Page type
+        page_type = content.get('page_type', content.get('pattern', ''))
+
+        # Motion character
+        duration_scale = motion.get('duration_scale', {}) if isinstance(motion, dict) else {}
+        easing_count = len(motion.get('easing_palette', [])) if isinstance(motion, dict) else 0
+
+        # Shadow depth
+        shadow_levels = shadows.get('levels', []) if isinstance(shadows, dict) else []
+
+        # --- Build description fragments ---
+        fragments = []
+
+        # Typography personality
+        if primary_font:
+            # Classify font feel
+            lower_font = primary_font.lower()
+            if any(k in lower_font for k in ['mono', 'code', 'courier', 'consolas']):
+                fragments.append(f"monospace typography ({primary_font})")
+            elif any(k in lower_font for k in ['condensed', 'compressed', 'narrow']):
+                fragments.append(f"condensed typography ({primary_font})")
+            elif any(k in lower_font for k in ['serif']) and not any(k in lower_font for k in ['sans']):
+                fragments.append(f"serif typography ({primary_font})")
+            else:
+                fragments.append(f"{primary_font} typography")
+
+        # Color personality
+        if primary_count <= 2:
+            fragments.append("monochrome palette")
+        elif primary_count <= 4:
+            fragments.append(f"restrained {primary_count}-color palette")
+        elif primary_count >= 8:
+            fragments.append(f"expressive {primary_count}-color palette")
+
+        # Density/layout
+        if isinstance(density, (int, float)):
+            if density > 70:
+                fragments.append("dense information layout")
+            elif density < 30:
+                fragments.append("spacious, editorial layout")
+
+        # Motion
+        if easing_count >= 5:
+            fragments.append("rich motion system")
+        elif easing_count == 0:
+            fragments.append("minimal animation")
+
+        # Shadow depth
+        if len(shadow_levels) >= 4:
+            fragments.append("layered depth system")
+
+        # Determine site archetype
+        archetype = "website"
+        lower_domain = domain.lower()
+        lower_type = str(page_type).lower()
+        lower_layout = str(layout_type).lower()
+        if any(k in lower_domain for k in ['radio', 'fm', 'nts', 'lyl', 'rinse']):
+            archetype = "radio platform"
+        elif 'docs' in lower_domain or 'doc' in lower_type:
+            archetype = "documentation site"
+        elif 'shop' in lower_domain or 'store' in lower_domain or 'commerce' in lower_type:
+            archetype = "e-commerce platform"
+        elif 'blog' in lower_type or 'article' in lower_type:
+            archetype = "editorial site"
+        elif 'landing' in lower_layout:
+            archetype = "marketing site"
+        elif 'app' in lower_layout:
+            archetype = "web application"
+
+        # Assemble
+        if not fragments:
+            return f"A {archetype} at {domain}."
+
+        detail = ', '.join(fragments[:4])
+        return f"A {archetype} with {detail}."
+
+    def _generate_design_playbook(self, evidence: Dict) -> Dict:
+        """Generate a dynamic design playbook that surfaces the most distinctive findings.
+
+        NOT a fixed 5-category list. Scans all evidence keys, ranks by distinctiveness,
+        and returns the 3-7 most notable findings with actionable descriptions.
+        """
+        candidates = []
+
+        # Typography
+        typo = evidence.get('typography', {})
+        if isinstance(typo, dict) and typo.get('confidence'):
+            score = self._score_distinctiveness('typography', typo)
+            insight = self._build_insight('typography', typo)
+            if insight:
+                candidates.append({
+                    'area': 'Typography',
+                    'insight': insight,
+                    'confidence': typo.get('confidence', 0),
+                    'evidence_key': 'typography',
+                    'distinctiveness': score
+                })
+
+        # Colors
+        colors = evidence.get('colors', {})
+        if isinstance(colors, dict) and colors.get('confidence'):
+            score = self._score_distinctiveness('colors', colors)
+            insight = self._build_insight('colors', colors)
+            if insight:
+                candidates.append({
+                    'area': 'Color System',
+                    'insight': insight,
+                    'confidence': colors.get('confidence', 0),
+                    'evidence_key': 'colors',
+                    'distinctiveness': score
+                })
+
+        # Spacing
+        spacing = evidence.get('spacing_scale', {})
+        if isinstance(spacing, dict) and spacing.get('confidence'):
+            score = self._score_distinctiveness('spacing', spacing)
+            insight = self._build_insight('spacing', spacing)
+            if insight:
+                candidates.append({
+                    'area': 'Spacing System',
+                    'insight': insight,
+                    'confidence': spacing.get('confidence', 0),
+                    'evidence_key': 'spacing_scale',
+                    'distinctiveness': score
+                })
+
+        # Shadow system
+        shadows = evidence.get('shadow_system', {})
+        if isinstance(shadows, dict) and shadows.get('confidence') and shadows.get('confidence') > 20:
+            score = self._score_distinctiveness('shadows', shadows)
+            insight = self._build_insight('shadows', shadows)
+            if insight:
+                candidates.append({
+                    'area': 'Shadow System',
+                    'insight': insight,
+                    'confidence': shadows.get('confidence', 0),
+                    'evidence_key': 'shadow_system',
+                    'distinctiveness': score
+                })
+
+        # Motion
+        motion = evidence.get('motion_tokens', {})
+        if isinstance(motion, dict) and motion.get('confidence') and motion.get('confidence') > 20:
+            score = self._score_distinctiveness('motion', motion)
+            insight = self._build_insight('motion', motion)
+            if insight:
+                candidates.append({
+                    'area': 'Motion Design',
+                    'insight': insight,
+                    'confidence': motion.get('confidence', 0),
+                    'evidence_key': 'motion_tokens',
+                    'distinctiveness': score
+                })
+
+        # Layout synthesis (from Fix 4A)
+        layout_syn = evidence.get('layout_synthesis', {})
+        if isinstance(layout_syn, dict) and layout_syn.get('confidence'):
+            decisions = layout_syn.get('key_decisions', [])
+            narrative = layout_syn.get('layout_narrative', '')
+            if decisions:
+                insight = f"{narrative}. " + ". ".join(decisions[:2]) + "."
+                candidates.append({
+                    'area': 'Layout Architecture',
+                    'insight': insight,
+                    'confidence': layout_syn.get('confidence', 0),
+                    'evidence_key': 'layout_synthesis',
+                    'distinctiveness': 70  # Always somewhat interesting
+                })
+
+        # Visual hierarchy
+        vh = evidence.get('visual_hierarchy', {})
+        if isinstance(vh, dict) and vh.get('confidence') and vh.get('confidence') > 30:
+            score = self._score_distinctiveness('visual_hierarchy', vh)
+            insight = self._build_insight('visual_hierarchy', vh)
+            if insight:
+                candidates.append({
+                    'area': 'Visual Hierarchy',
+                    'insight': insight,
+                    'confidence': vh.get('confidence', 0),
+                    'evidence_key': 'visual_hierarchy',
+                    'distinctiveness': score
+                })
+
+        # Responsive breakpoints
+        bp = evidence.get('responsive_breakpoints', {})
+        if isinstance(bp, dict) and bp.get('confidence') and bp.get('confidence') > 30:
+            score = self._score_distinctiveness('breakpoints', bp)
+            insight = self._build_insight('breakpoints', bp)
+            if insight:
+                candidates.append({
+                    'area': 'Responsive Strategy',
+                    'insight': insight,
+                    'confidence': bp.get('confidence', 0),
+                    'evidence_key': 'responsive_breakpoints',
+                    'distinctiveness': score
+                })
+
+        # Interaction states
+        interactions = evidence.get('interaction_states', {})
+        if isinstance(interactions, dict) and interactions.get('confidence') and interactions.get('confidence') > 30:
+            score = self._score_distinctiveness('interactions', interactions)
+            insight = self._build_insight('interactions', interactions)
+            if insight:
+                candidates.append({
+                    'area': 'Interaction Design',
+                    'insight': insight,
+                    'confidence': interactions.get('confidence', 0),
+                    'evidence_key': 'interaction_states',
+                    'distinctiveness': score
+                })
+
+        # Contrast/A11y
+        contrast = evidence.get('contrast_a11y', {})
+        if isinstance(contrast, dict) and contrast.get('confidence') and contrast.get('confidence') > 0:
+            details = contrast.get('details', {})
+            violations = details.get('total_violations', 0) if isinstance(details, dict) else 0
+            score_val = details.get('score', 100) if isinstance(details, dict) else 100
+            if violations > 0:
+                insight = f"{violations} WCAG AA contrast violations detected. Accessibility score: {score_val}/100."
+                candidates.append({
+                    'area': 'Accessibility',
+                    'insight': insight,
+                    'confidence': contrast.get('confidence', 0),
+                    'evidence_key': 'contrast_a11y',
+                    'distinctiveness': 60 + min(violations * 5, 30)  # More violations = more notable
+                })
+
+        # Sort by distinctiveness, take top 3-7
+        candidates.sort(key=lambda x: x['distinctiveness'], reverse=True)
+        findings = candidates[:7]
+
+        # At least 3 findings if we have them
+        if len(findings) < 3 and len(candidates) > len(findings):
+            findings = candidates[:3]
+
+        # Average confidence of included findings
+        avg_conf = sum(f['confidence'] for f in findings) / len(findings) if findings else 0
+
+        return {
+            'pattern': f"Design playbook: {len(findings)} notable findings",
+            'confidence': round(avg_conf),
+            'findings': findings
+        }
+
+    def _score_distinctiveness(self, metric_type: str, data: Dict) -> float:
+        """Score how distinctive/notable a metric is. Higher = more worth surfacing."""
+        score = 0
+        conf = data.get('confidence', 0) or 0
+
+        # High confidence is a baseline signal
+        if conf >= 90:
+            score += 30
+        elif conf >= 75:
+            score += 20
+        elif conf >= 50:
+            score += 10
+
+        if metric_type == 'typography':
+            fonts = data.get('fonts_detected', [])
+            scale = data.get('type_scale', {})
+            # Multiple fonts = more interesting
+            if isinstance(fonts, list) and len(fonts) >= 3:
+                score += 15
+            # Non-default scale ratio
+            ratio = scale.get('ratio') if isinstance(scale, dict) else None
+            if ratio and isinstance(ratio, (int, float)) and ratio != 1.0:
+                if ratio > 1.3 or ratio < 1.15:  # Not the boring 1.2-1.25 range
+                    score += 20
+                else:
+                    score += 10
+
+        elif metric_type == 'colors':
+            roles = data.get('color_roles', {})
+            if isinstance(roles, dict) and len(roles) >= 5:
+                score += 20  # Rich semantic color system
+            palette = data.get('palette', {})
+            if isinstance(palette, dict):
+                total = sum(len(v) for v in palette.values() if isinstance(v, list))
+                if total >= 10:
+                    score += 15
+
+        elif metric_type == 'shadows':
+            levels = data.get('levels', [])
+            if isinstance(levels, list) and len(levels) >= 4:
+                score += 25  # Multi-level shadow = deliberate elevation system
+
+        elif metric_type == 'motion':
+            anims = data.get('details', {}).get('animations', []) if isinstance(data.get('details'), dict) else []
+            if isinstance(anims, list) and len(anims) >= 5:
+                score += 25  # Rich animation system
+
+        elif metric_type == 'visual_hierarchy':
+            hero = data.get('hero_section', {}).get('detected', False)
+            cta = data.get('primary_cta', {}).get('detected', False)
+            if hero and cta:
+                score += 20
+
+        elif metric_type == 'spacing':
+            scale = data.get('scale', data.get('values', []))
+            if isinstance(scale, list) and len(scale) >= 6:
+                score += 15  # Well-defined scale
+
+        elif metric_type == 'breakpoints':
+            bps = data.get('breakpoints', data.get('details', {}).get('breakpoints', []))
+            if isinstance(bps, list) and len(bps) >= 4:
+                score += 15
+
+        elif metric_type == 'interactions':
+            pattern = data.get('pattern', '')
+            if 'hover' in str(pattern).lower():
+                score += 15
+
+        return score
+
+    def _build_insight(self, metric_type: str, data: Dict) -> str:
+        """Build a one-line actionable insight for the design playbook."""
+        try:
+            if metric_type == 'typography':
+                fonts = data.get('fonts_detected', [])
+                scale = data.get('type_scale', {})
+                ratio = scale.get('ratio', '?') if isinstance(scale, dict) else '?'
+                sizes = scale.get('sizes_px', []) if isinstance(scale, dict) else []
+                font_names = []
+                if isinstance(fonts, list):
+                    for f in fonts[:3]:
+                        if isinstance(f, dict):
+                            font_names.append(f.get('family', '?'))
+                        elif isinstance(f, str):
+                            font_names.append(f)
+                font_str = ' + '.join(font_names) if font_names else 'unknown'
+                size_str = ', '.join(str(int(s)) + 'px' for s in sizes[:5]) if sizes else ''
+                result = f"{font_str} type system. {ratio} scale ratio."
+                if size_str:
+                    result += f" Sizes: {size_str}."
+                return result
+
+            elif metric_type == 'colors':
+                palette = data.get('palette', {})
+                roles = data.get('color_roles', {})
+                total = 0
+                if isinstance(palette, dict):
+                    total = sum(len(v) for v in palette.values() if isinstance(v, list))
+                role_str = ', '.join(list(roles.keys())[:4]) if isinstance(roles, dict) and roles else 'no semantic roles'
+                return f"{total}-color palette with roles: {role_str}."
+
+            elif metric_type == 'spacing':
+                base = data.get('base_unit', '?')
+                scale = data.get('scale', data.get('values', []))
+                scale_str = ', '.join(str(v) for v in scale[:6]) if isinstance(scale, list) else ''
+                return f"Base unit: {base}. Scale: {scale_str}." if scale_str else f"Base unit: {base}."
+
+            elif metric_type == 'shadows':
+                levels = data.get('levels', [])
+                if isinstance(levels, list) and levels:
+                    count = len(levels)
+                    # Try to describe the range
+                    blurs = []
+                    for lv in levels:
+                        if isinstance(lv, dict):
+                            shadow_str = lv.get('value', lv.get('shadow', ''))
+                            # Very rough blur extraction
+                            if isinstance(shadow_str, str) and 'px' in shadow_str:
+                                parts = shadow_str.split()
+                                for i, p in enumerate(parts):
+                                    if p.endswith('px') and i >= 2:
+                                        try:
+                                            blurs.append(float(p.replace('px', '')))
+                                        except ValueError:
+                                            pass
+                    blur_range = f" ({min(blurs):.0f}px → {max(blurs):.0f}px blur)" if blurs and len(blurs) >= 2 else ""
+                    return f"{count}-level elevation system{blur_range}."
+                return None
+
+            elif metric_type == 'motion':
+                personality = data.get('motion_personality', data.get('pattern', ''))
+                details = data.get('details', {}) if isinstance(data.get('details'), dict) else {}
+                anims = details.get('animations', [])
+                count = len(anims) if isinstance(anims, list) else 0
+                duration_scale = details.get('duration_scale', {})
+                median = duration_scale.get('median', '') if isinstance(duration_scale, dict) else ''
+                parts = []
+                if count:
+                    parts.append(f"{count} animations")
+                if median:
+                    parts.append(f"{median} median duration")
+                if personality:
+                    parts.append(str(personality))
+                return '. '.join(parts) + '.' if parts else None
+
+            elif metric_type == 'visual_hierarchy':
+                hero = data.get('hero_section', {})
+                cta = data.get('primary_cta', {})
+                reading = data.get('reading_pattern', '')
+                parts = []
+                if isinstance(hero, dict) and hero.get('detected'):
+                    parts.append("Hero section detected")
+                if isinstance(cta, dict) and cta.get('detected'):
+                    cta_text = cta.get('text', '')
+                    parts.append(f"Primary CTA: '{cta_text}'" if cta_text else "Primary CTA detected")
+                if reading:
+                    parts.append(f"{reading} reading pattern")
+                return '. '.join(parts) + '.' if parts else None
+
+            elif metric_type == 'breakpoints':
+                bps = data.get('breakpoints', data.get('details', {}).get('breakpoints', []))
+                if isinstance(bps, list) and bps:
+                    bp_vals = []
+                    for b in bps:
+                        if isinstance(b, dict):
+                            bp_vals.append(str(b.get('value', b.get('width', '?'))))
+                        elif isinstance(b, (int, float, str)):
+                            bp_vals.append(str(b))
+                    return f"{len(bps)} breakpoints: {', '.join(bp_vals[:5])}."
+                return None
+
+            elif metric_type == 'interactions':
+                pattern = data.get('pattern', '')
+                return str(pattern) + '.' if pattern else None
+
+        except Exception:
+            return data.get('pattern', None)
+
+        return None
+
+    def _generate_llm_summary(self, evidence: Dict, url: str) -> str:
+        """Generate a ~300-token structured plain-text summary for LLM consumers.
+
+        NOT displayed in dashboard. This is purely for API/LLM consumption —
+        a quick-read entry point into the 50+ evidence keys.
+        """
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+
+        # Page type
+        content_ext = evidence.get('content_extraction', {})
+        page_type = content_ext.get('page_type', content_ext.get('pattern', 'unknown'))
+
+        # Layout
+        spatial = evidence.get('spatial_composition', {})
+        page_structure = spatial.get('page_structure', {})
+        layout_pattern = page_structure.get('pattern_type', 'unknown')
+        whitespace = spatial.get('whitespace_analysis', {})
+        density = whitespace.get('content_density_pct', whitespace.get('content_density', '?'))
+
+        # Framework
+        arch = evidence.get('site_architecture', {})
+        framework = arch.get('pattern', 'Not detected')
+        fw_confidence = arch.get('confidence', 0)
+        fw_note = arch.get('framework_note', '')
+
+        # Collect all metrics with confidence scores
+        metrics_with_confidence = []
+        skip_keys = {'llm_helper', 'llm_summary', 'tech_stack', 'url_patterns',
+                      'design_harmony', 'layout_synthesis', 'design_playbook',
+                      'dom_depth', 'scan_timing', 'screenshot', 'component_map'}
+        for key, val in evidence.items():
+            if key in skip_keys:
+                continue
+            if isinstance(val, dict) and 'confidence' in val:
+                conf = val['confidence']
+                if conf is not None and isinstance(conf, (int, float)):
+                    pattern = val.get('pattern', '')
+                    metrics_with_confidence.append((key, conf, pattern))
+
+        # Sort by confidence descending
+        metrics_with_confidence.sort(key=lambda x: x[1], reverse=True)
+
+        # Build TOP FINDINGS from actual evidence
+        findings = []
+        for key, conf, pattern in metrics_with_confidence[:7]:
+            detail = self._summarize_metric_for_llm(key, evidence.get(key, {}))
+            if detail:
+                findings.append(f"• {detail} ({conf}%)")
+
+        # Confidence overview
+        above_80 = sum(1 for _, c, _ in metrics_with_confidence if c >= 80)
+        total = len(metrics_with_confidence)
+        lowest = metrics_with_confidence[-1] if metrics_with_confidence else None
+
+        lines = [
+            f"SITE: {domain}",
+            f"PAGE TYPE: {page_type}",
+            f"LAYOUT: {layout_pattern} — {density}% density",
+            f"FRAMEWORK: {framework} ({fw_confidence}% confidence)" + (f" — {fw_note}" if fw_note else ""),
+            "",
+            "TOP FINDINGS:",
+        ]
+        lines.extend(findings)
+        lines.append("")
+        lines.append(f"CONFIDENCE: {above_80}/{total} metrics ≥80%"
+                      + (f" | Lowest: {lowest[0]} at {lowest[1]}%" if lowest else ""))
+        lines.append("")
+        lines.append("KEY PATHS:")
+        top_keys = [k for k, _, _ in metrics_with_confidence[:5]]
+        lines.append(" • ".join(f"evidence['{k}']" for k in top_keys))
+
+        return '\n'.join(lines)
+
+    def _summarize_metric_for_llm(self, key: str, data: Dict) -> str:
+        """Produce a one-line human summary for a single evidence metric."""
+        if not isinstance(data, dict):
+            return None
+
+        try:
+            if key == 'typography':
+                fonts = data.get('fonts', data.get('font_families', []))
+                scale = data.get('type_scale', {})
+                ratio = scale.get('ratio', '?') if isinstance(scale, dict) else scale
+                font_count = len(fonts) if isinstance(fonts, list) else '?'
+                if fonts and isinstance(fonts, list):
+                    f = fonts[0]
+                    primary = f.get('name', str(f).split(',')[0].strip().replace('"', '')) if isinstance(f, dict) else str(f).split(',')[0].strip().replace('"', '').replace("'", '')
+                else:
+                    primary = '?'
+                return f"Typography: {font_count} fonts, {ratio} scale ratio, primary: {primary}"
+
+            elif key == 'colors':
+                palette = data.get('palette', {})
+                if isinstance(palette, dict):
+                    total = sum(len(v) for v in palette.values() if isinstance(v, list))
+                else:
+                    total = len(palette) if isinstance(palette, list) else '?'
+                roles = data.get('color_roles', {})
+                role_count = len(roles) if isinstance(roles, dict) else 0
+                return f"Colors: {total}-color palette, {role_count} semantic roles"
+
+            elif key == 'spacing_scale':
+                base = data.get('base_unit', '?')
+                scale = data.get('scale', data.get('values', []))
+                count = len(scale) if isinstance(scale, list) else '?'
+                return f"Spacing: base {base}, {count} scale values"
+
+            elif key == 'spatial_composition':
+                struct = data.get('page_structure', {})
+                container = data.get('container_hierarchy', {})
+                flex_c = container.get('flex_containers', {}).get('count', 0) if isinstance(container, dict) else 0
+                grid_c = container.get('grid_containers', {}).get('count', 0) if isinstance(container, dict) else 0
+                return f"Layout: {grid_c} grid + {flex_c} flex containers"
+
+            elif key == 'motion_tokens':
+                anims = data.get('animations', data.get('details', {}).get('animations', []))
+                count = len(anims) if isinstance(anims, list) else '?'
+                personality = data.get('motion_personality', data.get('pattern', ''))
+                return f"Motion: {count} animations, {personality}" if personality else f"Motion: {count} animations"
+
+            elif key == 'shadow_system':
+                levels = data.get('levels', [])
+                count = len(levels) if isinstance(levels, list) else '?'
+                return f"Shadows: {count}-level elevation system"
+
+            elif key == 'visual_hierarchy':
+                hero = data.get('hero_section', {}).get('detected', False)
+                cta = data.get('primary_cta', {}).get('detected', False)
+                return f"Visual Hierarchy: hero={'yes' if hero else 'no'}, CTA={'yes' if cta else 'no'}"
+
+            elif key == 'responsive_breakpoints':
+                bps = data.get('breakpoints', data.get('details', {}).get('breakpoints', []))
+                count = len(bps) if isinstance(bps, list) else '?'
+                return f"Breakpoints: {count} responsive breakpoints"
+
+            elif key == 'site_architecture':
+                fw = data.get('pattern', 'unknown')
+                return f"Tech Stack: {fw}"
+
+            elif key == 'interaction_states':
+                return f"Interactions: {data.get('pattern', 'detected')}"
+
+            elif key == 'contrast_a11y':
+                score = data.get('details', {}).get('score', data.get('confidence', '?'))
+                return f"Contrast A11y: score {score}"
+
+            else:
+                # Generic fallback — use the pattern field
+                pattern = data.get('pattern', '')
+                if pattern:
+                    return f"{key}: {pattern}"
+                return None
+        except Exception:
+            return f"{key}: {data.get('pattern', 'analyzed')}"
+
+    def _generate_llm_suggestions(self, url: str, links: Dict, content: Dict, components: Dict, evidence: Dict = None) -> Dict:
+        """
+        Generate evidence-aware suggestions for LLMs on what to analyze next.
+
+        Uses actual extraction results to produce specific, actionable reasons
+        rather than generic template text.
         """
         from urllib.parse import urlparse
 
+        evidence = evidence or {}
         parsed_url = urlparse(url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-        # Detect URL patterns
+        # Detect URL patterns — prefer URLPattern clusters from in-browser inference
         all_paths = [link.get('path', '') for link in links.get('all', [])]
-        url_patterns = self._detect_url_patterns(all_paths)
+        clusters = links.get('url_pattern_clusters')  # set by _discover_links() if >= 3 paths
+        url_patterns = self._detect_url_patterns(all_paths, clusters=clusters)
 
-        # Generate next step suggestions
+        # ── Gather evidence context for smarter suggestions ──
+        typo = evidence.get('typography', {})
+        colors = evidence.get('colors', {})
+        spacing = evidence.get('spacing_scale', {})
+        layout = evidence.get('layout', {})
+        vh = evidence.get('visual_hierarchy', {})
+        spatial = evidence.get('spatial_composition', {})
+        breakpoints = evidence.get('responsive_breakpoints', {})
+        page_type = content.get('page_type', 'unknown')
+
+        font_count = len(typo.get('fonts', typo.get('font_families', [])))
+        color_count = len((colors.get('palette', {}).get('primary', [])))
+        has_hero = bool(vh.get('hero_section', {}).get('detected'))
+        page_pattern = spatial.get('page_structure', {}).get('pattern_type', '')
+        bp_count = len(breakpoints.get('details', {}).get('breakpoints', []))
+
+        # Identify weak metrics (confidence < 60) — these are gaps to fill
+        weak_metrics = []
+        for k, v in evidence.items():
+            if isinstance(v, dict) and isinstance(v.get('confidence'), (int, float)):
+                if v['confidence'] < 60 and k not in ('content_extraction', 'dom_depth'):
+                    weak_metrics.append(k)
+
+        # ── Infer nav link purpose from path segments ──
+        def _nav_reason(nav_url: str) -> str:
+            path = urlparse(nav_url).path.strip('/').lower()
+            segment = path.split('/')[-1] if path else ''
+            purpose_map = {
+                'about': f'About page — likely different layout than {page_pattern or "homepage"}; compare typography and spacing consistency',
+                'blog': f'Blog index — compare list layout against this page\'s {page_pattern or "structure"}',
+                'pricing': f'Pricing page — typically grid/table-heavy; good test for spacing scale ({spacing.get("confidence", "?")}% confidence here)',
+                'docs': 'Documentation — usually single-column with deep headings; compare type scale usage',
+                'products': 'Product listing — compare component patterns and color usage across card layouts',
+                'contact': 'Contact page — form-heavy; good for validating interaction state extraction',
+                'shows': f'Content index — compare grid/list layout against this page\'s {"hero + stream" if has_hero else "structure"}',
+                'schedule': 'Schedule/calendar view — likely tabular; tests layout extraction on data-dense pages',
+                'discover': f'Discovery/browse page — compare component density and spatial composition',
+                'search': 'Search page — minimal initial content; tests how extractors handle sparse DOM',
+                'faq': 'FAQ page — accordion/expand patterns; good for interaction state capture',
+                'features': f'Features page — likely multi-section; compare against {page_pattern or "this layout"}',
+                'login': 'Auth page — skip unless testing form extraction',
+                'signup': 'Auth page — skip unless testing form extraction',
+                'register': 'Auth page — skip unless testing form extraction',
+            }
+            # Check for partial matches
+            for key, reason in purpose_map.items():
+                if key in segment or key in path:
+                    return reason
+            # Fallback: infer from path structure
+            if '/' in path and len(path.split('/')) > 1:
+                return f'Nested page ({path}) — compare against top-level layout to detect template variations'
+            return f'Top-level section — scan to check if {font_count}-font type system and {"hero pattern" if has_hero else "layout"} persist across pages'
+
+        # ── Build suggestions ──
         suggestions = []
+        seen_urls = set()
 
-        # Suggest navigation links
-        nav_links = links.get('navigation', [])[:3]
+        # Navigation links with specific reasons
+        nav_links = links.get('navigation', [])[:5]
         for nav_link in nav_links:
+            if nav_link in seen_urls:
+                continue
+            # Skip auth pages
+            path_lower = urlparse(nav_link).path.lower()
+            if any(skip in path_lower for skip in ['login', 'signin', 'signup', 'register', 'auth']):
+                continue
+            seen_urls.add(nav_link)
             suggestions.append({
                 'url': nav_link,
-                'reason': 'Main navigation link - likely a key section of the site',
+                'reason': _nav_reason(nav_link),
                 'priority': 'high',
                 'category': 'navigation'
             })
 
-        # Suggest article/content pages
+        # Content pages — reason depends on what we found
         article_links = links.get('articles', [])[:3]
-        for article_link in article_links:
+        if article_links:
+            # First article gets a detailed reason
             suggestions.append({
-                'url': article_link,
-                'reason': 'Content page - analyze to understand article/post template structure',
+                'url': article_links[0],
+                'reason': f'Article page — compare reading layout against this {page_pattern or "page"}. '
+                         f'Check if {font_count} fonts reduce to a simpler reading stack.',
                 'priority': 'medium',
                 'category': 'content'
             })
+            seen_urls.add(article_links[0])
+            # Second article: template consistency check
+            if len(article_links) > 1:
+                suggestions.append({
+                    'url': article_links[1],
+                    'reason': 'Second article — compare against first to confirm template consistency (same layout, spacing, type scale).',
+                    'priority': 'low',
+                    'category': 'content'
+                })
+                seen_urls.add(article_links[1])
 
-        # Suggest section pages
+        # Section pages
         section_links = links.get('sections', [])[:2]
         for section_link in section_links:
-            if section_link not in nav_links:  # Don't duplicate nav links
-                suggestions.append({
-                    'url': section_link,
-                    'reason': 'Section/category page - compare list vs detail page layouts',
-                    'priority': 'medium',
-                    'category': 'section'
-                })
+            if section_link in seen_urls:
+                continue
+            seen_urls.add(section_link)
+            suggestions.append({
+                'url': section_link,
+                'reason': f'Section page — compare list/grid patterns against homepage components. '
+                         f'Tests whether {color_count}-color palette holds or expands.',
+                'priority': 'medium',
+                'category': 'section'
+            })
 
-        # Analysis tips based on what was found
+        # ── Evidence-aware tips ──
         tips = []
 
-        page_type = content.get('page_type', 'unknown')
-        if page_type == 'home':
-            tips.append("This is a homepage - good starting point. Next, analyze navigation links to understand site structure.")
-        elif page_type == 'article':
-            tips.append("This is an article page - compare with other articles to identify consistent patterns.")
-        elif page_type == 'list':
-            tips.append("This is a list/directory page - analyze individual items to understand content templates.")
+        # Page type context
+        type_tips = {
+            'home': f'Homepage scan complete with {page_pattern or "detected layout"}. Scan 2-3 nav pages to confirm design system consistency.',
+            'musicBlog': f'Music/media site detected. Content pages (episodes, articles) likely share a template — scan one of each to verify.',
+            'article': 'Article page analyzed. Compare with homepage and one sibling article to map the full template set.',
+            'singleArticle': 'Single article analyzed. Scan the homepage and a list page to understand the full layout system.',
+            'landingPage': 'Landing page analyzed. These are often unique — scan an inner page to see the "real" recurring design system.',
+            'contentGrid': 'Content grid detected. Scan an individual item page to compare grid-view vs detail-view layouts.',
+        }
+        if page_type in type_tips:
+            tips.append(type_tips[page_type])
+        elif page_type not in ('unknown', None):
+            tips.append(f'Page classified as {page_type}. Scan contrasting page types to map the full design system.')
 
+        # Evidence gaps
+        if weak_metrics:
+            weak_names = ', '.join(weak_metrics[:4])
+            tips.append(f'Low-confidence metrics ({weak_names}) — scanning a content-heavy inner page often improves these.')
+
+        # Component guidance
         sections = components.get('sections', [])
         if len(sections) > 0:
-            tips.append(f"Found {len(sections)} page sections with CSS selectors - use component_map for targeted extraction.")
+            tips.append(f'{len(sections)} components detected with CSS selectors. Use /api/rip-component or the Ripper UI to extract HTML+CSS for any of them.')
 
+        # Scale
         total_links = len(links.get('all', []))
-        if total_links > 50:
-            tips.append(f"Site has {total_links}+ links - use batch analysis with filtered URLs to avoid overload.")
+        if total_links > 100:
+            tips.append(f'{total_links} links discovered. Use Smart Nav mode (analyzes 3-4 representative pages) instead of scanning all.')
+        elif total_links > 50:
+            tips.append(f'{total_links} links found. Batch-analyze up to 5 at a time with /api/batch-analyze.')
+
+        # Breakpoint hint
+        if bp_count > 0:
+            tips.append(f'{bp_count} breakpoints detected. Responsive screenshots (mobile/tablet/desktop) are included in evidence.responsive_screenshots.')
 
         return {
             'discovered_links': {
                 'navigation': links.get('navigation', []),
-                'articles': links.get('articles', [])[:10],  # Limit to first 10
+                'articles': links.get('articles', [])[:10],
                 'sections': links.get('sections', [])[:10],
                 'external': links.get('external', [])[:5],
                 'total_internal': len(links.get('all', [])) - len(links.get('external', []))
             },
-            'suggested_next_steps': suggestions[:8],  # Top 8 suggestions
+            'suggested_next_steps': suggestions[:8],
             'url_patterns': url_patterns,
             'analysis_tips': tips,
             'current_page_type': page_type,
             'base_url': base_url
         }
 
-    def _detect_url_patterns(self, paths: List[str]) -> Dict:
+    def _detect_url_patterns(self, paths: List[str], clusters: list = None) -> Dict:
         """
-        Detect common URL patterns from a list of paths
+        Detect URL pattern templates from a list of paths.
+
+        Prefers URLPattern-inferred clusters (from _discover_links) when available.
+        Falls back to hardcoded heuristics for singleton paths that didn't cluster.
 
         Returns:
             {
-                'articles': '/p/{slug}',
-                'sections': '/{name}',
-                ...
+                'clusters': [...],  # URLPattern-inferred (rich — template, count, examples, groups)
+                'singles': [...],   # Paths that didn't cluster (no pattern inferred)
+                # Legacy keys kept for backward compat:
+                'articles': '/blog/:slug', ...
             }
         """
-        patterns = {}
+        result = {}
 
-        # Common article patterns
+        if clusters:
+            result['clusters'] = clusters
+            # Backfill legacy keys from cluster data for any consumers still using them
+            for c in clusters:
+                hint = c.get('semantic_hint', '')
+                tpl  = c.get('template', '')
+                if hint in ('Blog posts', 'Articles', 'Stories', 'Editorial') and 'articles' not in result:
+                    result['articles'] = tpl
+                elif hint in ('Category pages',) and 'categories' not in result:
+                    result['categories'] = tpl
+                elif hint in ('Tag pages',) and 'tags' not in result:
+                    result['tags'] = tpl
+                elif hint in ('Products', 'E-commerce') and 'products' not in result:
+                    result['products'] = tpl
+                elif hint in ('Documentation', 'Guides', 'API reference') and 'docs' not in result:
+                    result['docs'] = tpl
+            return result
+
+        # ── Fallback: legacy hardcoded heuristics ────────────────────────
+        patterns = {}
         article_patterns = ['/p/', '/post/', '/article/', '/blog/', '/read/', '/editorial/', '/story/']
         for pattern in article_patterns:
             if any(pattern in path for path in paths):
-                patterns['articles'] = f"{pattern}{{slug}}"
+                patterns['articles'] = f"{pattern}:slug"
                 break
-
-        # Section patterns (single-level paths)
-        single_level = [p for p in paths if p and p.count('/') == 2 and p.startswith('/') and p.endswith('/')]
+        single_level = [p for p in paths if p and p.count('/') == 2 and p.startswith('/')]
         if single_level:
-            patterns['sections'] = '/{section-name}'
-
-        # Tag patterns
+            patterns['sections'] = '/:section'
         if any('/tag/' in path or '/tags/' in path for path in paths):
-            patterns['tags'] = '/tag/{tag-name}'
-
-        # Category patterns
+            patterns['tags'] = '/tag/:tag'
         if any('/category/' in path or '/categories/' in path for path in paths):
-            patterns['categories'] = '/category/{category-name}'
-
+            patterns['categories'] = '/category/:category'
         return patterns
 
 
