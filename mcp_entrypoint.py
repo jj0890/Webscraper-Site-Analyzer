@@ -140,7 +140,11 @@ async def rip_component(
         and figma_markdown.
     """
     ripper = ComponentRipper(url, selector)
-    blueprint = await ripper.rip(include_states=include_states, output_format=output_format)
+    blueprint = await ripper.rip(
+        include_children=include_children,
+        include_states=include_states,
+        output_format=output_format,
+    )
     return _clean_for_mcp(blueprint)
 
 

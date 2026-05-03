@@ -1,8 +1,6 @@
 # Gunicorn configuration for Web Intelligence Dashboard
 # Used by: ./start.sh production
 
-import multiprocessing
-
 # Server socket
 bind = "127.0.0.1:8080"
 

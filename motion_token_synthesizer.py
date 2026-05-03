@@ -17,8 +17,6 @@ DOM mutations are outside our detection scope (static CSS inspection, Mode A).
 import re
 from typing import Dict, List, Optional, Tuple
 from collections import Counter
-from math import gcd
-from functools import reduce
 
 
 class MotionTokenSynthesizer:

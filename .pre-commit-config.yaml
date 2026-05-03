@@ -1,0 +1,34 @@
+# Pre-commit hooks for Web Intelligence Scraper
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Dead code detection — catches unused imports, variables, functions
+  - repo: local
+    hooks:
+      - id: vulture
+        name: vulture (dead code)
+        entry: bash -c 'source venv310/bin/activate 2>/dev/null || true; python -m vulture deep_evidence_engine.py app.py extractors/ spatial_composition_analyzer.py mcp_entrypoint.py --min-confidence 80'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Extractor wiring regression — ensures no extractor is registered but never called
+  - repo: local
+    hooks:
+      - id: extractor-wiring
+        name: extractor wiring check
+        entry: bash -c 'source venv310/bin/activate 2>/dev/null || true; python -m pytest tests/test_extractor_wiring.py -q --tb=short'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Invalid escape sequences in JS-in-Python strings
+  - repo: local
+    hooks:
+      - id: no-invalid-escapes
+        name: no invalid escape sequences
+        entry: bash -c 'source venv310/bin/activate 2>/dev/null || true; python -W error::DeprecationWarning -c "import deep_evidence_engine" 2>&1 | grep -q "invalid escape" && echo "FAIL: invalid escape sequences found" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
+        files: deep_evidence_engine\.py

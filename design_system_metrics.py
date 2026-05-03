@@ -16,7 +16,6 @@ from patchright.async_api import Page
 from typing import Dict, List, Tuple
 from collections import Counter
 import re
-import math
 
 
 class DesignSystemMetrics:

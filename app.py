@@ -13,7 +13,6 @@ Features:
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import asyncio
-from pathlib import Path
 # Lazy imports — patchright hangs intermittently at import time
 # These modules are imported on first use instead of at startup
 _DeepEvidenceEngine = None
@@ -42,7 +41,6 @@ def _get_style_extractor_class():
     return _ComputedStyleExtractor
 import json
 import os
-import traceback
 import logging
 from datetime import datetime
 from urllib.parse import urlparse

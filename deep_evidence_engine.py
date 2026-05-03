@@ -231,12 +231,12 @@ class DeepEvidenceEngine:
 
         return nav_links[:5]  # Return top 5
 
-    async def _discover_deep_link(self, page, from_url: str) -> Optional[str]:
+    async def _discover_deep_link(self, page, _from_url: str = '') -> Optional[str]:
         """
         From a page, find a representative deep link
 
         Args:
-            from_url: The page we're currently on
+            _from_url: The page we're currently on (informational, not used in logic)
 
         Returns:
             URL to a deeper page, or None
@@ -5108,7 +5108,7 @@ class DeepEvidenceEngine:
         }''')
 
         # Strategy 3: Check <style> tags for hover rules (CSS-in-JS)
-        style_tag_rules = await page.evaluate('''() => {
+        style_tag_rules = await page.evaluate(r'''() => {
             const allStyleTags = document.querySelectorAll('style');
             let hoverRules = [];
 
@@ -6337,7 +6337,7 @@ class DeepEvidenceEngine:
         """
         print("   🔭 Pre-flight page quality assessment...")
         try:
-            signals = await page.evaluate('''() => {
+            signals = await page.evaluate(r'''() => {
                 const body = document.body;
                 if (!body) return { error: "no body" };
 
@@ -6498,7 +6498,7 @@ class DeepEvidenceEngine:
                 'all': [...]          # All links
             }
         """
-        links_data = await page.evaluate('''(baseUrl) => {
+        links_data = await page.evaluate(r'''(baseUrl) => {
             // Find both <a href> AND SPA navigation elements (buttons, divs with click handlers)
             const anchorLinks = Array.from(document.querySelectorAll('a[href]'));
 
