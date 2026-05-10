@@ -124,7 +124,20 @@ COMPONENT_DISCOVERY_JS = '''() => {
             const hasCTA = el.querySelectorAll('button, a[href]').length > 0;
             const bgImg = s.backgroundImage !== 'none';
             const links = el.querySelectorAll('a').length;
-            if ((hasImg || bgImg || hasCTA) && links < 30) {
+
+            // Reject grid-of-cards masquerading as heroes: if sibling elements have
+            // nearly identical heights and widths, this is a listing/grid, not a hero.
+            // e.g. NTS /latest: 4 episode cards at 379×370px each → all classified "Hero Section"
+            const siblings = el.parentElement
+                ? Array.from(el.parentElement.children).filter(function(c) {
+                    if (c === el) return false;
+                    var cr = c.getBoundingClientRect();
+                    return Math.abs(cr.height - rect.height) < 20 && Math.abs(cr.width - rect.width) < 20;
+                  })
+                : [];
+            const isCardGrid = siblings.length >= 2;  // 3+ nearly-identical siblings = grid
+
+            if (!isCardGrid && (hasImg || bgImg || hasCTA) && links < 30) {
                 const headingEl = el.querySelector('h1, h2');
                 const heading = headingEl ? headingEl.textContent.trim().substring(0, 50) : null;
                 const hasVideo = !!el.querySelector('video');
@@ -628,10 +641,15 @@ COMPONENT_DISCOVERY_JS = '''() => {
         ..._qsa('nav, header, footer, main, section, article, aside, form, dialog, details, table, [role="navigation"], [role="banner"], [role="main"], [role="contentinfo"], [role="region"], [role="complementary"], [role="tablist"], [role="dialog"], [role="alertdialog"], [role="alert"], [role="grid"], [role="table"]'),
         ..._qsa('div').filter(function(d) {
             var r = d.getBoundingClientRect();
-            return r.width > vw * 0.4 && r.height > 80 && d.children.length >= 2;
+            // 0.3 (not 0.4) to catch narrow content columns (NTS: 768px on 1920px viewport).
+            // Absolute floor of 300px so mobile viewports aren't over-filtered.
+            return r.width > Math.max(vw * 0.3, 300) && r.height > 80 && d.children.length >= 2;
         }),
-        // Also scan smaller divs that might be interactive components
-        ..._qsa('div[class*="accordion"], div[class*="tabs"], div[class*="carousel"], div[class*="slider"], div[class*="pricing"], div[class*="timeline"], div[class*="stepper"], div[class*="marquee"], div[class*="faq"], div[class*="breadcrumb"], div[class*="testimonial"], div[class*="newsletter"], div[class*="social-proof"], div[class*="trusted"], div[class*="alert"], div[class*="notification"]')
+        // Interactive/specialty components by class keyword
+        ..._qsa('div[class*="accordion"], div[class*="tabs"], div[class*="carousel"], div[class*="slider"], div[class*="pricing"], div[class*="timeline"], div[class*="stepper"], div[class*="marquee"], div[class*="faq"], div[class*="breadcrumb"], div[class*="testimonial"], div[class*="newsletter"], div[class*="social-proof"], div[class*="trusted"], div[class*="alert"], div[class*="notification"]'),
+        // Content list components — tracklists, playlists, episode lists, setlists, etc.
+        // These are often narrow (600–900px content columns) and miss the div width filter.
+        ..._qsa('[class*="tracklist"], [class*="track-list"], [class*="playlist"], [class*="setlist"], [class*="episode-list"], [class*="song-list"], [class*="queue"], [class*="program"], [class*="schedule-list"], ul[class*="tracks"], ol[class*="tracks"]')
     ];
 
     for (const el of candidates) {

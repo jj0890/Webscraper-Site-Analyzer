@@ -61,8 +61,8 @@ class SpatialCompositionAnalyzer:
         # Extract spatial relationships
         relationships = self._extract_relationships(spatial_data['elements'])
 
-        # Detect component zones
-        zones = self._detect_component_zones(spatial_data['elements'])
+        # Detect component zones — pass full spatial_data so sibling zones can be merged
+        zones = self._detect_component_zones(spatial_data['elements'], spatial_data=spatial_data)
 
         # Analyze alignment patterns
         alignment = self._analyze_alignment(spatial_data['elements'])
@@ -199,12 +199,113 @@ class SpatialCompositionAnalyzer:
             const bodyStyles = window.getComputedStyle(document.body);
             const pageBgColor = bodyStyles.backgroundColor || 'rgb(255,255,255)';
 
+            // ── Sibling gap collection ─────────────────────────────────────────
+            // The CSS next-sibling combinator (A + B) is the right primitive for
+            // measuring designer whitespace: the gap between adjacent siblings IS
+            // the breathing room. Grid-sampling only sees whether a cell is "touched"
+            // by a bounding rect — it reads 100% density on card grids because every
+            // cell has something in it, even if each card has 24px gaps.
+            //
+            // We also use sibling pairs to detect zone boundaries: two adjacent major
+            // blocks with different backgrounds (or a gap > 20px) = a new visual zone.
+            const siblingGaps    = [];  // {gap_px, selector, above_fold}
+            const siblingZones   = [];  // zone boundaries from sibling structure
+            const vpH = viewport.height;
+
+            const GAP_SELECTORS = [
+                'section + section',
+                'article + article',
+                'p + p',
+                'h1 + *', 'h2 + *', 'h3 + *',
+                'li + li',
+                '[class*="card"] + [class*="card"]',
+                '[class*="item"] + [class*="item"]',
+                '[class*="row"]  + [class*="row"]',
+                '[class*="block"]+ [class*="block"]',
+            ];
+
+            for (const sel of GAP_SELECTORS) {
+                try {
+                    for (const el of document.querySelectorAll(sel)) {
+                        const prev = el.previousElementSibling;
+                        if (!prev) continue;
+                        const prevRect = prev.getBoundingClientRect();
+                        const elRect   = el.getBoundingClientRect();
+                        // Only measure elements that are visible in or near the viewport
+                        if (prevRect.bottom < -vpH || elRect.top > vpH * 2) continue;
+                        const gap = Math.round(elRect.top - prevRect.bottom);
+                        if (gap >= 0 && gap <= 300) {
+                            siblingGaps.push({ gap_px: gap, selector: sel, above_fold: elRect.top < vpH });
+                        }
+                    }
+                } catch (e) { /* malformed selector in some browsers — skip */ }
+            }
+
+            // Zone boundary detection via sibling structure
+            const ZONE_SELECTORS = [
+                'section + section',
+                'main > * + *',
+                '[class*="section"] + [class*="section"]',
+                'header + *',
+                '* + footer',
+            ];
+            const seenZoneBoundaries = new Set();
+            for (const sel of ZONE_SELECTORS) {
+                try {
+                    for (const el of document.querySelectorAll(sel)) {
+                        const prev = el.previousElementSibling;
+                        if (!prev) continue;
+                        const prevRect = prev.getBoundingClientRect();
+                        const elRect   = el.getBoundingClientRect();
+                        if (elRect.top > vpH * 6) continue;  // far off-screen
+
+                        const prevBg = window.getComputedStyle(prev).backgroundColor;
+                        const elBg   = window.getComputedStyle(el).backgroundColor;
+                        const gap    = Math.round(elRect.top - prevRect.bottom);
+                        const diffBg = prevBg !== elBg && elBg !== 'rgba(0, 0, 0, 0)';
+
+                        if (diffBg || gap > 20 || elRect.width > viewport.width * 0.8) {
+                            const key = `${Math.round(elRect.top)}-${Math.round(elRect.left)}`;
+                            if (!seenZoneBoundaries.has(key)) {
+                                seenZoneBoundaries.add(key);
+                                // Infer a label from element semantic signals
+                                const tag = el.tagName.toLowerCase();
+                                const cls = (typeof el.className === 'string' ? el.className : (el.className?.baseVal || '')).toLowerCase();
+                                let zoneLabel = 'Section';
+                                if (tag === 'footer' || cls.includes('footer')) zoneLabel = 'Footer';
+                                else if (tag === 'header' || cls.includes('header')) zoneLabel = 'Header';
+                                else if (cls.includes('hero')) zoneLabel = 'Hero';
+                                else if (cls.includes('grid') || cls.includes('feed') || cls.includes('card')) zoneLabel = 'Content Grid';
+                                else if (cls.includes('cta') || cls.includes('subscribe') || cls.includes('newsletter')) zoneLabel = 'CTA Band';
+                                else if (cls.includes('feature') || cls.includes('promo')) zoneLabel = 'Feature Band';
+                                else if (tag === 'nav') zoneLabel = 'Navigation';
+                                else if (tag === 'aside') zoneLabel = 'Sidebar';
+                                else if (tag === 'article') zoneLabel = 'Article';
+                                siblingZones.push({
+                                    label:       zoneLabel,
+                                    top:         Math.round(elRect.top),
+                                    left:        Math.round(elRect.left),
+                                    width:       Math.round(elRect.width),
+                                    height:      Math.round(elRect.height),
+                                    gap_above:   gap,
+                                    diff_bg:     diffBg,
+                                    selector:    sel,
+                                    tag,
+                                });
+                            }
+                        }
+                    }
+                } catch (e) { /* skip */ }
+            }
+
             return {
                 viewport,
                 elements,
                 containers,
                 totalElements: elements.length,
-                pageBgColor
+                pageBgColor,
+                siblingGaps,
+                siblingZones,
             };
         }''')
 
@@ -398,52 +499,219 @@ class SpatialCompositionAnalyzer:
             }
         }
 
-    def _detect_component_zones(self, elements: List[Dict]) -> List[Dict]:
+    def _detect_component_zones(self, elements: List[Dict], spatial_data: Dict = None) -> List[Dict]:
         """
-        Detect semantic component zones with bounding boxes
+        Detect semantic component zones with bounding boxes.
 
-        Zones:
-        - Header/Banner
-        - Hero
-        - Features
-        - Content
-        - Footer
+        Zones detected (sorted top-to-bottom, capped at 12):
+        - Header/Banner       — landmark header tag
+        - Navigation          — nav tag / nav landmark
+        - Hero                — large above-fold element
+        - Featured/Editorial  — wide section below hero with editorial class signals
+        - Card Grid           — section with many similar-sized children or grid/feed class
+        - Sidebar             — narrow tall element (150-400px wide, >300px tall)
+        - Newsletter/CTA Band — section with subscribe/cta class signals
+        - Content/Article     — main landmark or article tag
+        - Footer              — landmark footer tag
         """
         zones = []
 
-        # Header zone (top of page)
         def _zone(type_name: str, label: str, el: Dict, all_elements: List[Dict]) -> Dict:
             """Build a zone dict with both old keys (type/elements_inside) and
             new aliases (name/element_count) so all consumers work."""
             count = len([e for e in all_elements if self._is_inside(e['rect'], el['rect'])])
+            human_label = f"{label} ({count} elements)"
             return {
                 'type': type_name,
                 'name': label,           # alias: human-readable
+                'label': human_label,    # human-friendly label with size context
                 'bbox': el['rect'],
                 'elements_inside': count,
                 'element_count': count,  # alias: matches dashboard + API consumers
             }
 
+        # Derive viewport width from element extents
+        viewport_width = max(
+            (el['rect']['right'] for el in elements if el['rect']['right'] > 0),
+            default=1280
+        )
+
+        # Track claimed rects to avoid double-counting the same element
+        claimed: set = set()
+
+        def _rect_key(rect: Dict) -> tuple:
+            return (rect['top'], rect['left'], rect['right'], rect['bottom'])
+
+        def _claim(el: Dict) -> bool:
+            """Return True and mark claimed if not already taken."""
+            key = _rect_key(el['rect'])
+            if key in claimed:
+                return False
+            claimed.add(key)
+            return True
+
+        # ── 1. Header ──────────────────────────────────────────────────────────
         headers = [el for el in elements if el['semantic']['landmarkType'] == 'header']
         if headers:
-            zones.append(_zone('header', 'Header', headers[0], elements))
+            h = headers[0]
+            if _claim(h):
+                zones.append(_zone('header', 'Header', h, elements))
 
-        # Hero zone (large element in top 50%)
+        # ── 2. Navigation ──────────────────────────────────────────────────────
+        navs = [
+            el for el in elements
+            if el['tag'] == 'nav' or el['semantic']['landmarkType'] == 'nav'
+        ]
+        if navs:
+            n = navs[0]
+            if _claim(n):
+                zones.append(_zone('navigation', 'Navigation', n, elements))
+
+        # ── 3. Hero ─────────────────────────────────────────────────────────────
         heroes = [
             el for el in elements
-            if el['aboveFold'] and
-               el['rect']['height'] > 300 and
-               el['rect']['width'] > 600
+            if el['aboveFold']
+            and el['rect']['height'] > 300
+            and el['rect']['width'] > 600
         ]
+        hero_el = None
         if heroes:
-            zones.append(_zone('hero', 'Hero', heroes[0], elements))
+            h = heroes[0]
+            if _claim(h):
+                zones.append(_zone('hero', 'Hero', h, elements))
+                hero_el = h
 
-        # Footer zone (bottom of page)
+        # ── 4. Featured / Editorial Section ────────────────────────────────────
+        EDITORIAL_KEYWORDS = {'featured', 'editorial', 'spotlight', 'trending'}
+        hero_bottom = hero_el['rect']['bottom'] if hero_el else 0
+        editorial_candidates = [
+            el for el in elements
+            if el['rect']['width'] > viewport_width * 0.8
+            and el['rect']['height'] > 200
+            and el['rect']['top'] >= hero_bottom
+            and any(kw in (((el.get('classes') or '') + ' ' + (el.get('id') or '') + ' ' + (el.get('className') or ''))).lower()
+                    for kw in EDITORIAL_KEYWORDS)
+        ]
+        if editorial_candidates:
+            ed = editorial_candidates[0]
+            if _claim(ed):
+                zones.append(_zone('featured', 'Featured Section', ed, elements))
+
+        # ── 5. Card Grid / Content Grid ─────────────────────────────────────────
+        GRID_KEYWORDS = {'grid', 'feed', 'cards', 'card', 'list', 'articles', 'posts', 'items'}
+        grid_candidates = [
+            el for el in elements
+            if any(kw in (((el.get('classes') or '') + ' ' + (el.get('id') or '') + ' ' + (el.get('className') or ''))).lower()
+                   for kw in GRID_KEYWORDS)
+            and el['rect']['width'] > viewport_width * 0.4
+            and el['rect']['height'] > 150
+        ]
+        # Fallback: element contains >= 6 block-sized children
+        if not grid_candidates:
+            for el in elements:
+                if el['rect']['width'] > viewport_width * 0.4 and el['rect']['height'] > 150:
+                    children_count = len([
+                        e for e in elements
+                        if e is not el and self._is_inside(e['rect'], el['rect'])
+                        and e['rect']['height'] > 50 and e['rect']['width'] > 80
+                    ])
+                    if children_count >= 6:
+                        grid_candidates.append(el)
+                        break
+
+        if grid_candidates:
+            gc = grid_candidates[0]
+            if _claim(gc):
+                zones.append(_zone('card_grid', 'Card Grid', gc, elements))
+
+        # ── 6. Sidebar ──────────────────────────────────────────────────────────
+        SIDEBAR_KEYWORDS = {'sidebar', 'aside', 'side-bar', 'side_bar', 'toc', 'subnav'}
+        sidebar_candidates = [
+            el for el in elements
+            if (
+                el['tag'] == 'aside'
+                or el['semantic']['landmarkType'] == 'aside'
+                or any(kw in (((el.get('classes') or '') + ' ' + (el.get('id') or '') + ' ' + (el.get('className') or ''))).lower()
+                       for kw in SIDEBAR_KEYWORDS)
+            )
+            and 150 <= el['rect']['width'] <= 400
+            and el['rect']['height'] > 300
+        ]
+        if sidebar_candidates:
+            sb = sidebar_candidates[0]
+            if _claim(sb):
+                zones.append(_zone('sidebar', 'Sidebar', sb, elements))
+
+        # ── 7. Newsletter / CTA Band ────────────────────────────────────────────
+        CTA_KEYWORDS = {'subscribe', 'newsletter', 'signup', 'sign-up', 'cta', 'banner', 'promo'}
+        cta_candidates = [
+            el for el in elements
+            if any(kw in (((el.get('classes') or '') + ' ' + (el.get('id') or '') + ' ' + (el.get('className') or ''))).lower()
+                   for kw in CTA_KEYWORDS)
+            and el['rect']['width'] > viewport_width * 0.4
+            and el['rect']['height'] > 60
+        ]
+        if cta_candidates:
+            cta = cta_candidates[0]
+            if _claim(cta):
+                zones.append(_zone('cta_band', 'Newsletter / CTA Band', cta, elements))
+
+        # ── 8. Content / Article Body ───────────────────────────────────────────
+        content_candidates = [
+            el for el in elements
+            if el['tag'] in ('main', 'article')
+            or el['semantic']['landmarkType'] == 'main'
+        ]
+        if content_candidates:
+            cc = content_candidates[0]
+            if _claim(cc):
+                zones.append(_zone('content', 'Content', cc, elements))
+
+        # ── 9. Footer ───────────────────────────────────────────────────────────
         footers = [el for el in elements if el['semantic']['landmarkType'] == 'footer']
         if footers:
-            zones.append(_zone('footer', 'Footer', footers[0], elements))
+            f = footers[0]
+            if _claim(f):
+                zones.append(_zone('footer', 'Footer', f, elements))
 
-        return zones
+        # ── 10. Sibling-boundary zones (fills the gap the semantic approach misses) ──
+        # The JS A+B collector detected section boundaries by looking for adjacent
+        # major blocks with different backgrounds or gaps > 20px.  Merge any that
+        # aren't already represented by a semantic zone (proximity check: within 60px).
+        sibling_zones = spatial_data.get('siblingZones', []) if isinstance(spatial_data, dict) else []
+        claimed_tops = {z['bbox']['top'] for z in zones}
+
+        for sz in sorted(sibling_zones, key=lambda z: z.get('top', 0)):
+            sz_top = sz.get('top', 0)
+            # Skip if we already have a semantic zone within 60px of this position
+            if any(abs(sz_top - ct) < 60 for ct in claimed_tops):
+                continue
+            # Skip if it's tiny (likely an inline inline element misclassified)
+            if sz.get('width', 0) < viewport_width * 0.3 or sz.get('height', 0) < 40:
+                continue
+            label = sz.get('label', 'Section')
+            bbox  = {
+                'top':    sz.get('top', 0),
+                'left':   sz.get('left', 0),
+                'right':  sz.get('left', 0) + sz.get('width', 0),
+                'bottom': sz.get('top', 0) + sz.get('height', 0),
+                'width':  sz.get('width', 0),
+                'height': sz.get('height', 0),
+            }
+            zones.append({
+                'type':           label.lower().replace(' ', '_'),
+                'name':           label,
+                'label':          label,
+                'bbox':           bbox,
+                'elements_inside': 0,   # not re-counted here — cost not worth it
+                'element_count':  0,
+                'source':         'sibling_boundary',  # provenance marker
+            })
+            claimed_tops.add(sz_top)
+
+        # Sort by vertical position (top-to-bottom reading order) and cap at 16
+        zones.sort(key=lambda z: z['bbox'].get('top', 0))
+        return zones[:16]
 
     def _is_inside(self, inner_rect: Dict, outer_rect: Dict) -> bool:
         """Check if inner rect is inside outer rect"""
@@ -575,39 +843,73 @@ class SpatialCompositionAnalyzer:
 
     def _analyze_whitespace(self, spatial_data: Dict) -> Dict:
         """
-        Analyze whitespace using leaf-node-only grid sampling.
+        Analyze whitespace with sibling-gap measurements as the primary signal.
 
-        Key insight: only paint CONTENT elements (img, p, h1, button, etc.) onto
-        the grid — not structural containers (div, section). This eliminates the
-        overlap problem where nested containers inflate content ratios.
+        The next-sibling combinator (A + B) gives us the gap between adjacent
+        elements — which is exactly what designers mean by "breathing room".
+        Grid-sampling of bounding rects produces 100% density on card grids
+        (every cell is touched even if cards have 24px gaps between them), so it
+        is demoted to a secondary/sanity-check signal.
 
-        Three defensible metrics:
-        1. Content density — % of viewport covered by leaf content elements
-        2. Styled density — % covered by content + visually-styled containers
-        3. Vertical rhythm — coefficient of variation of inter-element gaps
+        Primary signal  — sibling_gaps median & distribution (from JS `A + B` queries)
+        Secondary signal — leaf-node grid sampling (hero-filtered bounding rects)
+        Tertiary signal  — vertical rhythm (coefficient of variation of gap sizes)
 
-        Composite: 50% ratio quality + 25% rhythm + 25% gap quality
+        Composite: 50% sibling-gap quality + 30% rhythm + 20% grid density sanity
         """
         import statistics
 
-        elements = spatial_data['elements']
-        viewport = spatial_data['viewport']
-        page_bg = spatial_data.get('pageBgColor', '')
-        vp_w = viewport['width']
-        vp_h = viewport['height']
-        vp_area = vp_w * vp_h
+        elements    = spatial_data['elements']
+        viewport    = spatial_data['viewport']
+        page_bg     = spatial_data.get('pageBgColor', '')
+        vp_w        = viewport['width']
+        vp_h        = viewport['height']
+        vp_area     = vp_w * vp_h
 
-        # ── 1. Classify elements ──
-        # No element limit — need to scan full DOM since sites like Stripe
-        # have hundreds of off-screen nav elements before page content
+        # ── 1. PRIMARY: sibling gaps from JS A+B queries ───────────────────────
+        # These are the actual designer-intentional gaps between adjacent elements.
+        # The JS collector ran querySelectorAll('A + B') for multiple selector
+        # patterns and measured gap = B.top − A.bottom for each pair.
+        raw_sibling_gaps = spatial_data.get('siblingGaps', [])
+        above_fold_sg    = [g['gap_px'] for g in raw_sibling_gaps if g.get('above_fold')]
+        all_sg           = [g['gap_px'] for g in raw_sibling_gaps]
+
+        # Use above-fold gaps primarily; fall back to all gaps if sparse
+        sg_sample = above_fold_sg if len(above_fold_sg) >= 5 else all_sg
+
+        if sg_sample:
+            sg_median = statistics.median(sg_sample)
+            sg_mean   = statistics.mean(sg_sample)
+            sg_p75    = sorted(sg_sample)[int(len(sg_sample) * 0.75)]
+            # Gap quality: score peaks at a median of ~24px (comfortable spacing).
+            # < 4px → cramped (score 0-20), 4-8px → tight (20-40), 8-24px → good (40-80),
+            # 24-80px → generous (80-100), > 80px → dramatic (capped at 100).
+            if sg_median <= 0:
+                gap_quality = 0
+            elif sg_median < 4:
+                gap_quality = sg_median / 4 * 20
+            elif sg_median < 8:
+                gap_quality = 20 + (sg_median - 4) / 4 * 20
+            elif sg_median < 24:
+                gap_quality = 40 + (sg_median - 8) / 16 * 40
+            elif sg_median < 80:
+                gap_quality = 80 + (sg_median - 24) / 56 * 20
+            else:
+                gap_quality = 100
+            gap_quality = round(min(100, gap_quality))
+        else:
+            sg_median, sg_mean, sg_p75 = 0, 0, 0
+            gap_quality = 0
+
+        print(f"   📐 Sibling gaps: {len(sg_sample)} samples, median {sg_median:.0f}px, above-fold {len(above_fold_sg)}")
+
+        # ── 2. SECONDARY: leaf-node grid sampling (hero-filtered) ─────────────
         leaf_content = [el for el in elements if self._is_leaf_content(el, vp_area)]
-        # For visual_bg check, use a set for fast exclusion
-        leaf_set = set(id(el) for el in leaf_content)
-        visual_bg = [el for el in elements
-                     if id(el) not in leaf_set
-                     and self._has_visual_background(el, page_bg)]
+        leaf_set     = set(id(el) for el in leaf_content)
+        visual_bg    = [el for el in elements
+                        if id(el) not in leaf_set
+                        and self._has_visual_background(el, page_bg)]
 
-        # ── 2. Grid sampling: leaf content only ──
         grid_w, grid_h = 100, 100
         cell_w = max(1, vp_w / grid_w)
         cell_h = max(1, vp_h / grid_h)
@@ -618,82 +920,123 @@ class SpatialCompositionAnalyzer:
                 r = el['rect']
                 if r['width'] <= 0 or r['height'] <= 0:
                     continue
-                if r['top'] >= vp_h:  # completely below fold
+                if r['top'] >= vp_h or r['top'] + r['height'] <= 0:
                     continue
-                if r['top'] + r['height'] <= 0:  # completely above viewport
-                    continue
-                if r['left'] + r['width'] <= 0:  # completely left of viewport
+                if r['left'] + r['width'] <= 0:
                     continue
                 x0 = max(0, int(r['left'] / cell_w))
                 y0 = max(0, int(r['top'] / cell_h))
-                x1 = min(grid_w, int((r['left'] + r['width']) / cell_w) + 1)
-                y1 = min(grid_h, int((r['top'] + r['height']) / cell_h) + 1)
-                # Ensure valid range
-                x1 = max(x0, x1)
-                y1 = max(y0, y1)
+                x1 = min(grid_w, max(x0, int((r['left'] + r['width']) / cell_w) + 1))
+                y1 = min(grid_h, max(y0, int((r['top'] + r['height']) / cell_h) + 1))
                 for y in range(y0, y1):
                     for x in range(x0, x1):
                         occupied.add((x, y))
             return occupied
 
-        content_cells = paint_grid(leaf_content)
-        bg_cells = paint_grid(visual_bg)
-        total_cells = grid_w * grid_h
+        # Exclude hero-scale elements (> 30% of viewport) from grid — they
+        # falsely fill every cell on pages with a full-viewport hero image.
+        hero_scale_threshold = vp_area * 0.30
+        leaf_content_ws = [
+            el for el in leaf_content
+            if el['rect']['width'] * el['rect']['height'] < hero_scale_threshold
+        ] or leaf_content
+        hero_elements_excluded = len(leaf_content) - len(leaf_content_ws)
 
-        # Log summary
-        above_fold_count = sum(1 for el in leaf_content if el['rect']['top'] + el['rect']['height'] > 0 and el['rect']['top'] < vp_h)
-        print(f"   📐 Whitespace: {len(leaf_content)} leaf elements ({above_fold_count} above-fold), {len(content_cells)} grid cells filled")
-
+        content_cells  = paint_grid(leaf_content_ws)
+        bg_cells       = paint_grid(visual_bg)
+        total_cells    = grid_w * grid_h
         content_density = len(content_cells) / total_cells if total_cells > 0 else 0
-        styled_density = len(content_cells | bg_cells) / total_cells if total_cells > 0 else 0
-        # Whitespace = viewport NOT covered by leaf content (backgrounds are irrelevant)
+        styled_density  = len(content_cells | bg_cells) / total_cells if total_cells > 0 else 0
         whitespace_ratio = 1 - content_density
 
-        # ── 3. Vertical rhythm: gap consistency between leaf content elements ──
+        above_fold_count = sum(
+            1 for el in leaf_content
+            if el['rect']['top'] + el['rect']['height'] > 0 and el['rect']['top'] < vp_h
+        )
+        print(f"   📐 Grid: {len(leaf_content)} leaf ({above_fold_count} above-fold), "
+              f"{hero_elements_excluded} hero-excluded, {len(content_cells)}/10000 cells")
+
+        # ── 3. TERTIARY: vertical rhythm (gap consistency) ─────────────────────
         block_els = sorted(
             [el for el in leaf_content if el['rect']['height'] > 10 and el['rect']['width'] > 20],
             key=lambda e: e['rect']['top']
         )
-        gaps = []
+        py_gaps = []
         for i in range(1, len(block_els)):
-            gap = block_els[i]['rect']['top'] - (block_els[i-1]['rect']['top'] + block_els[i-1]['rect']['height'])
-            if gap > 0:
-                gaps.append(gap)
+            g = block_els[i]['rect']['top'] - (block_els[i-1]['rect']['top'] + block_els[i-1]['rect']['height'])
+            if g > 0:
+                py_gaps.append(g)
 
-        if gaps and len(gaps) >= 3:
-            gap_mean = statistics.mean(gaps)
-            gap_stdev = statistics.stdev(gaps)
-            cv = gap_stdev / gap_mean if gap_mean > 0 else 1
+        if py_gaps and len(py_gaps) >= 3:
+            gap_mean_py  = statistics.mean(py_gaps)
+            gap_stdev_py = statistics.stdev(py_gaps)
+            cv = gap_stdev_py / gap_mean_py if gap_mean_py > 0 else 1
             rhythm_consistency = max(0, 1 - min(1, cv))
         else:
-            gap_mean = 0
             rhythm_consistency = 0
 
-        # ── 4. Median vertical gap ──
-        median_gap = statistics.median(gaps) if gaps else 0
+        median_gap = statistics.median(py_gaps) if py_gaps else sg_median
 
-        # ── 5. Composite whitespace score (0-100) ──
-        # Ratio score: peaks at 45% content density (well-designed pages land 35-55%)
-        ratio_score = max(0, min(100, 100 - abs(content_density - 0.45) * 200))
-        rhythm_score = rhythm_consistency * 100
-        gap_score = min(100, (median_gap / 16) * 33) if median_gap > 0 else 0
+        # ── 4. Composite score ─────────────────────────────────────────────────
+        # Primary:   50% sibling-gap quality  (what designers mean by breathing room)
+        # Secondary: 30% rhythm consistency   (regularity of spacing)
+        # Tertiary:  20% grid density sanity  (gross density check)
+        ratio_score   = max(0, min(100, 100 - abs(content_density - 0.45) * 200))
+        rhythm_score  = rhythm_consistency * 100
+        whitespace_score = round(
+            gap_quality  * 0.50 +
+            rhythm_score * 0.30 +
+            ratio_score  * 0.20
+        )
 
-        whitespace_score = round(ratio_score * 0.50 + rhythm_score * 0.25 + gap_score * 0.25)
-
+        # True whitespace % = 100 − content_density from grid (secondary signal).
+        # Sibling median gap is the headline number — expose it prominently.
         return {
-            'content_density_pct': round(content_density * 100, 1),
-            'styled_density_pct': round(styled_density * 100, 1),
-            'true_whitespace_pct': round(whitespace_ratio * 100, 1),
-            'content_ratio_pct': round(content_density * 100, 1),  # backward compat alias
-            'whitespace_ratio_pct': round(whitespace_ratio * 100, 1),  # backward compat alias
-            'whitespace_score': whitespace_score,
-            'vertical_rhythm_consistency': round(rhythm_consistency * 100),
-            'median_vertical_gap_px': round(median_gap),
-            'gap_count': len(gaps),
-            'leaf_elements_counted': len(leaf_content),
-            'visual_bg_elements': len(visual_bg),
-            'interpretation': self._interpret_whitespace(whitespace_score),
-            'formula': 'Leaf-node grid (50%) + rhythm CV (25%) + median gap/16px (25%). Only content tags (img, p, h1-h6, button, etc.) painted — containers excluded.'
+            'content_density_pct':          round(content_density * 100, 1),
+            'styled_density_pct':           round(styled_density * 100, 1),
+            'true_whitespace_pct':          round(whitespace_ratio * 100, 1),
+            'content_ratio_pct':            round(content_density * 100, 1),
+            'whitespace_ratio_pct':         round(whitespace_ratio * 100, 1),
+            'whitespace_score':             whitespace_score,
+            'sibling_gap_median_px':        round(sg_median),
+            'sibling_gap_mean_px':          round(sg_mean),
+            'sibling_gap_p75_px':           round(sg_p75),
+            'sibling_gap_sample_count':     len(sg_sample),
+            'sibling_gap_quality':          gap_quality,
+            'vertical_rhythm_consistency':  round(rhythm_consistency * 100),
+            'median_vertical_gap_px':       round(median_gap),
+            'gap_count':                    len(py_gaps),
+            'leaf_elements_counted':        len(leaf_content),
+            'hero_elements_excluded':       hero_elements_excluded,
+            'visual_bg_elements':           len(visual_bg),
+            'interpretation':               self._interpret_whitespace(whitespace_score),
+            'formula': (
+                'Primary: sibling-gap median via A+B CSS queries (50%) — the actual breathing room '
+                'between adjacent elements. Secondary: rhythm CV (30%). Tertiary: hero-filtered grid '
+                'density sanity (20%). Grid-sampling demoted because it reads 100% on card grids.'
+            ),
+            '_meta': {
+                'whitespace_score': {
+                    'source': 'computed',
+                    'method': 'gap_quality*0.50 + rhythm_consistency*0.30 + grid_density*0.20',
+                    'raw_inputs': {
+                        'sg_median_px': round(sg_median),
+                        'sg_sample_count': len(sg_sample),
+                        'gap_quality': gap_quality,
+                        'rhythm_score': rhythm_score,
+                        'ratio_score': ratio_score,
+                    },
+                },
+                'sibling_gap_median_px': {
+                    'source': 'dom_extraction',
+                    'method': 'getBoundingClientRect gap between A+B adjacent sibling pairs',
+                    'verifiable': 'document.querySelectorAll("section+section,article+article,p+p")',
+                },
+                'component_zones': {
+                    'source': 'computed',
+                    'method': 'Semantic tags + class keywords + sibling background/gap boundary detection',
+                },
+            },
         }
 
     def _interpret_whitespace(self, score: float) -> str:

@@ -77,6 +77,58 @@ def _pick_ua() -> str:
     return random.choice(USER_AGENTS)
 
 
+# ── Browser-side timing helpers ───────────────────────────────────────────────
+#
+# JS_IDLE_SETTLE — waits until the browser is genuinely idle after all
+# micro-tasks, macrotasks, and framework render passes have flushed.
+#
+# Why not queueMicrotask×2 alone?
+#   queueMicrotask drains React/Vue's scheduler micro-queue, but React Concurrent
+#   Mode can re-schedule deferred renders as macrotasks *after* the micro-queue
+#   empties.  requestIdleCallback fires only after the browser has processed
+#   pending tasks AND has spare time — it catches those deferred renders.
+#   queueMicrotask×2 is kept as a synchronous fallback for headless envs that
+#   don't implement rIC (rare in Chromium, common in jsdom/unit tests).
+#
+# Usage:
+#   await page.evaluate(JS_IDLE_SETTLE)
+#
+JS_IDLE_SETTLE = (
+    "() => new Promise(resolve => {"
+    "  if (typeof requestIdleCallback !== 'undefined') {"
+    "    requestIdleCallback(resolve, { timeout: 500 });"
+    "  } else {"
+    "    queueMicrotask(() => queueMicrotask(resolve));"
+    "  }"
+    "})"
+)
+
+# JS_RESIZE_SETTLE — waits until the document root stops resizing after a
+# viewport change (debounced 80 ms), with a 700 ms hard timeout.
+#
+# Why not sleep()?
+#   A fixed sleep either over-waits (fast sites) or under-waits (sites with
+#   lazy-loaded assets, font-swap reflows, or scroll-driven breakpoint changes).
+#   ResizeObserver fires synchronously after every layout reflow, so the
+#   debounced resolve fires precisely 80 ms after the last reflow — no wasted
+#   time, no race conditions.
+#
+# Usage:
+#   await page.evaluate(JS_RESIZE_SETTLE)
+#
+JS_RESIZE_SETTLE = (
+    "() => new Promise(resolve => {"
+    "  let timer = null;"
+    "  const ro = new ResizeObserver(() => {"
+    "    clearTimeout(timer);"
+    "    timer = setTimeout(() => { ro.disconnect(); resolve(); }, 80);"
+    "  });"
+    "  ro.observe(document.documentElement);"
+    "  setTimeout(() => { ro.disconnect(); resolve(); }, 700);"
+    "})"
+)
+
+
 # Focus-to-extractor mapping for Smart Nav focused scans.
 # Each focus maps to the set of evidence keys that should be extracted.
 # None = run everything (full mode).
@@ -86,7 +138,7 @@ FOCUS_EXTRACTORS = {
         'accessibility_tree',
         'visual_hierarchy', 'spatial_composition', 'component_map', 'content_extraction',
         'responsive_breakpoints', 'z_index_stack', 'visual_patterns', 'component_blueprints',
-        'responsive_screenshots', 'box_model_export',
+        'responsive_screenshots', 'responsive_diff', 'box_model_export',
         'meta_info', 'llm_helper', 'architecture_diagrams',
     },
     'design': {
@@ -404,7 +456,7 @@ class DeepEvidenceEngine:
                             continue
 
                     # Flush microtasks (framework updates) then wait for CSS transitions
-                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                    await page.evaluate(JS_IDLE_SETTLE)
                     await _aio.sleep(0.4)
 
                     # Optionally wait for aria-expanded="true"
@@ -684,8 +736,52 @@ class DeepEvidenceEngine:
             print("   ⚠️  No nav links found, using home page only")
             return {'home': base_url}
 
-        # Use diversity scoring to pick 3 best pages
-        selected = self._select_diverse_pages(nav_links, base_url, max_pages=3)
+        # ── Template-aware page selection ────────────────────────────────────
+        # Nav links only reach top-level listing pages (/latest, /explore).
+        # Content templates (/shows/:slug/episodes/:slug2) are deeper and won't
+        # appear in the nav bar — but they represent the majority of pages on
+        # content sites. Pull one representative URL from each URL pattern cluster
+        # and merge into the candidate pool so Smart Nav reaches content templates.
+        template_candidates: List[str] = []
+        template_labels: dict = {}  # url → human label for logging
+        try:
+            full_links = await self._discover_links(page, base_url)
+            clusters = full_links.get('url_pattern_clusters', [])
+            # Rank clusters: deeper path + more examples → higher priority
+            clusters_sorted = sorted(
+                clusters,
+                key=lambda c: c.get('depth', 1) * 2 + min(c.get('count', 1), 20),
+                reverse=True
+            )
+            for cluster in clusters_sorted[:6]:
+                examples = cluster.get('examples', [])
+                if not examples:
+                    continue
+                path = examples[0].get('path', '') if isinstance(examples[0], dict) else str(examples[0])
+                if not path.startswith('/'):
+                    continue
+                candidate_url = base_url.rstrip('/') + path
+                # Skip if it's basically the homepage
+                if candidate_url.rstrip('/') == base_url.rstrip('/'):
+                    continue
+                template_candidates.append(candidate_url)
+                depth = cluster.get('depth', 1)
+                count = cluster.get('count', '?')
+                tmpl  = cluster.get('template', path)
+                template_labels[candidate_url] = f"template {tmpl!r} ({count} pages)"
+        except Exception:
+            pass  # Non-fatal — fall back to nav links only
+
+        if template_candidates:
+            print(f"   🗂️  {len(template_candidates)} content templates discovered:")
+            for url in template_candidates:
+                print(f"      ▸ {template_labels.get(url, url)}")
+
+        # Merge: template representatives first (they're deeper and more interesting),
+        # then nav links as fallback options. _select_diverse_pages deduplicates.
+        combined_pool = template_candidates + [u for u in nav_links if u not in template_candidates]
+
+        selected = self._select_diverse_pages(combined_pool, base_url, max_pages=3)
 
         # Rename keys to nav_1/nav_2 for backward compatibility
         result = {'home': base_url}
@@ -697,7 +793,8 @@ class DeepEvidenceEngine:
 
         for label, url in result.items():
             if label != 'home':
-                print(f"   📍 {label}: {url}")
+                suffix = f" [{template_labels[url]}]" if url in template_labels else ""
+                print(f"   📍 {label}: {url}{suffix}")
 
         return result
 
@@ -1595,18 +1692,29 @@ class DeepEvidenceEngine:
 
         # Multi-breakpoint responsive screenshots (AFTER all extraction to avoid metric interference)
         if _should_extract('responsive_screenshots'):
-            print("\n📱 Capturing responsive breakpoint screenshots...")
+            print("\n📱 Capturing responsive breakpoint screenshots + DOM diff...")
             try:
                 evidence['responsive_screenshots'] = await asyncio.wait_for(
                     self._capture_breakpoint_screenshots(page, url), timeout=60
                 )
                 bp_count = len(evidence['responsive_screenshots'].get('breakpoints', []))
                 print(f"   Captured {bp_count} breakpoint screenshots")
+
+                # Build cross-breakpoint DOM diff from snapshots captured above
+                evidence['responsive_diff'] = self._build_responsive_diff(
+                    evidence['responsive_screenshots']
+                )
+                diff_count = len(evidence['responsive_diff'].get('changes', []))
+                print(f"   📊 Responsive diff: {diff_count} changes detected")
+
             except asyncio.TimeoutError:
                 print(f"   ⏱️ Breakpoint screenshots timed out after 60s")
                 evidence['responsive_screenshots'] = {
                     'breakpoints': [], 'confidence': 0,
                     'pattern': 'Responsive screenshots timed out'
+                }
+                evidence['responsive_diff'] = {
+                    'changes': [], 'summary': 'Timed out', 'confidence': 0
                 }
             except Exception as e:
                 print(f"   ⚠️ Breakpoint screenshots failed: {e}")
@@ -1614,11 +1722,15 @@ class DeepEvidenceEngine:
                     'breakpoints': [], 'confidence': 0,
                     'pattern': 'Responsive screenshots failed'
                 }
+                evidence['responsive_diff'] = {
+                    'changes': [], 'summary': str(e)[:80], 'confidence': 0
+                }
 
         # Overall confidence rollup
         skip_for_rollup = {'meta_info', 'llm_helper', 'llm_summary', 'tech_stack',
                            'url_patterns', 'architecture_diagrams', 'design_playbook',
-                           'layout_synthesis', '_meta', 'responsive_screenshots'}
+                           'layout_synthesis', '_meta', 'responsive_screenshots',
+                           'responsive_diff'}
         confidences = [
             v.get('confidence', 0)
             for k, v in evidence.items()
@@ -2782,9 +2894,9 @@ class DeepEvidenceEngine:
                     print(f"      ✅ Network idle reached")
                 except Exception:
                     print(f"      ⏳ Network still active after 10s (streaming/SPA) — continuing")
-                # Flush framework render queue (React Concurrent / Vue async)
-                # Two nested queueMicrotasks drain nested scheduling passes
-                await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                # Wait for browser idle: drains micro-tasks AND deferred renders
+                # (requestIdleCallback fires after paint; queueMicrotask×2 fallback)
+                await page.evaluate(JS_IDLE_SETTLE)
 
                 # Check for bot protection
                 if response and response.status in [403, 401]:
@@ -2981,7 +3093,7 @@ class DeepEvidenceEngine:
                         await retry_page.wait_for_load_state('networkidle', timeout=8000)
                     except Exception:
                         pass
-                    await retry_page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                    await retry_page.evaluate(JS_IDLE_SETTLE)
                     retry_html = await retry_page.content()
 
                     if retry_resp and retry_resp.status not in [403, 401] and not self._is_challenge_page(retry_html):
@@ -3020,7 +3132,7 @@ class DeepEvidenceEngine:
                             await page.wait_for_load_state('networkidle', timeout=8000)
                         except Exception:
                             pass
-                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                        await page.evaluate(JS_IDLE_SETTLE)
 
                         # Check if we actually got the real page
                         _html = await page.content()
@@ -3062,7 +3174,7 @@ class DeepEvidenceEngine:
             # FULL ACCESS MODE: Continue with normal extraction
             # networkidle was already awaited above; flush any remaining
             # framework micro-task scheduling (React Concurrent, Vue async)
-            await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+            await page.evaluate(JS_IDLE_SETTLE)
             _page_load_seconds = round(time.perf_counter() - _page_load_start, 2)
             print(f"   ⏱️  Page loaded in {_page_load_seconds}s")
 
@@ -3119,7 +3231,7 @@ class DeepEvidenceEngine:
                             await page.wait_for_load_state('networkidle', timeout=8000)
                         except Exception:
                             pass
-                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                        await page.evaluate(JS_IDLE_SETTLE)
                         html_content = await page.content()
 
                         page_results[label] = await self._analyze_single_page(page, url, html_content)
@@ -3190,7 +3302,7 @@ class DeepEvidenceEngine:
                             await page.wait_for_load_state('networkidle', timeout=8000)
                         except Exception:
                             pass
-                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                        await page.evaluate(JS_IDLE_SETTLE)
                         rep_html = await page.content()
                         ev = await self._analyze_single_page(page, rep_url, rep_html)
                         ev['_template_label'] = label
@@ -3258,7 +3370,7 @@ class DeepEvidenceEngine:
                             await page.wait_for_load_state('networkidle', timeout=8000)
                         except Exception:
                             pass
-                        await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                        await page.evaluate(JS_IDLE_SETTLE)
                         html_content = await page.content()
 
                         page_results[label] = await self._analyze_single_page(page, url, html_content)
@@ -3301,105 +3413,148 @@ class DeepEvidenceEngine:
         """Extract layout patterns - Grid, Flexbox, Positioning"""
         print("   📐 Analyzing layout...")
 
-        layout_data = await page.evaluate('''() => {
+        layout_data = await page.evaluate(r'''() => {
+            // ── Distribution buckets ──────────────────────────────────────────
+            // Instead of 3 examples, capture full distributions so the Python
+            // side can answer "what IS the dominant pattern" not just "here are 3"
+            const flexDirDist    = {};   // {row: 120, column: 17, ...}
+            const flexJustDist   = {};   // {space-between: 45, flex-start: 62, ...}
+            const flexAlignDist  = {};   // {center: 88, flex-start: 40, ...}
+            const gridColDist    = {};   // {repeat(4, ~241px): 8, 2-col: 3, ...}
+            const gapDist        = {};   // {24px: 18, 16px 24px: 5, ...}
+            const containerWidths = new Set();  // distinct max-width values
+
+            function normalizeGridCols(cols) {
+                // Browsers compute "repeat(4,1fr)" as "241.5px 241.5px 241.5px 241.5px"
+                // Normalize back to a human-readable pattern.
+                if (!cols || cols === 'none') return null;
+                if (cols.includes('auto-fit'))  return 'auto-fit (responsive)';
+                if (cols.includes('auto-fill')) return 'auto-fill (responsive)';
+                if (cols.includes('minmax'))    return cols.length < 60 ? cols : cols.substring(0,57) + '…';
+                const tracks = cols.split(' ').filter(Boolean);
+                if (tracks.length < 2) return null;
+                const px = tracks.map(t => parseFloat(t)).filter(n => !isNaN(n));
+                if (!px.length) return cols.substring(0, 60);
+                const first = px[0];
+                const allEq = px.every(p => Math.abs(p - first) < 3);
+                if (allEq) return `repeat(${tracks.length}, ~${Math.round(first)}px)`;
+                if (tracks.length === 2) return `2-col (${Math.round(px[0])}px + ${Math.round(px[1])}px)`;
+                if (tracks.length === 3) return `3-col`;
+                return `${tracks.length}-col`;
+            }
+
             const elements = document.querySelectorAll('*');
             const layouts = {
-                grid_count: 0,
-                flex_count: 0,
-                absolute_count: 0,
-                fixed_count: 0,
-                sticky_count: 0,
-                grid_examples: [],
-                flex_examples: []
+                grid_count: 0, flex_count: 0,
+                absolute_count: 0, fixed_count: 0, sticky_count: 0,
+                grid_examples: [], flex_examples: []
             };
 
             for (const el of elements) {
                 const styles = window.getComputedStyle(el);
-                const display = styles.display;
+                const display  = styles.display;
                 const position = styles.position;
-                // SVG elements have className as SVGAnimatedString — use baseVal fallback
                 const safeClass = (typeof el.className === 'string') ? el.className : (el.className?.baseVal || '');
-                const selector = el.id ? '#' + el.id : (safeClass ? '.' + safeClass.split(' ')[0] : el.tagName.toLowerCase());
-
-                // Detect child tags for pattern annotation
-                const childTags = Array.from(el.children).slice(0, 10).map(c => c.tagName.toLowerCase());
+                const selector  = el.id ? '#' + el.id : (safeClass ? '.' + safeClass.split(' ')[0] : el.tagName.toLowerCase());
+                const childTags  = Array.from(el.children).slice(0, 10).map(c => c.tagName.toLowerCase());
                 const childCount = el.children.length;
 
                 if (display === 'grid') {
                     layouts.grid_count++;
-                    if (layouts.grid_examples.length < 3) {
-                        const cols = styles.gridTemplateColumns || '';
+                    const cols = styles.gridTemplateColumns || '';
+                    const normalized = normalizeGridCols(cols);
+                    if (normalized) gridColDist[normalized] = (gridColDist[normalized] || 0) + 1;
+
+                    const gap = styles.gap;
+                    if (gap && gap !== 'normal' && gap !== '0px')
+                        gapDist[gap] = (gapDist[gap] || 0) + 1;
+
+                    if (layouts.grid_examples.length < 5) {
                         const colParts = cols.split(' ').filter(Boolean);
                         const uniqueCols = [...new Set(colParts)];
-                        // Pattern detection for grid
-                        let pattern = 'Grid layout';
-                        if (cols.includes('auto-fit') || cols.includes('auto-fill'))
-                            pattern = 'Responsive card grid';
-                        else if (uniqueCols.length === 1 && colParts.length >= 3)
-                            pattern = colParts.length + '-column card grid';
-                        else if (colParts.length === 2)
-                            pattern = '2-column layout (content + sidebar)';
-                        else if (colParts.length >= 4)
-                            pattern = colParts.length + '-column grid';
-
-                        layouts.grid_examples.push({
-                            selector: selector,
-                            columns: cols,
-                            rows: styles.gridTemplateRows,
-                            gap: styles.gap,
-                            pattern: pattern,
-                            child_count: childCount
-                        });
+                        let pattern = normalized || 'Grid layout';
+                        if (cols.includes('auto-fit') || cols.includes('auto-fill')) pattern = 'Responsive card grid';
+                        else if (uniqueCols.length === 1 && colParts.length >= 3) pattern = colParts.length + '-col card grid';
+                        else if (colParts.length === 2) pattern = '2-col (content + sidebar)';
+                        layouts.grid_examples.push({ selector, columns: cols, rows: styles.gridTemplateRows, gap, pattern, child_count: childCount });
                     }
                 }
 
                 if (display === 'flex') {
                     layouts.flex_count++;
-                    if (layouts.flex_examples.length < 3) {
-                        const dir = styles.flexDirection || 'row';
-                        const justify = styles.justifyContent || 'normal';
-                        const align = styles.alignItems || 'normal';
-                        // Pattern detection for flex
-                        let pattern = 'Flex container';
-                        const hasButtons = childTags.some(t => t === 'button' || t === 'a');
-                        const hasInputs = childTags.some(t => t === 'input' || t === 'textarea');
-                        if (dir === 'row' && justify === 'space-between')
-                            pattern = 'Spaced row (nav bar / header)';
-                        else if (dir === 'row' && hasButtons && childCount <= 6)
-                            pattern = 'Button row / toolbar';
-                        else if (dir === 'row' && align === 'center' && childCount <= 4)
-                            pattern = 'Centered row (icon + label)';
-                        else if (dir === 'column' && childCount >= 3)
-                            pattern = 'Vertical stack / card list';
-                        else if (dir === 'row' && hasInputs)
-                            pattern = 'Form row (input + button)';
-                        else if (dir === 'row' && childCount >= 3)
-                            pattern = 'Horizontal group (' + childCount + ' items)';
+                    const dir    = styles.flexDirection || 'row';
+                    const justify = styles.justifyContent || 'normal';
+                    const align   = styles.alignItems || 'normal';
 
-                        layouts.flex_examples.push({
-                            selector: selector,
-                            direction: dir,
-                            wrap: styles.flexWrap,
-                            justify: justify,
-                            align: align,
-                            pattern: pattern,
-                            child_count: childCount
-                        });
+                    flexDirDist[dir]     = (flexDirDist[dir] || 0) + 1;
+                    if (justify !== 'normal') flexJustDist[justify] = (flexJustDist[justify] || 0) + 1;
+                    if (align   !== 'normal') flexAlignDist[align]  = (flexAlignDist[align] || 0) + 1;
+
+                    const gap = styles.gap;
+                    if (gap && gap !== 'normal' && gap !== '0px')
+                        gapDist[gap] = (gapDist[gap] || 0) + 1;
+
+                    if (layouts.flex_examples.length < 5) {
+                        const hasButtons = childTags.some(t => t === 'button' || t === 'a');
+                        const hasInputs  = childTags.some(t => t === 'input' || t === 'textarea');
+                        let pattern = 'Flex container';
+                        if (dir === 'row' && justify === 'space-between')  pattern = 'Spaced row (nav/header)';
+                        else if (dir === 'row' && hasButtons && childCount <= 6) pattern = 'Button row / toolbar';
+                        else if (dir === 'row' && align === 'center' && childCount <= 4) pattern = 'Centered row (icon + label)';
+                        else if (dir === 'column' && childCount >= 3)         pattern = 'Vertical stack / card list';
+                        else if (dir === 'row' && hasInputs)                  pattern = 'Form row (input + button)';
+                        else if (dir === 'row' && childCount >= 3)            pattern = 'Horizontal group (' + childCount + ' items)';
+                        layouts.flex_examples.push({ selector, direction: dir, wrap: styles.flexWrap, justify, align, pattern, child_count: childCount });
                     }
                 }
 
                 if (position === 'absolute') layouts.absolute_count++;
-                if (position === 'fixed') layouts.fixed_count++;
-                if (position === 'sticky') layouts.sticky_count++;
+                if (position === 'fixed')    layouts.fixed_count++;
+                if (position === 'sticky')   layouts.sticky_count++;
+
+                // Container max-widths (block elements with explicit max-width)
+                const mw = styles.maxWidth;
+                if (mw && mw !== 'none' && mw !== '0px' && !mw.endsWith('%')
+                    && (display === 'block' || display === 'flex' || display === 'grid')) {
+                    containerWidths.add(mw);
+                }
             }
+
+            // Convert dists to sorted arrays [{value, count}]
+            function toSortedArr(obj) {
+                return Object.entries(obj)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([value, count]) => ({ value, count }));
+            }
+
+            layouts.structure = {
+                flex_direction:    toSortedArr(flexDirDist),
+                flex_justify:      toSortedArr(flexJustDist),
+                flex_align:        toSortedArr(flexAlignDist),
+                grid_col_patterns: toSortedArr(gridColDist),
+                gap_values:        toSortedArr(gapDist).slice(0, 8),
+                container_max_widths: Array.from(containerWidths)
+                    .map(w => ({ value: w, px: parseFloat(w) || 0 }))
+                    .filter(w => w.px > 0)
+                    .sort((a, b) => b.px - a.px)
+                    .slice(0, 8)
+                    .map(w => w.value),
+            };
 
             return layouts;
         }''')
 
+        structure = layout_data.get('structure', {})
         return {
             'pattern': self._determine_layout_pattern(layout_data),
             'confidence': self._calculate_layout_confidence(layout_data),
             'details': layout_data,
+            'structure': structure,
+            'column_system': self._infer_column_system(structure),
+            'dominant_flex_direction': (structure.get('flex_direction') or [{}])[0].get('value', 'row'),
+            'dominant_flex_justify':   (structure.get('flex_justify')   or [{}])[0].get('value'),
+            'dominant_flex_align':     (structure.get('flex_align')     or [{}])[0].get('value'),
+            'container_max_widths':    structure.get('container_max_widths', []),
             'code_snippets': self._generate_layout_snippets(layout_data)
         }
 
@@ -3435,9 +3590,10 @@ class DeepEvidenceEngine:
             const headingFontCounts = {};
             const bodyFontCounts   = {};
             const uiFontCounts     = {};
+            const displayFontCounts = {};  // brand display faces: large non-semantic type
             const normFont = ff => ff.split(',')[0].trim().replace(/['"]/g, '');
 
-            for (const el of document.querySelectorAll('h1, h2, h3, [class*="headline"], [class*="title"], [class*="display"]')) {
+            for (const el of document.querySelectorAll('h1, h2, h3, [class*="headline"], [class*="title"]')) {
                 const ff = window.getComputedStyle(el).fontFamily;
                 if (!ff) continue;
                 allFonts.add(ff);
@@ -3458,6 +3614,29 @@ class DeepEvidenceEngine:
                 const key = normFont(ff);
                 uiFontCounts[key] = (uiFontCounts[key] || 0) + 1;
             }
+            // Display bucket: large type (≥32px) in brand/hero/editorial containers,
+            // including elements not tagged as standard headings.
+            for (const el of document.querySelectorAll('[class*="hero"], [class*="editorial"], [class*="magazine"], [class*="masthead"], [class*="display"], [class*="kicker"], [class*="eyebrow"], [class*="overline"]')) {
+                const cs = window.getComputedStyle(el);
+                const ff = cs.fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                displayFontCounts[key] = (displayFontCounts[key] || 0) + 1;
+            }
+            // Also capture any element with font-size ≥ 32px that isn't already counted as a heading
+            for (const el of document.querySelectorAll('*')) {
+                const cs = window.getComputedStyle(el);
+                const sz = parseFloat(cs.fontSize) || 0;
+                if (sz < 32) continue;
+                const tag = el.tagName.toLowerCase();
+                if (['h1','h2','h3'].includes(tag)) continue; // already in heading bucket
+                const ff = cs.fontFamily;
+                if (!ff) continue;
+                allFonts.add(ff);
+                const key = normFont(ff);
+                displayFontCounts[key] = (displayFontCounts[key] || 0) + 1;
+            }
 
             // Sizes and weights from broader set
             for (const el of document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, a, button, li')) {
@@ -3466,25 +3645,49 @@ class DeepEvidenceEngine:
                 if (styles.fontWeight) allWeights.add(styles.fontWeight);
             }
 
-            // Classify roles
+            // ── CTA verb extraction ────────────────────────────────────────────
+            // Collects action words from buttons, links, and CTAs to reveal brand voice.
+            const ctaVerbs = {};
+            const ctaFull  = [];
+            for (const el of document.querySelectorAll('button, [role="button"], a[class*="btn"], a[class*="cta"], [class*="cta"], [class*="subscribe"], [class*="signup"]')) {
+                const txt = (el.textContent || '').trim().replace(/\s+/g, ' ');
+                if (!txt || txt.length > 60 || txt.length < 2) continue;
+                // Extract first word (the action verb)
+                const firstWord = txt.split(/\s+/)[0].replace(/[^a-zA-Z'-]/g, '');
+                if (firstWord.length >= 2) {
+                    const key = firstWord.toLowerCase();
+                    ctaVerbs[key] = (ctaVerbs[key] || 0) + 1;
+                }
+                if (ctaFull.length < 30 && !ctaFull.includes(txt)) ctaFull.push(txt);
+            }
+            const ctaVerbRanked = Object.entries(ctaVerbs)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([verb, count]) => ({ verb, count }));
+
+            // Classify roles — display takes priority over heading for font classification
             const allBucketFonts = new Set([
                 ...Object.keys(headingFontCounts),
                 ...Object.keys(bodyFontCounts),
-                ...Object.keys(uiFontCounts)
+                ...Object.keys(uiFontCounts),
+                ...Object.keys(displayFontCounts),
             ]);
-            const classifiedHeading = [], classifiedBody = [], classifiedUI = [];
+            const classifiedHeading = [], classifiedBody = [], classifiedUI = [], classifiedDisplay = [];
             for (const font of allBucketFonts) {
                 const h = headingFontCounts[font] || 0;
                 const b = bodyFontCounts[font] || 0;
                 const u = uiFontCounts[font] || 0;
-                const total = h + b + u;
+                const d = displayFontCounts[font] || 0;
+                const total = h + b + u + d;
                 if (total === 0) continue;
-                const hR = h / total, bR = b / total, uR = u / total;
-                if      (hR >= 0.5 && h >= b) classifiedHeading.push(font);
-                else if (bR >= 0.5 && b >= h) classifiedBody.push(font);
-                else if (uR >= 0.5)           classifiedUI.push(font);
-                else if (h >= b)              classifiedHeading.push(font);
-                else                          classifiedBody.push(font);
+                const hR = h / total, bR = b / total, uR = u / total, dR = d / total;
+                // Display: dominant in display bucket, or appears in display selectors
+                if (dR >= 0.4 && d >= h)          classifiedDisplay.push(font);
+                else if (hR >= 0.5 && h >= b)     classifiedHeading.push(font);
+                else if (bR >= 0.5 && b >= h)     classifiedBody.push(font);
+                else if (uR >= 0.5)               classifiedUI.push(font);
+                else if (h >= b)                  classifiedHeading.push(font);
+                else                              classifiedBody.push(font);
             }
 
             return {
@@ -3506,6 +3709,9 @@ class DeepEvidenceEngine:
                 heading_fonts: classifiedHeading,
                 body_fonts: classifiedBody,
                 ui_fonts: classifiedUI,
+                display_fonts: classifiedDisplay,
+                cta_verbs: ctaVerbRanked,
+                cta_full_texts: ctaFull,
             };
         }''')
 
@@ -3539,9 +3745,12 @@ class DeepEvidenceEngine:
         typo_data['font_weights'] = all_weights
 
         # Promote role-classified font lists from JS result
-        heading_fonts = typo_data.get('heading_fonts') or []
-        body_fonts    = typo_data.get('body_fonts') or []
-        ui_fonts      = typo_data.get('ui_fonts') or []
+        heading_fonts  = typo_data.get('heading_fonts')  or []
+        body_fonts     = typo_data.get('body_fonts')     or []
+        ui_fonts       = typo_data.get('ui_fonts')       or []
+        display_fonts  = typo_data.get('display_fonts')  or []
+        cta_verbs      = typo_data.get('cta_verbs')      or []
+        cta_full_texts = typo_data.get('cta_full_texts') or []
 
         # Build enriched type_scale dict (was bare float)
         type_scale_dict = None
@@ -3569,19 +3778,23 @@ class DeepEvidenceEngine:
         size_bonus = min(15, len(all_sizes) * 2)
         scale_bonus = 15 if type_scale else 0
 
-        heading_bonus = 10 if heading_fonts else 0
+        heading_bonus  = 10 if heading_fonts  else 0
+        display_bonus  = 5  if display_fonts  else 0
         result = {
             'pattern': self._determine_typo_pattern(typo_data),
-            'confidence': min(95, 40 + font_bonus + size_bonus + scale_bonus + heading_bonus),
+            'confidence': min(95, 40 + font_bonus + size_bonus + scale_bonus + heading_bonus + display_bonus),
             'details': typo_data,
             'type_scale': type_scale_dict if type_scale_dict else type_scale,
             'font_families': all_fonts,
-            'fonts': all_fonts,  # Canonical alias — LLM consumers expect this key
+            'fonts': all_fonts,  # Canonical alias
             'font_sizes': all_sizes,
             'font_weights': all_weights,
-            'heading_fonts': heading_fonts,
-            'body_fonts':    body_fonts,
-            'ui_fonts':      ui_fonts,
+            'heading_fonts':  heading_fonts,
+            'body_fonts':     body_fonts,
+            'ui_fonts':       ui_fonts,
+            'display_fonts':  display_fonts,   # brand/editorial faces — NEW
+            'cta_verbs':      cta_verbs,        # [{verb, count}] — NEW
+            'cta_full_texts': cta_full_texts,   # raw button/CTA strings — NEW
             'code_snippets': self._generate_typo_snippets(typo_data)
         }
 
@@ -5370,12 +5583,44 @@ class DeepEvidenceEngine:
 
     # Helper methods for pattern determination and scoring
     def _determine_layout_pattern(self, data):
-        if data['grid_count'] > data['flex_count']:
-            return f"CSS Grid ({data['grid_count']} containers)"
-        elif data['flex_count'] > 0:
-            return f"Flexbox ({data['flex_count']} containers)"
+        grid = data.get('grid_count', 0)
+        flex = data.get('flex_count', 0)
+        structure = data.get('structure', {})
+
+        parts = []
+
+        if grid > 0 and flex > 0:
+            parts.append(f"Flex + Grid hybrid ({flex} flex, {grid} grid)")
+        elif grid > flex:
+            col_pats = structure.get('grid_col_patterns', [])
+            top_col = col_pats[0]['value'] if col_pats else None
+            if top_col:
+                parts.append(f"CSS Grid — dominant pattern: {top_col} ({grid} containers)")
+            else:
+                parts.append(f"CSS Grid ({grid} containers)")
+        elif flex > 0:
+            dir_dist = structure.get('flex_direction', [])
+            top_dir = dir_dist[0]['value'] if dir_dist else 'row'
+            just_dist = structure.get('flex_justify', [])
+            top_just = just_dist[0]['value'] if just_dist else None
+            desc = top_dir
+            if top_just:
+                desc += f" / {top_just}"
+            parts.append(f"Flexbox ({flex} containers, dominant: {desc})")
         else:
-            return "Traditional Layout"
+            parts.append("Traditional Layout (no flex/grid detected)")
+
+        # Append positioning context
+        abs_c = data.get('absolute_count', 0)
+        fix_c = data.get('fixed_count', 0)
+        stk_c = data.get('sticky_count', 0)
+        if fix_c > 0 or stk_c > 0:
+            pos_notes = []
+            if fix_c: pos_notes.append(f"{fix_c} fixed")
+            if stk_c: pos_notes.append(f"{stk_c} sticky")
+            parts.append(f"+ {', '.join(pos_notes)}")
+
+        return '; '.join(parts)
 
     def _calculate_layout_confidence(self, data):
         grid = data.get('grid_count', 0)
@@ -5386,6 +5631,75 @@ class DeepEvidenceEngine:
         if grid > 0 and flex > 0:
             confidence += 5
         return min(95, confidence)
+
+    def _infer_column_system(self, structure: dict) -> dict:
+        """Infer the underlying column system (12-col, 16-col, custom) from
+        grid column patterns and container max-widths.
+
+        Returns a dict:
+          {
+            'system': '12-column' | '16-column' | 'custom' | 'unknown',
+            'evidence': ['repeat(12, ~80px)', '1200px container'],
+            'max_content_width': '1200px',   # most common container cap
+            'note': 'Bootstrap/Foundation grid detected'
+          }
+        """
+        grid_pats = structure.get('grid_col_patterns', [])
+        widths = structure.get('container_max_widths', [])
+
+        evidence = []
+        col_counts = []
+
+        # Extract column counts from patterns like "repeat(12, ~80px)", "4-col", "3-col"
+        import re
+        for item in grid_pats[:10]:
+            val = item.get('value', '')
+            m = re.match(r'repeat\((\d+),', val)
+            if m:
+                col_counts.append(int(m.group(1)))
+                evidence.append(val)
+            elif re.match(r'(\d+)-col', val):
+                n = int(re.match(r'(\d+)-col', val).group(1))
+                col_counts.append(n)
+                evidence.append(val)
+
+        # Determine system from column counts
+        system = 'unknown'
+        note = ''
+        if 12 in col_counts:
+            system = '12-column'
+            note = 'Bootstrap / Foundation grid'
+        elif 16 in col_counts:
+            system = '16-column'
+            note = 'Material Design grid'
+        elif col_counts:
+            # Most common count
+            from collections import Counter
+            most_common = Counter(col_counts).most_common(1)[0][0]
+            if most_common in (2, 3, 4, 6):
+                system = f'{most_common}-column'
+                note = f'Custom {most_common}-col grid'
+            else:
+                system = 'custom'
+                note = f'Non-standard column count ({most_common})'
+
+        # Best max content width = smallest non-tiny width (the outer cap)
+        max_content_width = None
+        for w in widths:
+            px = float(w.replace('px', '')) if 'px' in w else 0
+            if px >= 800:
+                max_content_width = w
+                break  # already sorted desc, take largest meaningful cap
+
+        if widths:
+            evidence.append(f"max-width: {widths[0]}")
+
+        return {
+            'system': system,
+            'evidence': evidence[:5],
+            'max_content_width': max_content_width,
+            'note': note,
+        }
 
     def _determine_typo_pattern(self, data):
         body = data.get('body', {})
@@ -6266,7 +6580,7 @@ class DeepEvidenceEngine:
                 # Hover
                 try:
                     await locator.hover(timeout=2000)
-                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                    await page.evaluate(JS_IDLE_SETTLE)
                     hover_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
                         if (!el) return null;
@@ -6284,7 +6598,7 @@ class DeepEvidenceEngine:
                 try:
                     await page.mouse.move(0, 0)
                     await locator.focus(timeout=2000)
-                    await page.evaluate("() => new Promise(r => queueMicrotask(() => queueMicrotask(r)))")
+                    await page.evaluate(JS_IDLE_SETTLE)
                     focus_styles = await page.evaluate('''(args) => {
                         const el = document.querySelector(args.sel);
                         if (!el) return null;
@@ -7080,15 +7394,58 @@ class DeepEvidenceEngine:
             'pattern': f"Box model exported for {len(enriched_zones)} zones"
         }
 
+    # DOM snapshot JS — lightweight structural fingerprint at each viewport
+    _RESPONSIVE_SNAPSHOT_JS = r'''() => {
+        const SELECTORS = [
+            'nav', 'header', '[role="navigation"]', '[role="banner"]',
+            'main', '[role="main"]', 'footer', '[role="contentinfo"]',
+            '[class*="hero"]', '[class*="sidebar"]',
+            '[class*="hamburger"]', '[class*="mobile-menu"]', '[class*="nav-toggle"]',
+            '[class*="drawer"]', '[class*="overlay"]',
+            'h1', '.logo', '[class*="logo"]',
+            '[class*="grid"]', '[class*="columns"]',
+        ];
+
+        const seen = new WeakSet();
+        const elements = [];
+
+        for (const sel of SELECTORS) {
+            for (const el of document.querySelectorAll(sel)) {
+                if (seen.has(el)) continue;
+                seen.add(el);
+                const cs = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                elements.push({
+                    selector: sel,
+                    tag: el.tagName.toLowerCase(),
+                    display: cs.display,
+                    visibility: cs.visibility,
+                    opacity: cs.opacity,
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                    fontSize: cs.fontSize,
+                    flexDirection: cs.flexDirection,
+                    gridTemplateColumns: cs.gridTemplateColumns,
+                    position: cs.position,
+                });
+                if (elements.length >= 60) break;
+            }
+        }
+        return elements;
+    }'''
+
     async def _capture_breakpoint_screenshots(self, page, url: str) -> Dict:
         """
-        Capture full-page screenshots at three responsive breakpoints.
-        Saves/restores the original viewport to avoid interfering with other extraction.
+        Capture full-page screenshots AND lightweight DOM snapshots at three
+        responsive breakpoints. Saves/restores original viewport.
 
         Breakpoints:
         - Mobile: 375×667 (iPhone SE)
         - Tablet: 768×1024 (iPad)
         - Desktop: 1440×900 (standard laptop)
+
+        DOM snapshots are stored in each result's `dom_snapshot` key and used
+        by `_build_responsive_diff()` to produce the `responsive_diff` evidence.
         """
         import base64
 
@@ -7105,17 +7462,28 @@ class DeepEvidenceEngine:
         for bp in breakpoints:
             try:
                 await page.set_viewport_size({'width': bp['width'], 'height': bp['height']})
-                await asyncio.sleep(1)  # Let layout reflow
+                # ResizeObserver resolves when root stops reflowing (debounced 80ms),
+                # hard cap 700ms — adapts to site complexity instead of blind sleep.
+                await page.evaluate(JS_RESIZE_SETTLE)
 
                 screenshot_bytes = await page.screenshot(full_page=True, type='png', timeout=15000)
+
+                # Capture DOM snapshot at this viewport
+                try:
+                    dom_snapshot = await page.evaluate(self._RESPONSIVE_SNAPSHOT_JS)
+                except Exception as snap_err:
+                    dom_snapshot = []
+                    print(f"   ⚠️ DOM snapshot failed at {bp['name']}: {snap_err}")
+
                 results.append({
                     'breakpoint': bp['name'],
                     'width': bp['width'],
                     'height': bp['height'],
                     'screenshot_b64': base64.b64encode(screenshot_bytes).decode('utf-8'),
                     'size_bytes': len(screenshot_bytes),
+                    'dom_snapshot': dom_snapshot,
                 })
-                print(f"   📸 {bp['name']} ({bp['width']}px): {len(screenshot_bytes) // 1024}KB")
+                print(f"   📸 {bp['name']} ({bp['width']}px): {len(screenshot_bytes) // 1024}KB, {len(dom_snapshot)} elements snapped")
             except Exception as e:
                 print(f"   ⚠️ {bp['name']} screenshot failed: {e}")
                 results.append({
@@ -7123,13 +7491,14 @@ class DeepEvidenceEngine:
                     'width': bp['width'],
                     'height': bp['height'],
                     'screenshot_b64': None,
+                    'dom_snapshot': [],
                     'error': str(e)[:100],
                 })
 
-        # Restore original viewport
+        # Restore original viewport and wait for reflow to settle
         try:
             await page.set_viewport_size(original_viewport)
-            await asyncio.sleep(0.5)
+            await page.evaluate(JS_RESIZE_SETTLE)
         except Exception:
             pass
 
@@ -7138,6 +7507,222 @@ class DeepEvidenceEngine:
             'url': url,
             'confidence': min(95, 40 + sum(1 for r in results if r.get('screenshot_b64')) * 18),
             'pattern': f"Responsive screenshots at {len([r for r in results if r.get('screenshot_b64')])} breakpoints"
+        }
+
+    def _build_responsive_diff(self, breakpoint_data: Dict) -> Dict:
+        """
+        Compute a cross-breakpoint DOM diff from the snapshots captured in
+        _capture_breakpoint_screenshots().
+
+        Compares mobile → tablet → desktop and reports:
+        - Elements that appear/disappear (display:none toggle, visibility changes)
+        - Layout direction changes (flex row → column)
+        - Grid column collapses (4-col → 1-col)
+        - Font size changes for h1
+        - Width collapses (> 40% shrink between breakpoints)
+
+        Returns:
+            {
+              'changes': [                         # list of notable changes
+                {
+                  'selector': str,
+                  'property': str,
+                  'from_breakpoint': str,
+                  'to_breakpoint': str,
+                  'from_value': str,
+                  'to_value': str,
+                  'change_type': 'appeared' | 'disappeared' | 'layout_change' | 'size_change'
+                }
+              ],
+              'summary': str,                      # plain English
+              'mobile_hidden': [str],              # selectors hidden on mobile
+              'desktop_hidden': [str],             # selectors hidden on desktop (mobile-only)
+              'layout_collapses': [str],           # flex row→column or grid n→1
+              'confidence': int,
+            }
+        """
+        bp_results = breakpoint_data.get('breakpoints', [])
+        if len(bp_results) < 2:
+            return {'changes': [], 'summary': 'Not enough breakpoints for diff', 'confidence': 0}
+
+        # Build lookup: {breakpoint_name: {selector: element_data}}
+        snapshots: Dict[str, Dict[str, Dict]] = {}
+        for bp in bp_results:
+            name = bp['breakpoint']
+            dom = bp.get('dom_snapshot', [])
+            snapshots[name] = {}
+            for el in dom:
+                sel = el['selector']
+                # Use first occurrence per selector per breakpoint
+                if sel not in snapshots[name]:
+                    snapshots[name][sel] = el
+
+        bp_names = [bp['breakpoint'] for bp in bp_results]
+        changes = []
+        mobile_hidden: List[str] = []
+        desktop_hidden: List[str] = []
+        layout_collapses: List[str] = []
+
+        def is_hidden(el: Dict) -> bool:
+            return (el.get('display') == 'none' or
+                    el.get('visibility') == 'hidden' or
+                    el.get('opacity') == '0' or
+                    el.get('width', 1) == 0 or
+                    el.get('height', 1) == 0)
+
+        # Compare consecutive pairs: mobile→tablet, tablet→desktop
+        pairs = [(bp_names[i], bp_names[i+1]) for i in range(len(bp_names) - 1)]
+        # Also compare mobile→desktop directly for the full range
+        if len(bp_names) >= 3:
+            pairs.append((bp_names[0], bp_names[-1]))
+
+        seen_change_keys = set()
+
+        for from_bp, to_bp in pairs:
+            from_snap = snapshots.get(from_bp, {})
+            to_snap   = snapshots.get(to_bp, {})
+            all_sels  = set(from_snap) | set(to_snap)
+
+            for sel in all_sels:
+                from_el = from_snap.get(sel)
+                to_el   = to_snap.get(sel)
+                change_key_base = f"{sel}|{from_bp}->{to_bp}"
+
+                # Appeared / disappeared
+                from_hidden = is_hidden(from_el) if from_el else True
+                to_hidden   = is_hidden(to_el)   if to_el   else True
+
+                if from_hidden != to_hidden:
+                    ctype = 'disappeared' if to_hidden else 'appeared'
+                    ck = f"{sel}|{ctype}"
+                    if ck not in seen_change_keys:
+                        seen_change_keys.add(ck)
+                        changes.append({
+                            'selector': sel,
+                            'property': 'display/visibility',
+                            'from_breakpoint': from_bp,
+                            'to_breakpoint': to_bp,
+                            'from_value': 'visible' if not from_hidden else 'hidden',
+                            'to_value':   'hidden'  if to_hidden   else 'visible',
+                            'change_type': ctype,
+                        })
+                        if ctype == 'disappeared' and from_bp == 'mobile':
+                            pass  # hidden at tablet+ not mobile-specific
+                        elif ctype == 'disappeared' and to_bp in ('tablet', 'desktop'):
+                            mobile_only = not any(
+                                not is_hidden(snapshots.get(n, {}).get(sel, {'display': 'none'}))
+                                for n in bp_names if n not in ('mobile',)
+                            )
+                            if from_bp == 'mobile' and mobile_only:
+                                desktop_hidden.append(sel)
+                        if ctype == 'appeared' and from_bp == 'mobile' and not to_hidden:
+                            pass  # visible at larger breakpoint but not mobile → mobile_hidden
+                        if from_hidden and from_bp == 'mobile' and not to_hidden:
+                            if sel not in mobile_hidden:
+                                mobile_hidden.append(sel)
+                    continue  # Skip property-level diff if visibility toggled
+
+                if not from_el or not to_el or from_hidden or to_hidden:
+                    continue
+
+                # Flex direction change (row → column = stacking)
+                from_dir = from_el.get('flexDirection', '')
+                to_dir   = to_el.get('flexDirection', '')
+                if from_dir and to_dir and from_dir != to_dir:
+                    ck = f"{sel}|flex_dir|{from_bp}->{to_bp}"
+                    if ck not in seen_change_keys:
+                        seen_change_keys.add(ck)
+                        changes.append({
+                            'selector': sel,
+                            'property': 'flexDirection',
+                            'from_breakpoint': from_bp,
+                            'to_breakpoint': to_bp,
+                            'from_value': from_dir,
+                            'to_value': to_dir,
+                            'change_type': 'layout_change',
+                        })
+                        if from_dir == 'row' and to_dir == 'column' and from_bp == 'desktop':
+                            layout_collapses.append(f"{sel}: flex row→column at {to_bp}")
+                        elif from_dir == 'column' and to_dir == 'row' and to_bp == 'desktop':
+                            layout_collapses.append(f"{sel}: flex column→row at {to_bp}")
+
+                # Grid column collapse
+                from_grid = from_el.get('gridTemplateColumns', '')
+                to_grid   = to_el.get('gridTemplateColumns', '')
+                if from_grid and to_grid and from_grid != to_grid and from_grid != 'none' and to_grid != 'none':
+                    ck = f"{sel}|grid_cols|{from_bp}->{to_bp}"
+                    if ck not in seen_change_keys:
+                        seen_change_keys.add(ck)
+                        changes.append({
+                            'selector': sel,
+                            'property': 'gridTemplateColumns',
+                            'from_breakpoint': from_bp,
+                            'to_breakpoint': to_bp,
+                            'from_value': from_grid[:80],
+                            'to_value': to_grid[:80],
+                            'change_type': 'layout_change',
+                        })
+                        layout_collapses.append(f"{sel}: grid columns changed at {to_bp}")
+
+                # Font size change for headings / h1
+                if sel == 'h1' and from_el.get('fontSize') and to_el.get('fontSize'):
+                    from_sz = from_el['fontSize']
+                    to_sz   = to_el['fontSize']
+                    if from_sz != to_sz:
+                        ck = f"{sel}|fontSize|{from_bp}->{to_bp}"
+                        if ck not in seen_change_keys:
+                            seen_change_keys.add(ck)
+                            changes.append({
+                                'selector': sel,
+                                'property': 'fontSize',
+                                'from_breakpoint': from_bp,
+                                'to_breakpoint': to_bp,
+                                'from_value': from_sz,
+                                'to_value': to_sz,
+                                'change_type': 'size_change',
+                            })
+
+                # Significant width collapse (> 40% shrink from desktop→mobile)
+                if from_bp == 'desktop' and to_bp == 'mobile':
+                    fw = from_el.get('width', 0)
+                    tw = to_el.get('width', 0)
+                    if fw > 200 and tw > 0 and (fw - tw) / fw > 0.4:
+                        ck = f"{sel}|width_collapse"
+                        if ck not in seen_change_keys:
+                            seen_change_keys.add(ck)
+                            changes.append({
+                                'selector': sel,
+                                'property': 'width',
+                                'from_breakpoint': from_bp,
+                                'to_breakpoint': to_bp,
+                                'from_value': f'{fw}px',
+                                'to_value': f'{tw}px',
+                                'change_type': 'size_change',
+                            })
+
+        # ── Plain-English summary ──────────────────────────────────────────
+        n_changes = len(changes)
+        n_hide    = len(mobile_hidden)
+        n_collapse = len(layout_collapses)
+
+        summary_parts = []
+        if n_hide:
+            summary_parts.append(f"{n_hide} element(s) hidden on mobile ({', '.join(mobile_hidden[:3])})")
+        if n_collapse:
+            summary_parts.append(f"{n_collapse} layout collapse(s) detected")
+        if n_changes == 0:
+            summary_parts.append("No major responsive changes detected")
+
+        summary = "; ".join(summary_parts) or f"{n_changes} responsive change(s) across breakpoints"
+
+        return {
+            'changes': changes[:40],  # cap for JSON safety
+            'summary': summary,
+            'mobile_hidden': list(dict.fromkeys(mobile_hidden)),
+            'desktop_hidden': list(dict.fromkeys(desktop_hidden)),
+            'layout_collapses': list(dict.fromkeys(layout_collapses))[:10],
+            'breakpoints_compared': bp_names,
+            'confidence': min(90, 30 + len(changes) * 5),
         }
 
     async def _capture_z_tier_screenshots(self, page, z_index_data: Dict):
@@ -8197,6 +8782,76 @@ class DeepEvidenceEngine:
                 'category': 'section'
             })
 
+        # ── URL pattern cluster suggestions ──────────────────────────────────
+        # The URL pattern extractor discovers structured templates like
+        # /shows/:slug/episodes/:slug2 with real example paths.  These are
+        # the best "what to scan next" signal for deep content sites (media,
+        # e-commerce, docs) but were previously never surfaced into suggestions.
+        raw_clusters = links.get('url_pattern_clusters') or []
+        if not raw_clusters:
+            # Fall back to the url_patterns dict built from all_paths
+            raw_clusters = url_patterns.get('clusters', [])
+
+        # Rank clusters: deeper path + more examples = more interesting template
+        def _cluster_priority(c):
+            depth   = c.get('depth', 1)
+            count   = c.get('count', 1)
+            return depth * 2 + (1 if count >= 5 else 0)
+
+        sorted_clusters = sorted(raw_clusters, key=_cluster_priority, reverse=True)
+
+        # Semantic labels for common path segment patterns
+        def _cluster_label(template: str) -> str:
+            t = template.lower()
+            if '/episodes/' in t or '/episode/' in t:
+                return 'episode detail'
+            if '/shows/' in t or '/show/' in t:
+                return 'show page'
+            if '/articles/' in t or '/article/' in t or '/posts/' in t or '/post/' in t:
+                return 'article'
+            if '/products/' in t or '/product/' in t or '/items/' in t:
+                return 'product page'
+            if '/category/' in t or '/categories/' in t or '/genre/' in t:
+                return 'category listing'
+            if '/tags/' in t or '/tag/' in t:
+                return 'tag listing'
+            if '/authors/' in t or '/author/' in t or '/profiles/' in t:
+                return 'author/profile page'
+            if '/docs/' in t or '/documentation/' in t or '/guide/' in t:
+                return 'documentation page'
+            if '/search' in t:
+                return 'search results'
+            depth = template.count('/')
+            return f'content page (depth {depth})'
+
+        added_templates: set = set()
+        for cluster in sorted_clusters[:4]:
+            template = cluster.get('template', '')
+            count    = cluster.get('count', 0)
+            examples = cluster.get('examples', [])
+            if not examples or template in added_templates:
+                continue
+            # Build a fully-qualified example URL
+            example_path = examples[0].get('path', '') if isinstance(examples[0], dict) else str(examples[0])
+            example_url  = base_url + example_path if example_path.startswith('/') else example_path
+            if example_url in seen_urls:
+                continue
+            added_templates.add(template)
+            seen_urls.add(example_url)
+            label = _cluster_label(template)
+            suggestions.append({
+                'url': example_url,
+                'reason': (
+                    f'{count} {label} pages found at template {template!r}. '
+                    f'Scan this example to see the {label} layout — '
+                    f'compare component zones, type scale usage, and spacing against this page.'
+                ),
+                'priority': 'high' if cluster.get('depth', 1) >= 3 else 'medium',
+                'category': 'content_template',
+                'template': template,
+                'total_in_pattern': count,
+            })
+
         # ── Evidence-aware tips ──
         tips = []
 
@@ -8235,6 +8890,57 @@ class DeepEvidenceEngine:
         if bp_count > 0:
             tips.append(f'{bp_count} breakpoints detected. Responsive screenshots (mobile/tablet/desktop) are included in evidence.responsive_screenshots.')
 
+        # ── Buried endpoint detection ─────────────────────────────────────────
+        # Find URL template clusters that appear in page content but are NOT
+        # reachable from the nav structure.  These are the "hidden" templates —
+        # things like /artists/:id on NTS that only appear inside tracklist hrefs,
+        # or /shows/:slug that only appear inside episode page headers.
+        #
+        # Method: build a set of first-path-segment prefixes from nav links.
+        # A cluster is "buried" if none of its examples share a first-segment
+        # prefix with any nav link.  Simple, fast, O(n) — no fuzzy matching needed.
+        nav_prefixes: set = set()
+        for nav_url in links.get('navigation', []):
+            try:
+                seg = urlparse(nav_url).path.strip('/').split('/')[0]
+                if seg:
+                    nav_prefixes.add(seg)
+            except Exception:
+                pass
+
+        buried_endpoints: List[dict] = []
+        for cluster in raw_clusters:
+            template  = cluster.get('template', '')
+            examples  = cluster.get('examples', [])
+            count     = cluster.get('count', 0)
+            depth     = cluster.get('depth', 1)
+            if not examples or count < 2:
+                continue
+            # Check whether any example shares a nav prefix
+            is_nav_visible = False
+            for ex in examples[:3]:
+                path = ex.get('path', '') if isinstance(ex, dict) else str(ex)
+                first_seg = path.strip('/').split('/')[0] if path else ''
+                if first_seg in nav_prefixes:
+                    is_nav_visible = True
+                    break
+            if not is_nav_visible:
+                ex_path  = examples[0].get('path', '') if isinstance(examples[0], dict) else str(examples[0])
+                ex_url   = base_url.rstrip('/') + ex_path if ex_path.startswith('/') else ex_path
+                buried_endpoints.append({
+                    'template':        template,
+                    'count':           count,
+                    'depth':           depth,
+                    'example_url':     ex_url,
+                    'label':           _cluster_label(template),
+                    'discovery_note':  (
+                        f'Found in page content ({count} links) but not reachable '
+                        f'from the navigation — only accessible by following in-page links.'
+                    ),
+                })
+        # Sort buried by depth desc (deeper = more interesting)
+        buried_endpoints.sort(key=lambda b: b['depth'], reverse=True)
+
         return {
             'discovered_links': {
                 'navigation': links.get('navigation', []),
@@ -8245,6 +8951,7 @@ class DeepEvidenceEngine:
             },
             'suggested_next_steps': suggestions[:8],
             'url_patterns': url_patterns,
+            'buried_endpoints': buried_endpoints,
             'analysis_tips': tips,
             'current_page_type': page_type,
             'base_url': base_url

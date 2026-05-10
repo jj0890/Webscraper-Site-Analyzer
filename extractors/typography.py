@@ -219,12 +219,23 @@ class TypographyExtractor(BaseExtractor):
                 'sizes_px': [s for s in all_sizes_raw if s.endswith('px')][:12],
             }
 
-        ratio = sizes[0] / sizes[1] if sizes[1] > 0 else 1
+        # Sort descending so ratio = largest / second-largest regardless of DOM order.
+        # Previously used sizes[0]/sizes[1] (DOM order), which gave garbage ratios
+        # when smaller headings appeared earlier in the DOM (e.g. H4 before H2).
+        sorted_sizes = sorted([s for s in sizes if s > 0], reverse=True)
+        ratio = sorted_sizes[0] / sorted_sizes[1] if len(sorted_sizes) >= 2 and sorted_sizes[1] > 0 else 1
 
         return {
             'ratio': round(ratio, 2),
             'sizes_px': [s for s in all_sizes_raw if s.endswith('px')][:12],
-            'heading_sizes_px': [f"{s}px" for s in sizes],
+            'heading_sizes_px': [f"{s}px" for s in sorted_sizes],
+            '_meta': {
+                'ratio': {
+                    'source': 'computed',
+                    'method': 'largest_heading / second_largest_heading (sorted descending)',
+                    'raw_sizes_px': sorted_sizes,
+                }
+            },
         }
 
     @staticmethod

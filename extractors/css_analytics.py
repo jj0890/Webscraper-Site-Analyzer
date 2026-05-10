@@ -15,6 +15,7 @@ ratios, modern CSS feature detection, custom property sophistication,
 DTCG-classifiable design tokens, transition source patterns, pseudo-elements.
 """
 
+import asyncio
 import logging
 import re
 from typing import Dict, List, Any
@@ -367,36 +368,43 @@ class CSSAnalyticsExtractor(BaseExtractor):
 
             logger.info("Fetching %d cross-origin stylesheets via fetch()", len(sheet_urls))
 
-            # Fetch each stylesheet using in-page fetch() (uses browser cache + cookies)
+            # Fetch all stylesheets in parallel using Promise.allSettled.
+            # Each sheet is independent — CORS failures on some shouldn't
+            # block or abort the rest.  allSettled (vs Promise.all) guarantees
+            # we collect every sheet that succeeds, regardless of how many fail.
             all_css = await ctx.page.evaluate('''async (urls) => {
-                const results = [];
-                for (const url of urls) {
-                    try {
-                        const resp = await fetch(url, {mode: 'cors'});
-                        if (resp.ok) {
-                            const text = await resp.text();
-                            if (text) results.push(text);
-                        }
-                    } catch (e) {
-                        // CORS blocked — try no-cors (won't get body, skip)
-                    }
-                }
-                return results;
+                const settled = await Promise.allSettled(
+                    urls.map(url =>
+                        fetch(url, { mode: 'cors' })
+                            .then(r => r.ok ? r.text() : Promise.reject(r.status))
+                    )
+                );
+                return settled
+                    .filter(r => r.status === 'fulfilled' && r.value && r.value.length > 10)
+                    .map(r => r.value);
             }''', sheet_urls)
 
             if not all_css:
-                # Fallback: use Playwright request API (server-side, no CORS)
-                logger.info("In-page fetch failed for all sheets, trying Playwright request API")
-                all_css = []
-                for url in sheet_urls[:20]:  # Cap at 20 sheets
+                # Fallback: Playwright request API (server-side, bypasses CORS).
+                # Parallelised with asyncio.gather — same allSettled semantics on
+                # the Python side: collect successes, silently drop failures.
+                logger.info("In-page fetch failed; parallel Playwright fallback for %d sheets", len(sheet_urls))
+
+                async def _fetch_one(url: str):
                     try:
                         response = await ctx.page.context.request.get(url)
                         if response.ok:
                             text = await response.text()
-                            if text and len(text) > 50:
-                                all_css.append(text)
+                            return text if text and len(text) > 50 else None
                     except Exception:
                         pass
+                    return None
+
+                results = await asyncio.gather(
+                    *[_fetch_one(u) for u in sheet_urls[:20]],
+                    return_exceptions=False
+                )
+                all_css = [t for t in results if t]
 
             if not all_css:
                 return None

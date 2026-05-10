@@ -324,9 +324,32 @@ class ComponentRipper:
             const allClasses = Array.from(element.querySelectorAll('*'))
                 .flatMap(el => Array.from(el.classList));
 
-            // Tailwind detection (utility-first patterns)
-            const tailwindPatterns = /^(flex|grid|p-|m-|w-|h-|text-|bg-|border-|rounded-|shadow-)/;
-            frameworkHints.tailwind = allClasses.some(c => tailwindPatterns.test(c));
+            // Tailwind detection — requires Tailwind's specific token vocabulary.
+            // Bare prefixes like text-, bg-, border- are too broad: they also match
+            // BEM (text-bold, text-uppercase), Bootstrap (text-muted), Foundation (text-left).
+            // Tailwind is distinctive by its *closed token vocabulary* and numeric scale.
+            const isTailwindClass = (c) => (
+                // Standalone structural tokens (no suffix needed)
+                c === 'flex' || c === 'grid' || c === 'block' || c === 'hidden' ||
+                c === 'inline' || c === 'inline-flex' || c === 'inline-grid' ||
+                // flex- / grid- with Tailwind-style value (not "flex-start", "grid-area")
+                /^flex-(row|col|row-reverse|col-reverse|wrap|nowrap|1|auto|none|grow|shrink)$/.test(c) ||
+                /^grid-cols-\d+$/.test(c) ||
+                // Spacing utilities — numeric, fractional, or 'auto'
+                /^(p|m|px|py|pl|pr|pt|pb|mx|my|ml|mr|mt|mb|gap|space-[xy])-(auto|\d+(\.\d+)?|px|\[)/.test(c) ||
+                // Width/height — numeric, fractional, Tailwind keyword, or size token
+                /^(w|h|min-w|max-w|min-h|max-h)-(full|screen|auto|fit|max|min|xs|sm|md|lg|xl|2xl|3xl|4xl|prose|\d|px|\[)/.test(c) ||
+                // Text sizing — Tailwind's closed size scale only (not text-bold, text-center)
+                /^text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)$/.test(c) ||
+                // Color utilities — must end with Tailwind's numeric shade (e.g. bg-red-500, text-gray-900)
+                /^(bg|text|border|ring|shadow|outline|fill|stroke)-[a-z]+-\d{2,3}$/.test(c) ||
+                /^(bg|text|border)-(white|black|transparent|current)$/.test(c) ||
+                // Rounded with Tailwind keyword suffix
+                /^rounded(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-full|-t|-b|-l|-r)?$/.test(c) ||
+                // Shadow with Tailwind keyword suffix
+                /^shadow(-sm|-md|-lg|-xl|-2xl|-inner|-none)?$/.test(c)
+            );
+            frameworkHints.tailwind = allClasses.some(isTailwindClass);
 
             // Bootstrap detection
             frameworkHints.bootstrap = allClasses.some(c =>
@@ -457,28 +480,60 @@ class ComponentRipper:
             // Get inline styles
             const inlineStyles = element.style.cssText;
 
-            // Try to find stylesheet rules matching this element
+            // ── Direct-match rules ─────────────────────────────────────────────
             const matchingRules = [];
+            // ── Sibling-context rules (A + .component or .component + B) ─────
+            // CSS rules using the next-sibling combinator affect how this component
+            // appears in-context: margin-top, border-top, spacing overrides.
+            // Without these, a ripped component is missing its spacing contracts.
+            const siblingContextRules = [];
+
             for (const sheet of document.styleSheets) {{
                 try {{
                     const rules = sheet.cssRules || sheet.rules;
                     for (const rule of rules) {{
-                        if (rule.selectorText && element.matches(rule.selectorText)) {{
-                            matchingRules.push({{
-                                selector: rule.selectorText,
-                                css: rule.cssText
-                            }});
+                        if (!rule.selectorText) continue;
+                        // Direct match
+                        try {{
+                            if (element.matches(rule.selectorText)) {{
+                                matchingRules.push({{
+                                    selector: rule.selectorText,
+                                    css: rule.cssText.substring(0, 400)
+                                }});
+                            }}
+                        }} catch (e) {{}}
+
+                        // Sibling context: rule selector contains ' + ' and references
+                        // a token from our selector (class name or tag)
+                        const sel = rule.selectorText;
+                        if (sel.includes(' + ')) {{
+                            // Extract class names / tag from selector to check overlap
+                            const selectorTokens = selector
+                                .replace(/[.#\[\]]/g, ' ')
+                                .split(/\s+/)
+                                .filter(t => t.length > 1);
+                            const ruleHasToken = selectorTokens.some(t =>
+                                sel.includes(t)
+                            );
+                            if (ruleHasToken) {{
+                                siblingContextRules.push({{
+                                    selector: sel,
+                                    css: rule.cssText.substring(0, 400),
+                                    note: 'next-sibling combinator — affects in-context spacing'
+                                }});
+                            }}
                         }}
                     }}
                 }} catch (e) {{
-                    // CORS or security restriction, skip this sheet
+                    // CORS or security restriction on this sheet
                 }}
             }}
 
             return {{
                 sourceHTML: sourceHTML,
                 inlineStyles: inlineStyles,
-                matchingCSSRules: matchingRules
+                matchingCSSRules: matchingRules,
+                siblingContextRules: siblingContextRules.slice(0, 20),
             }};
         }}''', selector)
 
@@ -1778,9 +1833,18 @@ export default {component_name};'''
                 total: uniqueClasses.length,
                 allClasses: uniqueClasses,
                 categories: categories,
-                isTailwind: uniqueClasses.some(c =>
-                    /^(flex|grid|p-|m-|w-|h-|text-|bg-|border-|rounded-|shadow-)/.test(c)
-                )
+                isTailwind: uniqueClasses.some(c => (
+                    c === 'flex' || c === 'grid' || c === 'hidden' ||
+                    /^flex-(row|col|row-reverse|col-reverse|wrap|nowrap|1|auto|none|grow|shrink)$/.test(c) ||
+                    /^grid-cols-\d+$/.test(c) ||
+                    /^(p|m|px|py|pl|pr|pt|pb|mx|my|ml|mr|mt|mb|gap|space-[xy])-(auto|\d+(\.\d+)?|px|\[)/.test(c) ||
+                    /^(w|h|min-w|max-w|min-h|max-h)-(full|screen|auto|fit|max|min|xs|sm|md|lg|xl|2xl|3xl|4xl|prose|\d|px|\[)/.test(c) ||
+                    /^text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)$/.test(c) ||
+                    /^(bg|text|border|ring|shadow|outline|fill|stroke)-[a-z]+-\d{2,3}$/.test(c) ||
+                    /^(bg|text|border)-(white|black|transparent|current)$/.test(c) ||
+                    /^rounded(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-full|-t|-b|-l|-r)?$/.test(c) ||
+                    /^shadow(-sm|-md|-lg|-xl|-2xl|-inner|-none)?$/.test(c)
+                ))
             }};
         }}''', selector)
 

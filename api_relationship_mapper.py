@@ -51,6 +51,7 @@ class APIRelationshipMapper:
         endpoints = self._extract_endpoints()
         semantic_map = self._classify_semantic_roles(endpoints)
         design_insights = self._generate_design_insights(semantic_map, endpoints)
+        capabilities = self._infer_capabilities(semantic_map, endpoints)
         relationships = self._detect_relationships()
         data_deps = self._find_data_dependencies()
         redundant = self._find_redundant_requests()
@@ -68,6 +69,7 @@ class APIRelationshipMapper:
             'endpoints': endpoints,
             'semantic_classification': semantic_map,
             'design_insights': design_insights,
+            'capabilities': capabilities,
             'relationships': relationships,
             'data_dependencies': data_deps,
             'redundant_requests': redundant,
@@ -616,6 +618,196 @@ class APIRelationshipMapper:
             mermaid += f'    B{i}["{method}: {count} calls"]\n'
             mermaid += f'    A --> B{i}\n'
         return mermaid
+
+    def _infer_capabilities(self, semantic_map: Dict, endpoints: List[Dict]) -> Dict:
+        """
+        Translate endpoint map → plain-language capability statements.
+
+        Groups what the site *can do* into human-readable bullets so that
+        an LLM consumer (or designer) can read this without parsing raw paths.
+
+        Returns:
+            {
+              'summary': str,              # 1-sentence site characterization
+              'can_do': [str],             # plain-language capability bullets
+              'requires_auth': [str],      # categories that seem auth-gated
+              'public_actions': [str],     # categories accessible without auth
+              'detected_features': {str: bool},  # feature flags
+              'recommended_use_cases': [str],    # practical suggestions
+            }
+        """
+        cats = set(semantic_map.keys()) - {'unclassified'}
+
+        has_auth         = 'authentication'  in cats
+        has_content      = 'content'         in cats
+        has_user         = 'user'            in cats
+        has_search       = 'search'          in cats
+        has_interaction  = 'interaction'     in cats
+        has_monetization = 'monetization'    in cats
+        has_analytics    = 'analytics'       in cats
+        has_flags        = 'feature_flags'   in cats
+        has_ads          = 'advertising'     in cats
+        has_config       = 'config'          in cats
+
+        # Detect realtime (WebSocket hints in URLs)
+        has_realtime = any(
+            'ws' in ep.get('full_url', '') or 'socket' in ep.get('full_url', '') or
+            'push' in ep.get('full_url', '') or 'stream' in ep.get('full_url', '')
+            for ep in endpoints
+        )
+
+        # ── Capability bullets ────────────────────────────────────────────
+        can_do: List[str] = []
+        public_actions: List[str] = []
+        requires_auth: List[str] = []
+
+        if has_content:
+            can_do.append("Read and browse content (articles, posts, or catalog items)")
+            public_actions.append('content')
+        if has_search:
+            can_do.append("Search and filter content via API")
+            public_actions.append('search')
+        if has_auth:
+            if has_user:
+                can_do.append("Create and manage user accounts (sign up, sign in, profile)")
+            else:
+                can_do.append("Authenticate users (login / token-based)")
+        if has_interaction:
+            can_do.append("Social interactions: likes, comments, follows, reactions (auth likely required)")
+            requires_auth.append('interaction')
+        if has_monetization:
+            can_do.append("Monetize via subscriptions or paywall (checkout, billing)")
+            requires_auth.append('monetization')
+        if has_realtime:
+            can_do.append("Deliver real-time updates (WebSocket or streaming)")
+        if has_flags:
+            can_do.append("Run A/B experiments and feature flags")
+        if has_analytics:
+            can_do.append("Track user behavior with analytics/telemetry (passive, no auth needed)")
+            public_actions.append('analytics')
+
+        # ── Site characterization summary ─────────────────────────────────
+        # Infer site archetype from dominant category combo
+        if has_content and has_monetization and has_interaction:
+            archetype = "a subscription media platform with social features"
+        elif has_content and has_interaction and not has_monetization:
+            archetype = "a social content platform"
+        elif has_content and has_monetization and not has_interaction:
+            archetype = "a paywalled content site"
+        elif has_content and has_search and not has_interaction:
+            archetype = "a searchable content or documentation site"
+        elif has_monetization and not has_content:
+            archetype = "an e-commerce or SaaS billing platform"
+        elif has_user and has_auth and not has_content:
+            archetype = "an authenticated app or dashboard"
+        elif has_content and not has_auth:
+            archetype = "a read-only public content site"
+        elif cats:
+            archetype = f"a site with {', '.join(list(cats)[:3])} capabilities"
+        else:
+            archetype = "a website with limited detectable API surface"
+
+        summary = f"This appears to be {archetype}."
+        if has_auth:
+            summary += " Authentication is required for personalized features."
+        if has_flags:
+            summary += " Feature flags suggest active A/B testing infrastructure."
+
+        # ── Recommended use cases ─────────────────────────────────────────
+        use_cases: List[str] = []
+        if has_content and not has_auth:
+            use_cases.append("Read-only content scraping or indexing (no auth required)")
+        if has_search:
+            use_cases.append("Search API integration for content discovery")
+        if has_auth and has_content:
+            use_cases.append("Authenticated content access (requires valid session/token)")
+        if has_realtime:
+            use_cases.append("Real-time feed subscription (WebSocket listener)")
+        if not use_cases:
+            use_cases.append("Inspect network traffic for undocumented API surface")
+
+        # ── Probable undiscovered endpoints ──────────────────────────────────
+        # When versioned REST paths are visible (e.g. /api/v2/live, /api/v2/mixtapes),
+        # the namespace likely has more resources than the page happened to call.
+        # Infer probable siblings from the API base + common REST resource names
+        # for this site archetype — surfaces things like /api/v2/shows, /api/v2/artists
+        # that only get called on pages we haven't scanned yet.
+        probable_endpoints: List[Dict] = []
+        seen_api_bases: set = set()
+
+        for ep in endpoints:
+            full_url = ep.get('full_url', '')
+            parsed   = urlparse(full_url)
+            path     = parsed.path
+
+            # Find versioned API base: /api/v1/, /api/v2/, /v1/, /v2/, etc.
+            m = re.match(r'^((?:/[^/]+)?/(?:api/)?v\d+)', path)
+            if not m:
+                continue
+            api_base = f"{parsed.scheme}://{parsed.netloc}{m.group(1)}"
+            if api_base in seen_api_bases:
+                continue
+            seen_api_bases.add(api_base)
+
+            # Resource names that are actually called
+            called_resources: set = set()
+            for e2 in endpoints:
+                p2 = urlparse(e2.get('full_url', '')).path
+                if p2.startswith(m.group(1)):
+                    # Extract first segment after the base
+                    rest = p2[len(m.group(1)):].strip('/')
+                    resource = rest.split('/')[0].split('?')[0]
+                    if resource and not resource.isdigit():
+                        called_resources.add(resource)
+
+            # Archetype-specific probable siblings
+            archetype_resources: Dict[str, List[str]] = {
+                'subscription media platform':  ['shows', 'artists', 'episodes', 'playlists', 'genres', 'users'],
+                'paywalled content site':       ['shows', 'artists', 'episodes', 'collections', 'users'],
+                'social content platform':      ['users', 'posts', 'comments', 'feeds', 'follows'],
+                'searchable content or documentation site': ['search', 'docs', 'articles', 'categories'],
+                'e-commerce or SaaS billing platform': ['products', 'orders', 'customers', 'plans'],
+                'authenticated app or dashboard': ['users', 'accounts', 'settings', 'dashboard'],
+                'read-only public content site': ['posts', 'pages', 'categories', 'tags'],
+            }
+            probable_siblings = archetype_resources.get(archetype, ['search', 'users', 'content'])
+
+            for resource in probable_siblings:
+                if resource in called_resources:
+                    continue  # Already observed — not a gap
+                probable_url = f"{api_base}/{resource}"
+                probable_endpoints.append({
+                    'url': probable_url,
+                    'resource': resource,
+                    'confidence': 'medium',
+                    'rationale': (
+                        f"Inferred from API namespace {m.group(1)!r}. "
+                        f"Observed resources: {sorted(called_resources)}. "
+                        f"Common for {archetype}."
+                    ),
+                    'how_to_verify': f"Open DevTools → Network tab → navigate to a {resource} page and filter for {m.group(1)}/{resource}",
+                })
+
+        return {
+            'summary': summary,
+            'can_do': can_do,
+            'requires_auth': list(dict.fromkeys(requires_auth)),
+            'public_actions': list(dict.fromkeys(public_actions)),
+            'detected_features': {
+                'authentication': has_auth,
+                'content_api': has_content,
+                'search': has_search,
+                'social_interactions': has_interaction,
+                'monetization': has_monetization,
+                'realtime': has_realtime,
+                'feature_flags': has_flags,
+                'analytics_tracking': has_analytics,
+                'advertising': has_ads,
+                'consent_config': has_config,
+            },
+            'recommended_use_cases': use_cases,
+            'probable_undiscovered_endpoints': probable_endpoints[:12],
+        }
 
     def _calculate_stats(self, endpoints, relationships, data_deps, redundant) -> Dict:
         """

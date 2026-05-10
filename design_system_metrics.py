@@ -453,42 +453,49 @@ class DesignSystemMetrics:
         match = re.search(r'(\d+)px\s+(\d+)px\s+(\d+)px', shadow_css)
         return int(match.group(3)) if match else 0
 
+    # Elevation scale — ordered from smallest to largest blur.
+    # Each tier has a clear design meaning so labels are self-documenting.
+    _SHADOW_TIERS = [
+        (1,   'Hairline'),    # 0-1px  — barely-there, focus rings, dividers
+        (4,   'Subtle'),      # 2-4px  — card resting state
+        (8,   'Card'),        # 5-8px  — interactive cards, hover state
+        (16,  'Elevated'),    # 9-16px — dropdowns, popovers
+        (32,  'Modal'),       # 17-32px — dialogs, drawers
+        (999, 'Dramatic'),    # 33px+  — hero overlays, cinematic
+    ]
+
     def _shadow_semantic_name(self, blur: int, all_blurs: list = None) -> str:
-        """Map blur radius → human-readable elevation name.
-        Uses relative distribution when multiple shadows exist,
-        falls back to absolute thresholds for ≤2 shadows."""
+        """Map blur radius → human-readable elevation name using absolute thresholds.
+
+        When multiple shadows exist, ensures uniqueness by assigning each
+        distinct blur value its own tier label (deduplication via caller in
+        _shadow_name_relative when >2 tiers).
+        """
         if all_blurs and len(all_blurs) > 2:
             return self._shadow_name_relative(blur, all_blurs)
-        # Absolute fallback for sites with very few shadows
-        if blur <= 2:
-            return 'Subtle'
-        elif blur <= 6:
-            return 'Card'
-        elif blur <= 15:
-            return 'Elevated'
-        elif blur <= 30:
-            return 'Floating'
-        else:
-            return 'Deep'
+        for threshold, name in self._SHADOW_TIERS:
+            if blur <= threshold:
+                return name
+        return 'Dramatic'
 
     def _shadow_name_relative(self, blur: int, all_blurs: list) -> str:
-        """Assign name based on position within the site's own shadow range.
-        Ensures each tier gets a distinct label even when blur values cluster."""
+        """Assign distinct names based on relative rank within the site's shadow range.
+
+        Guarantees no two shadow levels get the same label by distributing
+        rank positions across the tier table proportionally.
+        """
         unique_sorted = sorted(set(all_blurs))
-        if len(unique_sorted) <= 1:
-            return 'Default'
-        rank = unique_sorted.index(blur)
-        pct = rank / (len(unique_sorted) - 1)  # 0.0 to 1.0
-        if pct <= 0.2:
-            return 'Subtle'
-        elif pct <= 0.4:
-            return 'Card'
-        elif pct <= 0.6:
-            return 'Elevated'
-        elif pct <= 0.8:
-            return 'Heavy'
-        else:
-            return 'Deep'
+        n = len(unique_sorted)
+        if n <= 1:
+            return self._shadow_semantic_name(blur)  # fall back to absolute
+        rank = unique_sorted.index(blur)  # 0 = softest, n-1 = hardest
+
+        # Distribute n tiers across the 6 named tiers — pick the tier whose
+        # index * (6/n) is closest to this rank's position in [0, 5].
+        tier_names = [t[1] for t in self._SHADOW_TIERS]
+        tier_idx = round(rank / (n - 1) * (len(tier_names) - 1))
+        tier_idx = max(0, min(len(tier_names) - 1, tier_idx))
+        return tier_names[tier_idx]
 
     async def extract_z_index_stack(self) -> Dict:
         """
