@@ -6075,7 +6075,8 @@
                         { key: 'responsive_breakpoints', icon: '📱', title: 'Responsive Breakpoints' },
                         { key: 'z_index_stack', icon: '📚', title: 'Page Layers' },
                         { key: 'dom_depth', icon: '🌳', title: 'DOM Depth' },
-                        { key: 'site_topology', icon: '🏛', title: 'Information Architecture' }
+                        { key: 'site_topology', icon: '🏛', title: 'Information Architecture' },
+                        { key: 'component_blueprints', icon: '🧩', title: 'Component Blueprints' }
                     ]
                 },
                 {
@@ -6860,6 +6861,8 @@
                 bodyHTML = createAPIMapCard(icon, title, data, confidenceClass);
             } else if (title === 'Reading Experience' || title === 'Content Layout') {
                 bodyHTML = createContentLayoutCard(icon, title, data, confidenceClass);
+            } else if (title === 'Component Blueprints') {
+                bodyHTML = createComponentBlueprintsCard(icon, title, data, confidenceClass);
             } else {
                 bodyHTML = createDefaultCardBody(icon, title, data, confidenceClass);
             }
@@ -10373,6 +10376,83 @@
                 ${!isSinglePage ? techHTML : ''}
                 ${urlSource !== 'unknown' ? '<div style="text-align:right; margin-top:0.3rem;"><span style="font-size:0.56rem; color:#444; background:rgba(255,255,255,0.03); padding:2px 6px; border-radius:4px;">via ' + sourceLabel + '</span></div>' : ''}
             `;
+        }
+
+        // ── Component Blueprints Card ────────────────────────────────────
+        function createComponentBlueprintsCard(icon, title, data, confidenceClass) {
+            const blueprints = data.blueprints || [];
+            const discovered = data.total_discovered || 0;
+            const ripped     = data.total_ripped || blueprints.length || 0;
+
+            const stabilityIcon = {
+                stable:   '✅',
+                fragile:  '⚠️',
+                unstable: '🔴',
+                unusable: '⛔',
+            };
+            const stabilityColor = {
+                stable:   'var(--success, #4ade80)',
+                fragile:  'var(--warning)',
+                unstable: '#f87171',
+                unusable: '#6b7280',
+            };
+
+            const rows = blueprints.map(bp => {
+                const disc  = bp.discovery  || {};
+                const stab  = bp.selector_stability || {};
+                const label = disc.label    || disc.selector || '?';
+                const sel   = disc.selector || '?';
+                const cat   = disc.category || '';
+                const sIcon = stabilityIcon[stab.stability]  || '❓';
+                const sCol  = stabilityColor[stab.stability] || 'var(--text-tertiary)';
+                const score = stab.score != null ? stab.score : '?';
+                const warnings = (stab.warnings || []).map(w =>
+                    `<div style="font-size:0.65rem;color:var(--text-tertiary);margin-top:2px;padding-left:var(--space-3)">↳ ${_escHtml(w.recommendation || w.message || '')}</div>`
+                ).join('');
+
+                return `
+                    <div style="padding:var(--space-3) 0;border-bottom:1px solid var(--border-subtle)">
+                        <div style="display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap">
+                            <span style="font-size:1rem">${sIcon}</span>
+                            <span style="flex:1;min-width:0;font-size:var(--text-sm);font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_escHtml(label)}">${_escHtml(label)}</span>
+                            <span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-tertiary);background:var(--surface-3);padding:1px 6px;border-radius:var(--radius-full)">${_escHtml(cat)}</span>
+                            <span style="font-family:var(--font-mono);font-size:0.65rem;font-weight:700;color:${sCol}">${score}/100</span>
+                        </div>
+                        <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-tertiary);margin-top:var(--space-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_escHtml(sel)}">${_escHtml(sel)}</div>
+                        ${warnings}
+                    </div>`;
+            }).join('');
+
+            const noBlueprints = ripped === 0 ? `
+                <div style="text-align:center;padding:var(--space-6);color:var(--text-tertiary);font-size:var(--text-sm)">
+                    ${discovered} components discovered — none ripped yet
+                </div>` : '';
+
+            return `
+                <div class="metric-header">
+                    <span class="metric-icon">${icon}</span>
+                    <div>
+                        <div class="metric-title">${title}</div>
+                        <div class="metric-subtitle ${confidenceClass}">
+                            ${ripped} ripped · ${discovered} discovered
+                        </div>
+                    </div>
+                </div>
+                <div class="metric-body">
+                    <div style="display:flex;gap:var(--space-4);margin-bottom:var(--space-4)">
+                        <div style="flex:1;text-align:center;background:var(--surface-3);border-radius:var(--radius-md);padding:var(--space-3)">
+                            <div style="font-size:1.75rem;font-weight:800;color:var(--text-primary)">${ripped}</div>
+                            <div style="font-size:var(--text-xs);color:var(--text-tertiary)">ripped</div>
+                        </div>
+                        <div style="flex:1;text-align:center;background:var(--surface-3);border-radius:var(--radius-md);padding:var(--space-3)">
+                            <div style="font-size:1.75rem;font-weight:800;color:var(--text-secondary)">${discovered}</div>
+                            <div style="font-size:var(--text-xs);color:var(--text-tertiary)">discovered</div>
+                        </div>
+                    </div>
+                    ${noBlueprints}
+                    <div style="font-size:var(--text-xs);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-tertiary);margin-bottom:var(--space-2)">Selector Stability</div>
+                    ${rows}
+                </div>`;
         }
 
         // ── API Map Card ────────────────────────────────────────────────

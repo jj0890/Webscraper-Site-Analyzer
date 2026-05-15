@@ -16,6 +16,7 @@ import asyncio
 from patchright.async_api import async_playwright
 import json
 import logging
+import re
 from typing import Dict, List, Optional
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,6 +81,116 @@ window.__shadowTextNodes = function() {
     return nodes;
 };
 """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SELECTOR STABILITY SCORER
+# Rates CSS selectors for reusability across page loads and builds.
+# UUID IDs and CSS-in-JS hashes are build-specific artifacts — they carry
+# the shape of a component but are useless as targeting handles.
+# ─────────────────────────────────────────────────────────────────────────────
+_UUID_RE = re.compile(
+    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+    re.IGNORECASE,
+)
+_CSS_IN_JS_PATTERNS = [
+    (re.compile(r'css-[a-z0-9]{4,}'),         'Emotion'),
+    (re.compile(r'\bsc-[a-zA-Z0-9]{4,}'),     'styled-components'),
+    (re.compile(r'[a-z]+__[a-zA-Z0-9_-]{5,}'), 'CSS Modules'),
+    (re.compile(r'[a-z]+_[a-zA-Z0-9]{6,}'),   'JSS'),
+]
+_BARE_ELEMENT_RE = re.compile(
+    r'^(div|span|section|article|main|header|footer|nav|aside|ul|ol|li)\s*$'
+)
+_STRUCTURAL_ONLY_RE = re.compile(r'^[\w\s>+~:()\d-]+$')  # no . # [
+_SEMANTIC_BONUS_RE = re.compile(
+    r'\[role=["\']|\[aria-|\[data-testid=|\[data-component=|nav\.'
+    r'|header\.|footer\.|main\.|section\.'
+    r'|\.(?!css-|sc-|_)[a-z][a-z0-9-]{2,}',  # non-hashed class
+)
+
+
+def assess_selector_stability(selector: str) -> dict:
+    """
+    Rate a CSS selector's stability for cross-build and cross-load reuse.
+
+    Returns:
+        {
+            'selector': str,
+            'stability': 'stable' | 'fragile' | 'unstable' | 'unusable',
+            'score': int (0-100),
+            'warnings': [...],
+            'is_reusable': bool,
+        }
+    """
+    warnings = []
+    score = 100
+
+    # ── UUID IDs ──────────────────────────────────────────────────────────────
+    if _UUID_RE.search(selector):
+        warnings.append({
+            'type': 'dynamic_id',
+            'severity': 'critical',
+            'message': 'Selector contains a UUID. Regenerated on every render — will never match across page loads.',
+            'recommendation': 'Find a stable parent with a semantic class or data-attribute; target with :nth-child or [role].',
+        })
+        score -= 60
+
+    # ── CSS-in-JS hashes ─────────────────────────────────────────────────────
+    for pattern, framework in _CSS_IN_JS_PATTERNS:
+        if pattern.search(selector):
+            warnings.append({
+                'type': 'css_in_js_hash',
+                'framework': framework,
+                'severity': 'high',
+                'message': f'Selector contains a {framework} generated hash. Changes on every build.',
+                'recommendation': 'Use a data attribute, aria role, or structural parent selector instead.',
+            })
+            score -= 55  # same severity as UUID — useless across builds
+            break
+
+    # ── Bare element (no class, id, or attribute) ─────────────────────────────
+    if _BARE_ELEMENT_RE.match(selector.strip()):
+        warnings.append({
+            'type': 'generic_element',
+            'severity': 'high',
+            'message': 'Bare element selector — matches first instance, breaks on any DOM reorder.',
+            'recommendation': 'Add a containing context or look for a nearby landmark/data-attribute.',
+        })
+        score -= 50
+
+    # ── Structural-only (no semantic hooks at all) ────────────────────────────
+    elif not re.search(r'[.#\[]', selector) and _STRUCTURAL_ONLY_RE.match(selector):
+        warnings.append({
+            'type': 'structural_only',
+            'severity': 'medium',
+            'message': 'Selector relies purely on DOM structure. Any layout change breaks it.',
+            'recommendation': 'Look for aria-label, data-testid, or role attributes that survive refactors.',
+        })
+        score -= 30
+
+    # ── Semantic bonus ────────────────────────────────────────────────────────
+    if _SEMANTIC_BONUS_RE.search(selector):
+        score = min(100, score + 15)
+
+    score = max(0, score)
+
+    if score >= 80:
+        stability = 'stable'
+    elif score >= 50:
+        stability = 'fragile'
+    elif score >= 20:
+        stability = 'unstable'
+    else:
+        stability = 'unusable'
+
+    return {
+        'selector': selector,
+        'stability': stability,
+        'score': score,
+        'warnings': warnings,
+        'is_reusable': score >= 50,
+    }
 
 
 class ComponentRipper:
@@ -1039,6 +1150,7 @@ class ComponentRipper:
                 try:
                     blueprint = await self._rip_component(page, selector)
                     if 'error' not in blueprint:
+                        stability = assess_selector_stability(selector)
                         blueprints.append({
                             'discovery': {
                                 'selector': selector,
@@ -1048,6 +1160,7 @@ class ComponentRipper:
                                 'bounds': comp.get('bounds', {}),
                                 'screenshot': comp.get('screenshot'),
                             },
+                            'selector_stability': stability,
                             'blueprint': blueprint,
                         })
                 except Exception as e:
