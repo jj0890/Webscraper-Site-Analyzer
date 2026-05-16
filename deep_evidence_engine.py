@@ -8654,6 +8654,189 @@ class DeepEvidenceEngine:
         except Exception:
             return f"{key}: {data.get('pattern', 'analyzed')}"
 
+    def _detect_site_archetype(self, url: str, evidence: Dict, url_clusters: list) -> Dict:
+        """
+        Infer the site archetype from multi-signal evidence.
+
+        Returns:
+            {
+                'archetype': str,       # e.g. 'editorial_ecommerce'
+                'label': str,           # human label
+                'confidence': int,      # 0-100
+                'signals': [str],       # what evidence fired
+                'directed_extractions': [str],  # what's worth extracting for this archetype
+            }
+        """
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host   = parsed.netloc.lower()
+        path   = parsed.path.lower()
+
+        signals: List[str]  = []
+        score_map: Dict[str, int] = {}
+
+        def vote(archetype: str, weight: int, signal: str):
+            score_map[archetype] = score_map.get(archetype, 0) + weight
+            signals.append(signal)
+
+        # ── URL cluster signals ──────────────────────────────────────────
+        cluster_templates = ' '.join(c.get('template', '') for c in url_clusters).lower()
+        if any(k in cluster_templates for k in ['/fashion/', '/beauty/', '/celebrity/', '/style/', '/shopping/']):
+            vote('editorial_ecommerce', 30, 'URL templates contain editorial commerce sections')
+        if any(k in cluster_templates for k in ['/products/', '/collections/', '/shop/', '/items/', '/catalog/']):
+            vote('direct_ecommerce', 30, 'URL templates contain direct commerce patterns')
+        if any(k in cluster_templates for k in ['/episodes/', '/shows/', '/mixes/', '/artists/', '/residents/']):
+            vote('media_player', 30, 'URL templates contain media/stream patterns')
+        if any(k in cluster_templates for k in ['/docs/', '/api/', '/reference/', '/guide/', '/documentation/']):
+            vote('documentation', 25, 'URL templates contain documentation patterns')
+        if any(k in cluster_templates for k in ['/articles/', '/news/', '/opinion/', '/culture/', '/editorial/']):
+            vote('editorial_publisher', 25, 'URL templates contain editorial publishing patterns')
+        if any(k in cluster_templates for k in ['/pricing', '/features', '/enterprise', '/solutions/']):
+            vote('saas_marketing', 20, 'URL templates contain SaaS marketing pages')
+
+        # ── CSS custom property namespace signals ────────────────────────
+        css = evidence.get('css_analytics', {})
+        dtcg = css.get('dtcg_tokens', {})
+        cp_soph = css.get('custom_property_sophistication', {})
+        total_vars = cp_soph.get('total', 0)
+        # Named design systems
+        css_tricks_detail = evidence.get('css_tricks', {}).get('details', {})
+        all_props = css_tricks_detail.get('custom_properties', [])
+        if isinstance(all_props, list):
+            prop_str = ' '.join(str(p) for p in all_props[:50]).lower()
+            if '--hds-' in prop_str:
+                vote('editorial_ecommerce', 20, 'Hearst Design System (--hds-*) detected — editorial media brand')
+            if '--shopify-' in prop_str or '--theme-' in prop_str:
+                vote('direct_ecommerce', 15, 'Shopify/theme CSS variables detected')
+            if '--wp-' in prop_str:
+                vote('editorial_publisher', 10, 'WordPress CSS variables detected')
+
+        # ── Third-party service signals ──────────────────────────────────
+        third = evidence.get('third_party', {})
+        third_names = str(third).lower()
+        if any(k in third_names for k in ['bazaarvoice', 'monetate', 'certona', 'kibo', 'bloomreach', 'nosto']):
+            vote('editorial_ecommerce', 25, 'Ecommerce personalization/review platform detected')
+        if any(k in third_names for k in ['shopify', 'bigcommerce', 'woocommerce', 'magento']):
+            vote('direct_ecommerce', 25, 'Ecommerce platform detected in third-party scripts')
+        if any(k in third_names for k in ['soundcloud', 'spotify', 'audiomack', 'icecast', 'hls.js', 'dash.js']):
+            vote('media_player', 25, 'Audio/streaming service detected')
+        if any(k in third_names for k in ['stripe', 'paddle', 'chargebee', 'recurly']):
+            vote('saas_marketing', 20, 'SaaS billing platform detected')
+        if any(k in third_names for k in ['intercom', 'hubspot', 'drift', 'pendo']):
+            vote('saas_marketing', 15, 'SaaS CRM/growth tool detected')
+
+        # ── Content extraction signals ───────────────────────────────────
+        page_type = evidence.get('content_extraction', {}).get('page_type', '')
+        if page_type in ('contentGrid',):
+            # Content grids appear in both ecommerce and editorial — weak signal
+            if score_map.get('editorial_ecommerce', 0) > 0 or score_map.get('direct_ecommerce', 0) > 0:
+                vote('editorial_ecommerce', 5, 'Content grid layout consistent with editorial ecommerce')
+        if page_type in ('musicBlog', 'audioStream', 'podcastListing'):
+            vote('media_player', 20, f'Page type "{page_type}" detected')
+        if page_type in ('singleArticle', 'article'):
+            vote('editorial_publisher', 15, f'Page type "{page_type}" — article format')
+
+        # ── Image signals ────────────────────────────────────────────────
+        img = evidence.get('image_strategy', {})
+        grid_ratio = img.get('grid_aspect_ratio')
+        if grid_ratio:
+            # Portrait-dominant image grids (4:5, 3:4) = fashion/ecommerce
+            if 0.6 <= grid_ratio <= 0.9:
+                vote('editorial_ecommerce', 10, f'Portrait image grids ({grid_ratio}:1) typical of fashion editorial')
+                vote('direct_ecommerce', 10, f'Portrait image grids ({grid_ratio}:1) typical of fashion ecommerce')
+
+        # ── Determine winner ─────────────────────────────────────────────
+        if not score_map:
+            return {
+                'archetype': 'unknown',
+                'label': 'Unknown',
+                'confidence': 20,
+                'signals': [],
+                'directed_extractions': [
+                    'Scan 2-3 inner pages to establish the template system.',
+                    'Check URL patterns for /products/, /articles/, or /episodes/ to identify site purpose.',
+                ],
+            }
+
+        best_archetype = max(score_map, key=lambda k: score_map[k])
+        best_score     = score_map[best_archetype]
+        total_votes    = sum(score_map.values())
+        confidence     = min(95, int(best_score / max(total_votes, 1) * 100) + 20)
+
+        archetype_meta = {
+            'editorial_ecommerce': {
+                'label': 'Editorial Ecommerce',
+                'directed_extractions': [
+                    'Find product card variants — editorial sites typically have 3-4 variants (hero card, grid card, quick-shop card, related card). Use /api/discover-components to surface all card types then rip each.',
+                    'Extract commerce typography hierarchy: product name (truncation behavior?), price (sale vs. original treatment), brand name position, badge styles (New/Sale/Exclusive).',
+                    'Map the image aspect ratio system: editorial grids often use portrait (4:5 or 3:4) for product images and landscape (16:9) for editorial features. Evidence is in image_strategy.ratio_clusters.',
+                    'Analyze the mega-menu depth — editorial commerce nav reveals IA. Use Smart Nav mode to scan a category page and compare zone structure vs. homepage.',
+                    'Check grid breakpoint behavior: how many columns at mobile/tablet/desktop? Evidence is partially in responsive_breakpoints — scan a product grid page to get full column-count data.',
+                ],
+            },
+            'direct_ecommerce': {
+                'label': 'Direct Ecommerce',
+                'directed_extractions': [
+                    'Rip the product card — it is the primary reusable component. Find all variants (grid, featured, related, cart) via /api/discover-components.',
+                    'Extract the add-to-cart interaction: hover state, quick-add behavior, size selector pattern, post-add feedback (toast/mini-cart/modal).',
+                    'Map the responsive grid: column count at each breakpoint, gap values, CSS Grid vs. Flexbox strategy. Check spatial_composition.container_hierarchy.',
+                    'Document the price typography system: regular vs. sale price, currency format, relative sizing to product name.',
+                    'Audit the image handling: aspect ratio consistency, srcset breakpoints, lazy-load strategy. Check image_strategy evidence.',
+                ],
+            },
+            'media_player': {
+                'label': 'Media / Streaming',
+                'directed_extractions': [
+                    'Rip the player component — it is the product. Target the audio/video player element and extract its layout, controls, and interaction states.',
+                    'Extract the content list/grid pattern: episode cards, tracklist rows, artist thumbnails. Use /api/discover-components to find all content list types.',
+                    'Map the navigation hierarchy: primary nav + content discovery (genres, shows, residents). Use Smart Nav to follow an artist/show link.',
+                    'Analyze the dark/light mode treatment if applicable — media sites often have inverted color schemes for immersive playback.',
+                    'Extract motion tokens: media sites animate more than average. Check cdp_animations and motion_tokens for easing curves and duration scales.',
+                ],
+            },
+            'editorial_publisher': {
+                'label': 'Editorial Publisher',
+                'directed_extractions': [
+                    'Extract the article typography system: headline hierarchy (h1→h2→h3), body text sizing, pull-quote treatment, caption style.',
+                    'Map the content grid: article cards likely have 3-4 variants (hero story, secondary, tertiary, related). Find them via /api/discover-components.',
+                    'Analyze the reading experience: line-height, measure (character width), paragraph spacing. These are in content_layout.',
+                    'Document the category/section navigation: editorial sites use section labels, tags, and author bylines as IA. Check accessibility_tree for nav depth.',
+                    'Extract image caption and credit typography — editorial sites have distinctive small-print styles that complete the type system.',
+                ],
+            },
+            'documentation': {
+                'label': 'Documentation Site',
+                'directed_extractions': [
+                    'Extract the sidebar navigation component — it is the primary wayfinding element in docs sites.',
+                    'Map the code block treatment: syntax highlighting colors, font (typically monospace), line numbers, copy-button pattern.',
+                    'Document the heading anchor system: how are section headers linked? Hover-reveal link icon? Persistent hash link?',
+                    'Extract the callout/admonition system: Note/Warning/Tip/Danger blocks — colors, icons, border treatment.',
+                    'Analyze the search interaction: docs sites live and die by search. Check interactive_elements for search trigger and results overlay patterns.',
+                ],
+            },
+            'saas_marketing': {
+                'label': 'SaaS Marketing',
+                'directed_extractions': [
+                    'Extract the hero section: headline + subheadline sizing, CTA button design, background treatment. These define the brand voice.',
+                    'Map the feature/benefit grid: cards, icons, headlines. Find all variants via /api/discover-components.',
+                    'Document the pricing table: column structure, feature checklist, CTA hierarchy, highlighted plan treatment.',
+                    'Analyze the social proof treatment: logos, testimonial cards, stat callouts — they follow a consistent layout pattern.',
+                    'Extract the navigation: SaaS sites often have mega-menus with product/solution/company sections. Use Smart Nav to map the IA.',
+                ],
+            },
+        }
+
+        meta = archetype_meta.get(best_archetype, {'label': best_archetype, 'directed_extractions': []})
+
+        return {
+            'archetype':             best_archetype,
+            'label':                 meta['label'],
+            'confidence':            confidence,
+            'signals':               signals[:6],
+            'all_scores':            score_map,
+            'directed_extractions':  meta['directed_extractions'],
+        }
+
     def _generate_llm_suggestions(self, url: str, links: Dict, content: Dict, components: Dict, evidence: Dict = None) -> Dict:
         """
         Generate evidence-aware suggestions for LLMs on what to analyze next.
@@ -8671,6 +8854,10 @@ class DeepEvidenceEngine:
         all_paths = [link.get('path', '') for link in links.get('all', [])]
         clusters = links.get('url_pattern_clusters')  # set by _discover_links() if >= 3 paths
         url_patterns = self._detect_url_patterns(all_paths, clusters=clusters)
+
+        # ── Detect site archetype ────────────────────────────────────────
+        raw_clusters = url_patterns.get('clusters', []) if isinstance(url_patterns, dict) else []
+        site_archetype = self._detect_site_archetype(url, evidence, raw_clusters)
 
         # ── Gather evidence context for smarter suggestions ──
         typo = evidence.get('typography', {})
@@ -8855,19 +9042,24 @@ class DeepEvidenceEngine:
         # ── Evidence-aware tips ──
         tips = []
 
-        # Page type context
-        type_tips = {
-            'home': f'Homepage scan complete with {page_pattern or "detected layout"}. Scan 2-3 nav pages to confirm design system consistency.',
-            'musicBlog': f'Music/media site detected. Content pages (episodes, articles) likely share a template — scan one of each to verify.',
-            'article': 'Article page analyzed. Compare with homepage and one sibling article to map the full template set.',
-            'singleArticle': 'Single article analyzed. Scan the homepage and a list page to understand the full layout system.',
-            'landingPage': 'Landing page analyzed. These are often unique — scan an inner page to see the "real" recurring design system.',
-            'contentGrid': 'Content grid detected. Scan an individual item page to compare grid-view vs detail-view layouts.',
-        }
-        if page_type in type_tips:
-            tips.append(type_tips[page_type])
-        elif page_type not in ('unknown', None):
-            tips.append(f'Page classified as {page_type}. Scan contrasting page types to map the full design system.')
+        # Archetype-specific directed extractions take priority over generic page-type tips
+        directed = site_archetype.get('directed_extractions', [])
+        if directed and site_archetype.get('archetype', 'unknown') != 'unknown':
+            tips.extend(directed[:3])  # Top 3 archetype-specific next steps
+        else:
+            # Fallback: generic page type tips
+            type_tips = {
+                'home': f'Homepage scan complete with {page_pattern or "detected layout"}. Scan 2-3 nav pages to confirm design system consistency.',
+                'musicBlog': f'Music/media site detected. Content pages (episodes, articles) likely share a template — scan one of each to verify.',
+                'article': 'Article page analyzed. Compare with homepage and one sibling article to map the full template set.',
+                'singleArticle': 'Single article analyzed. Scan the homepage and a list page to understand the full layout system.',
+                'landingPage': 'Landing page analyzed. These are often unique — scan an inner page to see the "real" recurring design system.',
+                'contentGrid': 'Content grid detected. Scan an individual item page to compare grid-view vs detail-view layouts.',
+            }
+            if page_type in type_tips:
+                tips.append(type_tips[page_type])
+            elif page_type not in ('unknown', None):
+                tips.append(f'Page classified as {page_type}. Scan contrasting page types to map the full design system.')
 
         # Evidence gaps
         if weak_metrics:
@@ -8953,6 +9145,7 @@ class DeepEvidenceEngine:
             'url_patterns': url_patterns,
             'buried_endpoints': buried_endpoints,
             'analysis_tips': tips,
+            'site_archetype': site_archetype,
             'current_page_type': page_type,
             'base_url': base_url
         }
