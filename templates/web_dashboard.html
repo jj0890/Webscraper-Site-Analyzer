@@ -10519,17 +10519,39 @@
             };
 
             const rows = blueprints.map(bp => {
-                const disc  = bp.discovery  || {};
-                const stab  = bp.selector_stability || {};
-                const label = disc.label    || disc.selector || '?';
-                const sel   = disc.selector || '?';
-                const cat   = disc.category || '';
-                const sIcon = stabilityIcon[stab.stability]  || '❓';
-                const sCol  = stabilityColor[stab.stability] || 'var(--text-tertiary)';
-                const score = stab.score != null ? stab.score : '?';
+                const disc     = bp.discovery  || {};
+                const stab     = bp.selector_stability || {};
+                const expanded = bp.expanded_children;
+                const label    = disc.label    || disc.selector || '?';
+                const sel      = disc.selector || '?';
+                const cat      = disc.category || '';
+                const sIcon    = stabilityIcon[stab.stability]  || '❓';
+                const sCol     = stabilityColor[stab.stability] || 'var(--text-tertiary)';
+                const score    = stab.score != null ? stab.score : '?';
                 const warnings = (stab.warnings || []).map(w =>
                     `<div style="font-size:0.65rem;color:var(--text-tertiary);margin-top:2px;padding-left:var(--space-3)">↳ ${_escHtml(w.recommendation || w.message || '')}</div>`
                 ).join('');
+
+                // Expanded children summary (mega-menu / accordion / tab reveals)
+                let expandedHtml = '';
+                if (expanded && expanded.total_revealed_nodes > 0) {
+                    const patterns = (expanded.patterns_detected || []).join(', ');
+                    const exps = (expanded.expansions || []).slice(0, 3).map(e => {
+                        const links = (e.revealed.links || []).length;
+                        const nodes = e.revealed.node_count || 0;
+                        return `<div style="font-size:0.65rem;color:var(--text-secondary);padding-left:var(--space-3)">
+                            ▸ <em>${_escHtml(e.trigger.text || e.trigger.selector)}</em>
+                            → ${nodes} nodes${links ? `, ${links} links` : ''}
+                        </div>`;
+                    }).join('');
+                    expandedHtml = `
+                        <div style="margin-top:var(--space-2);padding:var(--space-2) var(--space-3);background:rgba(129,140,248,0.06);border-radius:var(--radius-md);border-left:2px solid var(--accent-strong)">
+                            <div style="font-size:0.65rem;font-weight:700;color:var(--accent-text);margin-bottom:2px">
+                                🔽 ${expanded.total_revealed_nodes} hidden nodes revealed (${_escHtml(patterns)})
+                            </div>
+                            ${exps}
+                        </div>`;
+                }
 
                 return `
                     <div style="padding:var(--space-3) 0;border-bottom:1px solid var(--border-subtle)">
@@ -10541,6 +10563,7 @@
                         </div>
                         <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-tertiary);margin-top:var(--space-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_escHtml(sel)}">${_escHtml(sel)}</div>
                         ${warnings}
+                        ${expandedHtml}
                     </div>`;
             }).join('');
 

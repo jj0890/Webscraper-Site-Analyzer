@@ -369,6 +369,11 @@ class ComponentRipper:
                             self.blueprint['pre_action_applied'] = pre_action
                         if include_states:
                             self.blueprint['interactive_states'] = await self._extract_component_states(page, self.selector)
+                        # Always run expand-and-capture: reveals hidden children
+                        # (mega-menus, accordions, tabs) within the targeted component
+                        expanded = await self._expand_and_capture_children(page, self.selector)
+                        if expanded.get('total_revealed_nodes', 0) > 0:
+                            self.blueprint['expanded_children'] = expanded
                         if output_format == 'figma':
                             self._attach_figma_output(self.blueprint)
                     else:
@@ -1000,6 +1005,352 @@ class ComponentRipper:
             'states_detected': states_detected,
         }
 
+    async def _expand_and_capture_children(self, page, root_selector: str) -> Dict:
+        """
+        Automatically click expandable triggers within a component and diff the DOM
+        to capture what nodes become visible after each expansion.
+
+        Covers: mega-menus, accordions, tabs, disclosure widgets, custom dropdowns,
+        'Show more' buttons — any pattern where click reveals hidden child structure.
+
+        Unlike _discover_interactive_links (which only collects <a href> links) and
+        _extract_component_states (which only diffs CSS values), this captures the
+        actual revealed DOM structure: node count, HTML, text content, links, depth.
+
+        Returns:
+            {
+                'expandable_triggers': [{selector, text, type, pattern}],
+                'expansions': [{
+                    'trigger': {selector, text, pattern},
+                    'revealed': {
+                        'node_count': int,
+                        'links': [{href, text}],
+                        'text_items': [str],
+                        'depth': int,
+                        'container_selector': str,
+                        'outer_html_snippet': str,   # first 800 chars
+                    }
+                }],
+                'total_revealed_nodes': int,
+                'patterns_detected': [str],
+            }
+        """
+        import asyncio as _aio
+
+        # ── Step 1: Find expandable triggers inside the root ──────────────────
+        triggers = await page.evaluate('''(rootSel) => {
+            const root = document.querySelector(rootSel);
+            if (!root) return [];
+
+            const results = [];
+            const seen = new Set();
+
+            // Classify a trigger's pattern from its attributes and context
+            function classifyPattern(el) {
+                const expanded = el.getAttribute('aria-expanded');
+                const hasPopup  = el.getAttribute('aria-haspopup');
+                const role      = el.getAttribute('role') || el.tagName.toLowerCase();
+                const cn        = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+
+                if (el.tagName === 'SUMMARY')          return 'details/summary';
+                if (hasPopup === 'menu' || hasPopup === 'listbox') return 'menu-trigger';
+                if (expanded !== null)                  return 'aria-expandable';
+                if (cn.includes('accordion'))           return 'accordion';
+                if (cn.includes('tab') && (role === 'tab' || el.getAttribute('role') === 'tab')) return 'tab';
+                if (cn.includes('dropdown'))            return 'dropdown-trigger';
+                if (/show.?more|load.?more|see.?all|view.?all/i.test(el.textContent || '')) return 'show-more';
+                return 'button';
+            }
+
+            // Build a unique selector for an element
+            function uniqueSel(el) {
+                if (el.id) return '#' + CSS.escape(el.id);
+                if (el.getAttribute('aria-label'))
+                    return `[aria-label="${el.getAttribute('aria-label').replace(/"/g, '\\"')}"]`;
+                const parent = el.parentElement;
+                if (!parent) return el.tagName.toLowerCase();
+                const idx = Array.from(parent.children).indexOf(el) + 1;
+                const parentSel = parent.id
+                    ? '#' + CSS.escape(parent.id)
+                    : parent.tagName.toLowerCase();
+                return `${parentSel} > ${el.tagName.toLowerCase()}:nth-child(${idx})`;
+            }
+
+            const candidates = root.querySelectorAll([
+                // ARIA patterns
+                '[aria-expanded="false"]',
+                '[aria-haspopup="menu"]',
+                '[aria-haspopup="listbox"]',
+                '[role="tab"]',
+                // Semantic HTML patterns
+                'details > summary',
+                // Class-based patterns
+                '[class*="accordion"] > [class*="header"], [class*="accordion"] > button',
+                '[class*="tab"][role="tab"]',
+                '[class*="dropdown-toggle"], [class*="dropdown-trigger"]',
+                // Show-more / load-more
+                'button',
+            ].join(', '));
+
+            for (const el of candidates) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 5 || rect.height < 5) continue;
+                if (!root.contains(el)) continue;
+
+                const sel = uniqueSel(el);
+                if (seen.has(sel)) continue;
+                seen.add(sel);
+
+                const pattern = classifyPattern(el);
+                // Filter out "button" class unless it genuinely looks expandable
+                if (pattern === 'button') {
+                    // Only include if text suggests expansion or it has aria clue
+                    const txt = (el.textContent || '').trim().toLowerCase();
+                    const hasCue = el.getAttribute('aria-expanded') !== null ||
+                                   el.getAttribute('aria-haspopup') !== null ||
+                                   /show|more|expand|open|see all|view all/.test(txt);
+                    if (!hasCue) continue;
+                }
+
+                results.push({
+                    selector: sel,
+                    text: (el.textContent || '').replace(/\\s+/g, ' ').trim().substring(0, 60),
+                    pattern,
+                    ariaExpanded: el.getAttribute('aria-expanded'),
+                    tag: el.tagName.toLowerCase(),
+                });
+
+                if (results.length >= 12) break;  // cap
+            }
+
+            return results;
+        }''', root_selector)
+
+        if not triggers:
+            return {
+                'expandable_triggers': [],
+                'expansions': [],
+                'total_revealed_nodes': 0,
+                'patterns_detected': [],
+            }
+
+        print(f"   🔽 Found {len(triggers)} expandable triggers in {root_selector}")
+
+        # ── Step 2: Click each trigger and diff the DOM ───────────────────────
+        expansions = []
+        patterns_seen: set = set()
+
+        async def _click_and_diff(trigger: dict):
+            sel = trigger['selector']
+            label = trigger['text'] or sel
+
+            try:
+                # Snapshot visible child elements before click (all elements, not just links)
+                before_nodes = set(await page.evaluate('''(rootSel) => {
+                    const root = document.querySelector(rootSel);
+                    if (!root) return [];
+                    return Array.from(root.querySelectorAll('*'))
+                        .filter(el => {
+                            const r = el.getBoundingClientRect();
+                            const s = window.getComputedStyle(el);
+                            return r.width > 0 && r.height > 0 &&
+                                   s.visibility !== 'hidden' &&
+                                   s.display !== 'none' &&
+                                   parseFloat(s.opacity) > 0;
+                        })
+                        .map(el => {
+                            const r = el.getBoundingClientRect();
+                            return `${el.tagName}@${Math.round(r.top)},${Math.round(r.left)}`;
+                        });
+                }''', root_selector))
+
+                # Click the trigger
+                locator = page.locator(sel).first
+                if not await locator.is_visible(timeout=1500):
+                    return
+
+                try:
+                    await locator.hover(timeout=1500)
+                    await page.evaluate('() => new Promise(r => setTimeout(r, 100))')
+                except Exception:
+                    pass
+
+                try:
+                    await locator.click(timeout=2000)
+                except Exception:
+                    return
+
+                # Wait for transitions
+                await page.evaluate('() => new Promise(r => setTimeout(r, 350))')
+                try:
+                    await page.wait_for_selector('[aria-expanded="true"]', timeout=500)
+                except Exception:
+                    pass
+
+                # Snapshot again
+                after_nodes = set(await page.evaluate('''(rootSel) => {
+                    const root = document.querySelector(rootSel);
+                    if (!root) return [];
+                    return Array.from(root.querySelectorAll('*'))
+                        .filter(el => {
+                            const r = el.getBoundingClientRect();
+                            const s = window.getComputedStyle(el);
+                            return r.width > 0 && r.height > 0 &&
+                                   s.visibility !== 'hidden' &&
+                                   s.display !== 'none' &&
+                                   parseFloat(s.opacity) > 0;
+                        })
+                        .map(el => {
+                            const r = el.getBoundingClientRect();
+                            return `${el.tagName}@${Math.round(r.top)},${Math.round(r.left)}`;
+                        });
+                }''', root_selector))
+
+                new_nodes = after_nodes - before_nodes
+                if not new_nodes:
+                    # Try looking outside the root — mega-menus often render outside
+                    new_nodes = set(await page.evaluate('''() => {
+                        return Array.from(document.querySelectorAll('[aria-expanded="true"] + *, [aria-expanded="true"] ~ *, [aria-expanded="true"] > *'))
+                            .filter(el => {
+                                const r = el.getBoundingClientRect();
+                                const s = window.getComputedStyle(el);
+                                return r.width > 0 && r.height > 0 && s.display !== 'none';
+                            })
+                            .map(el => {
+                                const r = el.getBoundingClientRect();
+                                return `${el.tagName}@${Math.round(r.top)},${Math.round(r.left)}`;
+                            });
+                    }'''))
+
+                if new_nodes:
+                    # Capture revealed content detail
+                    revealed = await page.evaluate('''(args) => {
+                        const { rootSel, triggerSel } = args;
+                        const root = document.querySelector(rootSel);
+                        const trigger = document.querySelector(triggerSel);
+
+                        // Find the revealed container: look for aria-expanded sibling/parent,
+                        // or the largest newly-visible element near the trigger
+                        let container = null;
+
+                        // Check trigger's next sibling first
+                        if (trigger) {
+                            const next = trigger.nextElementSibling;
+                            if (next) {
+                                const r = next.getBoundingClientRect();
+                                if (r.width > 0 && r.height > 0) container = next;
+                            }
+                            // Parent-controlled disclosure
+                            if (!container) {
+                                const parent = trigger.parentElement;
+                                if (parent) {
+                                    const siblings = Array.from(parent.children).filter(c => c !== trigger);
+                                    const visible = siblings.find(c => {
+                                        const r = c.getBoundingClientRect();
+                                        return r.width > 0 && r.height > 0;
+                                    });
+                                    if (visible) container = visible;
+                                }
+                            }
+                        }
+
+                        // Fallback: find expanded aria element
+                        if (!container) {
+                            container = document.querySelector('[aria-expanded="true"]')?.nextElementSibling ||
+                                        document.querySelector('[data-state="open"]') ||
+                                        null;
+                        }
+
+                        if (!container) return null;
+
+                        const r = container.getBoundingClientRect();
+                        // Extract links
+                        const links = Array.from(container.querySelectorAll('a[href]'))
+                            .filter(a => {
+                                const lr = a.getBoundingClientRect();
+                                return lr.width > 0 && lr.height > 0;
+                            })
+                            .slice(0, 30)
+                            .map(a => ({
+                                href: a.href,
+                                text: (a.textContent || '').replace(/\\s+/g, ' ').trim().substring(0, 60),
+                            }));
+
+                        // Extract visible text items (leaf text nodes)
+                        const walker = document.createTreeWalker(
+                            container,
+                            NodeFilter.SHOW_TEXT,
+                            null
+                        );
+                        const textItems = [];
+                        let node;
+                        while ((node = walker.nextNode())) {
+                            const txt = node.textContent.replace(/\\s+/g, ' ').trim();
+                            if (txt.length > 2) textItems.push(txt);
+                        }
+
+                        // Measure depth
+                        let depth = 0;
+                        let el = container;
+                        while (el && depth < 20) { el = el.parentElement; depth++; }
+
+                        // Visible child elements
+                        const visibleChildren = Array.from(container.querySelectorAll('*'))
+                            .filter(el => {
+                                const cr = el.getBoundingClientRect();
+                                return cr.width > 0 && cr.height > 0;
+                            }).length;
+
+                        return {
+                            node_count: visibleChildren,
+                            links,
+                            text_items: textItems.slice(0, 30),
+                            depth,
+                            container_bounds: { w: Math.round(r.width), h: Math.round(r.height) },
+                            outer_html_snippet: container.outerHTML.substring(0, 800),
+                        };
+                    }''', {'rootSel': root_selector, 'triggerSel': sel})
+
+                    if revealed:
+                        expansions.append({
+                            'trigger': {
+                                'selector': sel,
+                                'text': label,
+                                'pattern': trigger['pattern'],
+                            },
+                            'revealed': revealed,
+                        })
+                        patterns_seen.add(trigger['pattern'])
+                        print(f"      ▸ '{label[:30]}': {revealed.get('node_count', 0)} nodes, {len(revealed.get('links', []))} links revealed")
+
+                # Collapse: press Escape or click again to reset
+                try:
+                    await page.keyboard.press('Escape')
+                    await page.evaluate('() => new Promise(r => setTimeout(r, 150))')
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.debug(f"Expand-and-capture failed for {sel}: {str(e)[:80]}")
+
+        # Run with overall timeout
+        try:
+            await _aio.wait_for(
+                _aio.gather(*[_click_and_diff(t) for t in triggers]),
+                timeout=25
+            )
+        except _aio.TimeoutError:
+            print("   ⏱  Expand-and-capture hit 25s timeout")
+
+        total = sum(e['revealed'].get('node_count', 0) for e in expansions)
+
+        return {
+            'expandable_triggers': triggers,
+            'expansions': expansions,
+            'total_revealed_nodes': total,
+            'patterns_detected': list(patterns_seen),
+        }
+
     def _attach_figma_output(self, blueprint: Dict):
         """Generate all Figma output formats and attach to blueprint."""
         try:
@@ -1151,6 +1502,11 @@ class ComponentRipper:
                     blueprint = await self._rip_component(page, selector)
                     if 'error' not in blueprint:
                         stability = assess_selector_stability(selector)
+
+                        # Expand-and-capture: click collapsible children to reveal hidden structure
+                        # (mega-menus, accordions, tabs, dropdowns). Runs on every ripped component.
+                        expanded = await self._expand_and_capture_children(page, selector)
+
                         blueprints.append({
                             'discovery': {
                                 'selector': selector,
@@ -1161,6 +1517,7 @@ class ComponentRipper:
                                 'screenshot': comp.get('screenshot'),
                             },
                             'selector_stability': stability,
+                            'expanded_children': expanded if expanded.get('total_revealed_nodes', 0) > 0 else None,
                             'blueprint': blueprint,
                         })
                 except Exception as e:
