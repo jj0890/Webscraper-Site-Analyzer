@@ -3138,6 +3138,7 @@
                 currentEvidence = data.evidence;
                 currentResultFile = data.result_file || null;
                 window.__currentEvidence = data.evidence;
+                window.__currentScanId   = data.scan_id || '';  // for swipe-file saves
                 displayResults(data.evidence);
 
                 // Generate AI summary
@@ -4044,6 +4045,7 @@
 
                 currentEvidence = data.evidence;
                 window.__currentEvidence = data.evidence;
+                window.__currentScanId   = data.scan_id || '';
                 displayResults(data.evidence);
                 // Executive summary removed
 
@@ -12655,12 +12657,248 @@
                         size: `${Math.round(el.rect.width)}×${Math.round(el.rect.height)}`,
                         fontSize: (el.styles && el.styles.fontSize) ? Math.round(el.styles.fontSize) + 'px' : (el.fontSize ? Math.round(el.fontSize) + 'px' : null),
                         aboveFold: el.rect.top < vpH,
-                        state: stateEntry
+                        state: stateEntry,
+                        // Full raw data for the dwell panel — no extra network request needed
+                        rawEl:    el,
+                        rawState: stateEntry,
                     }
                 });
             });
 
             return regions;
+        }
+
+        // ── Dwell panel — click-to-expand section detail ──────────────────
+        // All data comes from _vhRegions (already loaded). No network call.
+
+        let _dwellOpen = null; // index of currently open panel
+
+        function toggleDwellPanel(idx, color) {
+            const panelEl  = document.getElementById(`dwell-${idx}`);
+            const chevron  = document.getElementById(`dwell-${idx}-chevron`);
+            if (!panelEl) return;
+
+            const isOpen = panelEl.style.display !== 'none';
+
+            // Close any previously open panel
+            if (_dwellOpen !== null && _dwellOpen !== idx) {
+                const prev = document.getElementById(`dwell-${_dwellOpen}`);
+                const prevCh = document.getElementById(`dwell-${_dwellOpen}-chevron`);
+                if (prev)   prev.style.display = 'none';
+                if (prevCh) prevCh.style.transform = 'rotate(0deg)';
+            }
+
+            if (isOpen) {
+                panelEl.style.display = 'none';
+                if (chevron) chevron.style.transform = 'rotate(0deg)';
+                _dwellOpen = null;
+            } else {
+                // Lazy-render the first time
+                if (!panelEl.dataset.rendered) {
+                    panelEl.innerHTML = renderDwellPanel(idx, color);
+                    panelEl.dataset.rendered = '1';
+                }
+                panelEl.style.display = 'block';
+                if (chevron) chevron.style.transform = 'rotate(90deg)';
+                _dwellOpen = idx;
+            }
+        }
+
+        function findMatchingBlueprint(rect) {
+            // Find the component blueprint whose bounding box best overlaps this region.
+            const ev = window.__currentEvidence || {};
+            const bps = (ev.component_blueprints || {}).blueprints || [];
+            if (!bps.length || !rect) return null;
+
+            function overlap(a, b) {
+                // Returns intersection area / union area (Jaccard)
+                const xA = Math.max(a.left || a.x || 0, b.left || b.x || 0);
+                const yA = Math.max(a.top  || a.y || 0, b.top  || b.y || 0);
+                const xB = Math.min((a.left||a.x||0)+(a.width||a.w||0), (b.left||b.x||0)+(b.width||b.w||0));
+                const yB = Math.min((a.top||a.y||0)+(a.height||a.h||0), (b.top||b.y||0)+(b.height||b.h||0));
+                const inter = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+                if (!inter) return 0;
+                const aA = (a.width||a.w||1) * (a.height||a.h||1);
+                const bA = (b.width||b.w||1) * (b.height||b.h||1);
+                return inter / (aA + bA - inter);
+            }
+
+            let best = null, bestScore = 0.1; // min threshold
+            for (const bp of bps) {
+                const bounds = (bp.discovery || {}).bounds || {};
+                if (!bounds.width) continue;
+                const score = overlap(rect, bounds);
+                if (score > bestScore) { best = bp; bestScore = score; }
+            }
+            return best;
+        }
+
+        function renderDwellPanel(idx, color) {
+            const region = _vhRegions[idx];
+            if (!region) return '<div style="padding:0.5rem; color:#666;">No data</div>';
+
+            const d       = region.data || {};
+            const rawEl   = d.rawEl   || {};
+            const rawSt   = d.rawState || {};
+            const styles  = rawEl.styles || {};
+            const rect    = rawEl.rect   || {};
+            const bp      = findMatchingBlueprint(rect);
+            const bpDisc  = (bp || {}).discovery || {};
+            const bpPrint = (bp || {}).blueprint  || {};
+
+            // ── Typography pill ──────────────────────────────────────────
+            const typoItems = [];
+            if (styles.fontSize)    typoItems.push(`${Math.round(styles.fontSize)}px`);
+            if (styles.fontWeight)  typoItems.push(`w${styles.fontWeight}`);
+            if (styles.color)       typoItems.push(`<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${styles.color};vertical-align:middle;margin-right:2px;border:1px solid rgba(255,255,255,0.2);"></span>${styles.color}`);
+            if (styles.backgroundColor && styles.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+                typoItems.push(`bg <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${styles.backgroundColor};vertical-align:middle;margin-right:2px;border:1px solid rgba(255,255,255,0.2);"></span>${styles.backgroundColor}`);
+            }
+
+            // ── Interaction ──────────────────────────────────────────────
+            const hoverKeys = Object.keys(rawSt.hover_delta || {});
+            const focusKeys = Object.keys(rawSt.focus_delta || {});
+            const interactionHTML = hoverKeys.length || focusKeys.length
+                ? `
+                    ${hoverKeys.length ? `<div style="margin-bottom:4px;"><span style="color:#f0a">::hover</span> → ${hoverKeys.join(', ')}</div>` : ''}
+                    ${focusKeys.length ? `<div><span style="color:#0af">::focus</span> → ${focusKeys.join(', ')}</div>` : ''}
+                    ${rawSt.transition && rawSt.transition !== 'none' ? `<div style="color:#666;font-size:0.65rem;margin-top:4px;">transition: ${rawSt.transition.substring(0,60)}</div>` : ''}`
+                : `<span style="color:#444;">No state changes detected</span>`;
+
+            // ── Blueprint section ────────────────────────────────────────
+            const bpHTML = bp ? `
+                <div style="color:#aaa; font-weight:600; margin-bottom:4px;">${bpDisc.label || 'Component'}</div>
+                <div style="color:#666; font-size:0.65rem; margin-bottom:6px;">[${bpDisc.category || '?'}] ${bpDisc.selector || ''}</div>
+                ${bpPrint.layout ? `<div style="color:#888; font-size:0.68rem;">Layout: ${bpPrint.layout.type || ''} ${bpPrint.layout.direction || ''} gap:${bpPrint.layout.gap || '—'}</div>` : ''}
+                <button onclick="document.querySelector('#tabRipper') && document.querySelector('[data-tab=ripper]')?.click(); document.getElementById('ripperUrl')?.value='${rawSt.selector || bpDisc.selector || ''}'"
+                    style="margin-top:8px;padding:4px 10px;background:rgba(0,118,255,0.15);border:1px solid rgba(0,118,255,0.3);border-radius:6px;color:#0076ff;font-size:0.68rem;cursor:pointer;">
+                    ⚡ Open in Ripper
+                </button>` : '<span style="color:#444;">No matching component blueprint</span>';
+
+            // ── Layout: 2-column grid of cards ──────────────────────────
+            const cardStyle = 'background:rgba(255,255,255,0.04);border-radius:8px;padding:0.6rem 0.75rem;font-size:0.72rem;line-height:1.6;';
+            const labelStyle = 'color:#888;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;';
+
+            return `
+            <div style="
+                margin:0.25rem 0 0.5rem 0;
+                border-left:3px solid ${color}22;
+                background:rgba(0,0,0,0.25);
+                border-radius:0 8px 8px 0;
+                padding:0.6rem;
+                font-size:0.72rem;
+            ">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
+
+                    <!-- Typography & Colors -->
+                    <div style="${cardStyle}">
+                        <div style="${labelStyle}">📐 Typography & Color</div>
+                        ${typoItems.length
+                            ? typoItems.map(t => `<div style="margin-bottom:2px;">${t}</div>`).join('')
+                            : '<span style="color:#444;">Not captured</span>'}
+                    </div>
+
+                    <!-- Dimensions -->
+                    <div style="${cardStyle}">
+                        <div style="${labelStyle}">📏 Dimensions</div>
+                        <div style="color:#ddd;font-size:0.8rem;font-weight:600;">${Math.round(rect.width||0)} × ${Math.round(rect.height||0)}px</div>
+                        <div style="color:#666;margin-top:2px;">top: ${Math.round(rect.top||0)}px  left: ${Math.round(rect.left||0)}px</div>
+                        <div style="color:#555;margin-top:2px;">${d.aboveFold ? '▲ Above fold' : '▼ Below fold'}</div>
+                    </div>
+
+                    <!-- Interaction -->
+                    <div style="${cardStyle}">
+                        <div style="${labelStyle}">⚡ Interaction States</div>
+                        ${interactionHTML}
+                    </div>
+
+                    <!-- Blueprint -->
+                    <div style="${cardStyle}">
+                        <div style="${labelStyle}">🧩 Component Blueprint</div>
+                        ${bpHTML}
+                    </div>
+
+                </div>
+
+                ${rawEl.text && rawEl.text.trim()
+                    ? `<div style="color:#555;font-size:0.65rem;border-top:1px solid rgba(255,255,255,0.05);padding-top:0.4rem;margin-top:0.2rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(rawEl.text||'').replace(/"/g,'&quot;').replace(/\s+/g,' ').trim()}">
+                        "${(rawEl.text||'').replace(/\s+/g,' ').trim().substring(0,100)}"
+                       </div>`
+                    : ''}
+
+                <!-- Save to swipe file -->
+                <div style="border-top:1px solid rgba(255,255,255,0.05);padding-top:0.4rem;margin-top:0.4rem;display:flex;gap:6px;align-items:center;">
+                    <button id="dwell-save-btn-${idx}"
+                        onclick="saveDwellFinding(${idx}, this)"
+                        style="padding:4px 10px;background:rgba(52,199,89,0.12);border:1px solid rgba(52,199,89,0.3);border-radius:6px;color:#34c759;font-size:0.68rem;cursor:pointer;flex-shrink:0;">
+                        📌 Save to Library
+                    </button>
+                    <input id="dwell-save-label-${idx}" placeholder="Label (optional)" type="text"
+                        style="flex:1;min-width:0;padding:3px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#ccc;font-size:0.68rem;outline:none;">
+                </div>
+            </div>`;
+        }
+
+        // ── Save a dwell section to the scan library (swipe file) ─────────
+        async function saveDwellFinding(idx, btn) {
+            const region = _vhRegions[idx];
+            if (!region) return;
+
+            const labelInput = document.getElementById(`dwell-save-label-${idx}`);
+            const label = (labelInput && labelInput.value.trim()) || region.name || `Section ${idx + 1}`;
+
+            // Build section_data from dwell region
+            const d = region.data || {};
+            const sectionData = {
+                rank:          region.rank,
+                name:          region.name,
+                color:         region.color,
+                rect:          region.origRect,
+                tag:           d.tag,
+                selector:      d.selector,
+                text:          (d.text || '').substring(0, 200),
+                fontSize:      d.fontSize,
+                aboveFold:     d.aboveFold,
+                styles:        (d.rawEl || {}).styles,
+                hover_delta:   (d.rawState || {}).hover_delta,
+                focus_delta:   (d.rawState || {}).focus_delta,
+                transition:    (d.rawState || {}).transition,
+            };
+
+            // Get scan_id from window (set when scan result arrives)
+            const scanId  = window.__currentScanId || '';
+            const scanUrl = (window.__currentEvidence || {})?.meta_info?.url || '';
+
+            btn.textContent = '⏳ Saving…';
+            btn.disabled = true;
+
+            try {
+                const resp = await fetch('/api/library/findings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        scan_id:       scanId,
+                        scan_url:      scanUrl,
+                        section_index: idx,
+                        section_data:  sectionData,
+                        label:         label,
+                        tags:          [],
+                        notes:         '',
+                    }),
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    btn.textContent = '✅ Saved';
+                    btn.style.color = '#34c759';
+                    if (labelInput) labelInput.style.display = 'none';
+                } else {
+                    btn.textContent = '❌ Failed';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                btn.textContent = '❌ Error';
+                btn.disabled = false;
+            }
         }
 
         // ── Draw one SVG rect + rank badge for a region (scaled) ─────────
@@ -12860,34 +13098,39 @@
                         // Fold indicator
                         const foldIcon = d.aboveFold ? '▲' : '▼';
                         const foldColor = d.aboveFold ? '#69f0ae' : '#555';
+                        const dwellId = `dwell-${i}`;
                         return `
-                        <div data-flow-id="${i}" style="
-                            padding: 0.5rem 0.6rem;
-                            margin-bottom: 0.2rem;
-                            border-left: 3px solid transparent;
-                            border-radius: 0 6px 6px 0;
-                            cursor: pointer;
-                            transition: background 0.15s, border-color 0.15s;
-                            font-size: 0.82rem;
-                            color: #bbb;
-                        "
-                        onmouseenter="if (_vhActiveHighlight !== ${i}) { highlightRegionRect(${i}, true); this.style.background='rgba(255,255,255,0.06)'; this.style.borderLeftColor='${region.color}'; }"
-                        onmouseleave="if (_vhActiveHighlight !== ${i}) { highlightRegionRect(${i}, false); this.style.background='transparent'; this.style.borderLeftColor='transparent'; }"
-                        onclick="toggleRegionHighlight(${i});"
-                        >
-                            <div style="display:flex; align-items:center; gap:0.45rem;">
-                                <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:${region.color}; color:#fff; font-size:0.65rem; font-weight:700; flex-shrink:0;">${rank}</span>
-                                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;">${region.name}</span>
-                                ${d.state && d.state.has_state_change ? '<span title="Has interactive states" style="font-size:0.72rem; flex-shrink:0;">⚡</span>' : ''}
-                                <span style="color:${foldColor}; font-size:0.6rem; flex-shrink:0;" title="${d.aboveFold ? 'Above fold' : 'Below fold'}">${foldIcon}</span>
-                            </div>
-                            <div style="display:flex; align-items:center; gap:0.4rem; margin-top:0.25rem; padding-left:25px;">
-                                <div style="flex:1; height:3px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden;">
-                                    <div style="width:${pct}%; height:100%; background:${region.color}; border-radius:2px;"></div>
+                        <div data-flow-id="${i}" style="margin-bottom:0.2rem;">
+                            <div style="
+                                padding: 0.5rem 0.6rem;
+                                border-left: 3px solid transparent;
+                                border-radius: 0 6px 6px 0;
+                                cursor: pointer;
+                                transition: background 0.15s, border-color 0.15s;
+                                font-size: 0.82rem;
+                                color: #bbb;
+                            "
+                            onmouseenter="if (_vhActiveHighlight !== ${i}) { highlightRegionRect(${i}, true); this.style.background='rgba(255,255,255,0.06)'; this.style.borderLeftColor='${region.color}'; }"
+                            onmouseleave="if (_vhActiveHighlight !== ${i}) { highlightRegionRect(${i}, false); this.style.background='transparent'; this.style.borderLeftColor='transparent'; }"
+                            onclick="toggleRegionHighlight(${i}); toggleDwellPanel(${i}, '${region.color}');"
+                            >
+                                <div style="display:flex; align-items:center; gap:0.45rem;">
+                                    <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:${region.color}; color:#fff; font-size:0.65rem; font-weight:700; flex-shrink:0;">${rank}</span>
+                                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;">${region.name}</span>
+                                    ${d.state && d.state.has_state_change ? '<span title="Has interactive states" style="font-size:0.72rem; flex-shrink:0;">⚡</span>' : ''}
+                                    <span style="color:${foldColor}; font-size:0.6rem; flex-shrink:0;" title="${d.aboveFold ? 'Above fold' : 'Below fold'}">${foldIcon}</span>
+                                    <span id="${dwellId}-chevron" style="color:#555; font-size:0.6rem; flex-shrink:0; transition:transform 0.2s;">▶</span>
                                 </div>
-                                <span style="font-size:0.65rem; color:#666; flex-shrink:0; min-width:28px; text-align:right;">${pct}%</span>
-                                <span style="color:#444; font-size:0.6rem; flex-shrink:0;">${d.size || ''}</span>
+                                <div style="display:flex; align-items:center; gap:0.4rem; margin-top:0.25rem; padding-left:25px;">
+                                    <div style="flex:1; height:3px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden;">
+                                        <div style="width:${pct}%; height:100%; background:${region.color}; border-radius:2px;"></div>
+                                    </div>
+                                    <span style="font-size:0.65rem; color:#666; flex-shrink:0; min-width:28px; text-align:right;">${pct}%</span>
+                                    <span style="color:#444; font-size:0.6rem; flex-shrink:0;">${d.size || ''}</span>
+                                </div>
                             </div>
+                            <!-- Dwell detail panel — rendered on first click, hidden by default -->
+                            <div id="${dwellId}" style="display:none; overflow:hidden;"></div>
                         </div>`;
                     }).join('');
                 } else {

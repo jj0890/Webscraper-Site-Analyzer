@@ -18,6 +18,7 @@ Instead of just 5 basic metrics, we extract EVERYTHING:
 """
 
 import asyncio
+import logging
 import time
 from patchright.async_api import async_playwright
 from urllib.parse import urlparse, urljoin
@@ -25,6 +26,8 @@ import json
 import re
 from typing import Dict, List, Optional
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 from design_system_metrics import DesignSystemMetrics
 from color_palette_preview import ColorPalettePreview
 from api_relationship_mapper import APIRelationshipMapper
@@ -171,16 +174,51 @@ class DeepEvidenceEngine:
     - 'smart-nav': Analyze home + 2 nav links (comprehensive, 3-4min)
     """
 
-    def __init__(self, url: str, analysis_mode: str = 'single', discovery_method: str = 'auto'):
+    # URL path signals used by analysis_focus to steer Smart Nav link selection.
+    # 'prefer' segments get a score bonus; 'deprioritize' segments get a penalty.
+    _FOCUS_SIGNALS: Dict[str, Dict] = {
+        'content': {
+            # Singular and plural both included — tokenizer splits on hyphens but not plurals
+            'prefer':        ['blog', 'blogs', 'article', 'articles', 'post', 'posts',
+                              'magazine', 'magazines', 'issue', 'issues', 'archive', 'archives',
+                              'story', 'stories', 'news', 'editorial', 'editorials',
+                              'feature', 'features', 'review', 'reviews'],
+            'deprioritize':  ['support', 'contact', 'about', 'manifesto', 'login',
+                              'cart', 'checkout', 'faq', 'privacy', 'terms'],
+        },
+        'commerce': {
+            'prefer':        ['product', 'products', 'shop', 'collection', 'collections',
+                              'category', 'categories', 'item', 'items', 'store', 'buy'],
+            'deprioritize':  ['blog', 'support', 'about', 'manifesto', 'docs'],
+        },
+        'documentation': {
+            'prefer':        ['docs', 'doc', 'api', 'apis', 'reference', 'guide', 'guides',
+                              'tutorial', 'tutorials', 'getting-started', 'quickstart',
+                              'sdk', 'sdks', 'changelog'],
+            'deprioritize':  ['blog', 'pricing', 'enterprise', 'support', 'about'],
+        },
+        'marketing': {
+            'prefer':        ['features', 'pricing', 'enterprise', 'solution', 'solutions',
+                              'customers', 'use-case', 'use-cases'],
+            'deprioritize':  ['docs', 'api', 'support', 'status'],
+        },
+    }
+
+    def __init__(self, url: str, analysis_mode: str = 'single',
+                 discovery_method: str = 'auto', analysis_focus: str = 'auto'):
         """
         Args:
-            url: Starting URL to analyze
-            analysis_mode: 'single' or 'smart-nav'
+            url:              Starting URL to analyze
+            analysis_mode:    'single' or 'smart-nav'
             discovery_method: 'auto' | 'cloudflare' | 'nav' — URL discovery source
+            analysis_focus:   'auto' | 'content' | 'commerce' | 'documentation' | 'marketing'
+                              Steers Smart Nav toward the most relevant page templates.
+                              'auto' (default) uses the existing diversity-based scoring.
         """
         self.url = url
         self.analysis_mode = analysis_mode
         self.discovery_method = discovery_method
+        self.analysis_focus = analysis_focus if analysis_focus in self._FOCUS_SIGNALS else 'auto'
         self.evidence = {}
         self._cloudflare_urls = []
         self._cloudflare_pages = {}
@@ -550,6 +588,13 @@ class DeepEvidenceEngine:
     def _score_url_diversity(self, urls: List[str], base_url: str) -> List[Dict]:
         """
         Score URLs by path diversity to enable intelligent page selection.
+
+        When self.analysis_focus is set (not 'auto'), applies an additional
+        ±0.25 bonus/penalty based on whether the URL's first path segment
+        matches the preferred or deprioritised patterns for that focus.
+        This steers Smart Nav toward the most relevant templates without
+        hard-excluding any URL — diversity logic still applies.
+
         Returns list sorted by diversity_score descending.
         """
         from urllib.parse import urlparse
@@ -557,6 +602,11 @@ class DeepEvidenceEngine:
 
         parsed_base = urlparse(base_url)
         scored = []
+
+        # Focus signals for this run (empty dicts when focus='auto')
+        focus_cfg = self._FOCUS_SIGNALS.get(self.analysis_focus, {})
+        prefer_segs       = set(focus_cfg.get('prefer', []))
+        deprioritize_segs = set(focus_cfg.get('deprioritize', []))
 
         # Group by first path segment
         segment_counts = {}
@@ -577,22 +627,41 @@ class DeepEvidenceEngine:
             first_seg = segments[0] if segments else '_root'
             depth = len(segments)
 
-            # Score components
             # 1. Segment uniqueness: fewer URLs sharing this first segment = higher score
             group_size = segment_counts.get(first_seg, 1)
             uniqueness = 1.0 - (group_size / max(total_urls, 1))
 
-            # 2. Depth bonus: deeper pages are more interesting (but diminishing returns)
+            # 2. Depth bonus (diminishing returns past 4 segments)
             depth_score = min(depth / 4.0, 1.0)
 
-            # 3. Pattern distinctness: slug-like final segments = instance page
+            # 3. Pattern distinctness
             is_instance = bool(segments and re.search(r'[-_\d]', segments[-1]))
             is_listing = depth <= 2 and not is_instance
-
-            # Prefer a mix: both listing and instance pages
             pattern_bonus = 0.1 if is_listing else 0.0
 
-            diversity_score = (uniqueness * 0.5) + (depth_score * 0.3) + (pattern_bonus * 0.2)
+            # 4. analysis_focus bonus/penalty (0 when focus='auto')
+            #    Checks ALL path segments, not just first, so /magazines/presence-du-cinema
+            #    gets the 'content' bonus even though 'magazines' isn't in prefer_segs.
+            focus_adjustment = 0.0
+            if prefer_segs or deprioritize_segs:
+                all_segs_lower = {s.lower() for s in segments}
+                # Check each segment and any hyphen-joined subword
+                all_tokens = set()
+                for s in all_segs_lower:
+                    all_tokens.add(s)
+                    all_tokens.update(s.split('-'))
+
+                if all_tokens & prefer_segs:
+                    focus_adjustment = +0.25
+                elif all_tokens & deprioritize_segs:
+                    focus_adjustment = -0.25
+
+            diversity_score = (
+                (uniqueness    * 0.5)
+                + (depth_score * 0.3)
+                + (pattern_bonus * 0.2)
+                + focus_adjustment          # applied additively, not weighted
+            )
 
             scored.append({
                 'url': url,
@@ -600,7 +669,8 @@ class DeepEvidenceEngine:
                 'depth': depth,
                 'template_group': first_seg,
                 'is_instance': is_instance,
-                'diversity_score': round(diversity_score, 3)
+                'focus_adjustment': focus_adjustment,
+                'diversity_score': round(diversity_score, 3),
             })
 
         scored.sort(key=lambda x: x['diversity_score'], reverse=True)
@@ -1638,6 +1708,16 @@ class DeepEvidenceEngine:
         except Exception as e:
             print(f"   ⚠️  Design playbook generation failed: {e}")
 
+        # Motion Narrative — explains *why* motion choices matter, not just what they are
+        if evidence.get('motion_tokens'):
+            try:
+                evidence['motion_tokens']['narrative'] = self._synthesize_motion_narrative(
+                    evidence['motion_tokens'],
+                    cdp_evidence=evidence.get('cdp_animations'),
+                )
+            except Exception as e:
+                logger.debug(f"Motion narrative synthesis failed: {e}")
+
         # Design Intent — one-sentence tonal summary for dashboard hero
         try:
             evidence['design_intent'] = self._synthesize_design_intent(evidence, url)
@@ -2518,12 +2598,13 @@ class DeepEvidenceEngine:
                 'verdict': f"{round(consistency_pct)}% consistent" if consistency_pct >= 90 else f"Varies by page"
             }
 
-        # Calculate overall consistency score
+        # ── Overall score + verdict ──────────────────────────────────────────
+        page_labels = list(valid_pages.keys())
+
         if metric_scores:
             overall = statistics.mean(metric_scores)
             consistency_report['overall_consistency_score'] = round(overall, 1)
 
-            # Verdict based on overall score
             if overall >= 95:
                 consistency_report['verdict'] = 'Highly Consistent Design System'
             elif overall >= 85:
@@ -2536,6 +2617,60 @@ class DeepEvidenceEngine:
                 consistency_report['verdict'] = 'No Consistent Design System Detected'
         else:
             consistency_report['verdict'] = 'Insufficient metrics for consistency analysis'
+
+        # ── Provenance: stamp each metric with methodology details ───────────
+        # "100% consistent" is a strong claim — show how it was calculated.
+        _METRIC_METHODOLOGY = {
+            'primary_color': (
+                'Extracts first entry from colors.palette.primary for each page. '
+                'consistency_pct = (1 - (unique_count - 1) / total_pages) × 100. '
+                'Threshold: ≥90% = consistent.'
+            ),
+            'spacing_base_unit': (
+                'Parses spacing_scale.base_unit (int or "Xpx" string). '
+                'consistency_pct = (1 - stddev / mean) × 100. '
+                'Threshold: stddev=0 = Perfect consistency.'
+            ),
+            'primary_font': (
+                'Extracts first entry from typography.fonts for each page. '
+                'consistency_pct = (1 - (unique_count - 1) / total_pages) × 100. '
+                'Threshold: ≥90% = consistent.'
+            ),
+            'shadow_levels': (
+                'Counts len(shadow_system.levels) for each page. '
+                'consistency_pct = (1 - stddev / mean) × 100. '
+                'Threshold: ≥90% = consistent.'
+            ),
+            'breakpoint_count': (
+                'Counts len(responsive_breakpoints.breakpoints) for each page. '
+                'consistency_pct = (1 - stddev / mean) × 100. '
+                'Threshold: ≥90% = consistent.'
+            ),
+        }
+
+        for metric_key, metric_data in consistency_report['metrics'].items():
+            metric_data['_provenance'] = {
+                'source':           'synthesized',
+                'pages_compared':   page_labels,
+                'pages_count':      len(page_labels),
+                'methodology':      _METRIC_METHODOLOGY.get(metric_key, 'Cross-page value comparison.'),
+                'consistent_threshold': '≥90% consistency_pct',
+                'computed_by':      '_calculate_design_system_variance()',
+            }
+
+        # Top-level provenance for the whole consistency report
+        consistency_report['_provenance'] = {
+            'source':         'synthesized',
+            'pages_compared': page_labels,
+            'metrics_checked': list(consistency_report['metrics'].keys()),
+            'overall_method': (
+                'Arithmetic mean of individual metric consistency_pct scores. '
+                'Each metric computes consistency independently using its own comparator '
+                '(unique-value ratio for categorical, stddev/mean for numeric). '
+                'Pages with errors are excluded from all comparisons.'
+            ),
+            'computed_by': '_calculate_design_system_variance()',
+        }
 
         return consistency_report
 
@@ -3181,6 +3316,18 @@ class DeepEvidenceEngine:
             # Get page HTML
             html_content = await page.content()
 
+            # ── Stability check (~2s overhead) ────────────────────────────────
+            # Snapshot the DOM structure now and again 2 seconds later.
+            # If the page mutates (A/B test, rotating banner, personalisation)
+            # the confidence of ALL extracted metrics will be downgraded
+            # proportionally and the reason annotated in _provenance.
+            print(f"   🔬 Checking page stability...")
+            _stability = await self._check_page_stability(page)
+            self._page_stability = _stability  # stash for injection into evidence
+
+            # Re-read HTML after the stability delay (captures any mutations)
+            html_content = await page.content()
+
             # ── Pre-flight: page quality assessment ──────────────────────────
             # Quick DOM scan (~0.3s) before spending 2-3 minutes on extraction.
             # If this URL is a sparse feed/landing page with little design signal,
@@ -3194,6 +3341,11 @@ class DeepEvidenceEngine:
                 # Single page analysis (original behavior)
                 print(f"   🔍 Single page analysis mode")
                 self.evidence = await self._analyze_single_page(page, self.url, html_content)
+                # Apply stability downgrade before returning (no-op if stable)
+                self.evidence = self._apply_stability_downgrade(
+                    self.evidence, _stability
+                )
+                self.evidence['page_stability'] = _stability
                 # Inject preflight assessment into evidence
                 if hasattr(self, '_preflight') and self._preflight:
                     self.evidence['entry_point'] = self._preflight
@@ -6159,19 +6311,30 @@ class DeepEvidenceEngine:
 
         # ── Tier 1: High-confidence full-page challenge (Cloudflare, PerimeterX, etc.)
         # These are definitive — the page is a challenge interstitial, not real content.
-        cf_indicators = [
-            ('cf-browser-verification', 'cloudflare_full'),
-            ('challenge-platform', 'cloudflare_full'),
-            ('challenge-running', 'cloudflare_full'),
-            ('cf-chl-bypass', 'cloudflare_full'),
-            ('managed-challenge', 'cloudflare_full'),
-            ('_cf_chl_opt', 'cloudflare_full'),
-            ('px-captcha', 'perimeterx'),
-            ('perimeterx', 'perimeterx'),
-            ('datadome', 'datadome'),
+        #
+        # Length-gated indicators: Cloudflare embeds monitoring scripts (referencing
+        # 'challenge-platform') into real pages even AFTER a challenge is solved. A
+        # real CF challenge interstitial is always < 25 KB. Real content with an
+        # embedded CF monitoring reference will be much larger.
+        # Unconditional indicators: only ever appear in actual challenge pages.
+        length_gated_cf = [
+            ('challenge-platform', 'cloudflare_full'),   # in CF monitoring scripts on real pages too
+            ('managed-challenge',  'cloudflare_full'),   # can appear in CF JS on real pages
         ]
-        for indicator, label in cf_indicators:
+        unconditional_cf = [
+            ('cf-browser-verification', 'cloudflare_full'),
+            ('challenge-running',       'cloudflare_full'),
+            ('cf-chl-bypass',           'cloudflare_full'),
+            ('_cf_chl_opt',             'cloudflare_full'),
+            ('px-captcha',              'perimeterx'),
+            ('perimeterx',              'perimeterx'),
+            ('datadome',                'datadome'),
+        ]
+        for indicator, label in unconditional_cf:
             if indicator in html_lower:
+                return label if detail else True
+        for indicator, label in length_gated_cf:
+            if indicator in html_lower and len(html) < 25_000:
                 return label if detail else True
 
         # ── Tier 2: Challenge-like phrases (moderately confident)
@@ -6633,6 +6796,206 @@ class DeepEvidenceEngine:
             pass
 
         return results
+
+    # ── Page stability check ─────────────────────────────────────────────────
+
+    async def _check_page_stability(self, page) -> Dict:
+        """
+        Take two structural DOM snapshots 2 seconds apart and compare them.
+
+        Catches silent corruption caused by A/B tests, rotating banners,
+        live tickers, and post-load personalisation scripts — cases where
+        the DOM changes after initial load and before extraction completes,
+        making the extracted values reflect whichever variant was active
+        at that moment.
+
+        Unlike a full page reload (which would add 20-30s), this re-evaluates
+        the already-loaded DOM, adding only the 2s sleep as overhead.
+
+        Returns:
+            {
+                'stable':    bool,   # True if ratio >= 0.90
+                'ratio':     float,  # weighted structural similarity 0.0-1.0
+                'signals':   [str],  # human-readable descriptions of what changed
+                'checked':   bool,   # False if the check itself failed
+                'snapshot_a': {...}, # element counts at T=0
+                'snapshot_b': {...}, # element counts at T+2s
+            }
+        """
+        _FINGERPRINT_JS = """() => {
+            const els = Array.from(document.querySelectorAll('*'));
+            const visible = els.filter(el => {
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 &&
+                       s.display !== 'none' &&
+                       s.visibility !== 'hidden';
+            });
+
+            // Text-bearing nodes (length > 10 chars filters timestamps/icons)
+            const walker = document.createTreeWalker(
+                document.body || document.documentElement,
+                NodeFilter.SHOW_TEXT,
+                null
+            );
+            let textCount = 0;
+            let node;
+            while ((node = walker.nextNode())) {
+                if ((node.textContent || '').trim().length > 10) textCount++;
+            }
+
+            return {
+                totalVisible:  visible.length,
+                textNodeCount: textCount,
+                headingCount:  document.querySelectorAll('h1,h2,h3,h4').length,
+                imageCount:    document.querySelectorAll('img').length,
+                buttonCount:   document.querySelectorAll(
+                    'button,[role="button"],[type="submit"]'
+                ).length,
+            };
+        }"""
+
+        try:
+            snap_a = await page.evaluate(_FINGERPRINT_JS)
+
+            # 2s gap — long enough for A/B test scripts and lazy personalisation
+            await asyncio.sleep(2)
+
+            snap_b = await page.evaluate(_FINGERPRINT_JS)
+
+            if not snap_a or not snap_b:
+                return {'stable': True, 'ratio': 1.0, 'signals': [], 'checked': False}
+
+            signals = []
+
+            def _ratio(a, b):
+                m = max(a, b)
+                return min(a, b) / m if m > 0 else 1.0
+
+            # Visible element count
+            total_a, total_b = snap_a['totalVisible'], snap_b['totalVisible']
+            elem_r = _ratio(total_a, total_b)
+            if elem_r < 0.95:
+                delta = abs(total_b - total_a)
+                signals.append(
+                    f'visible element count shifted by {delta} '
+                    f'({total_a} → {total_b})'
+                )
+
+            # Text nodes (most sensitive to content rotation)
+            text_a, text_b = snap_a['textNodeCount'], snap_b['textNodeCount']
+            text_r = _ratio(text_a, text_b)
+            if text_r < 0.90:
+                signals.append(
+                    f'text node count shifted ({text_a} → {text_b}) '
+                    '— rotating content or A/B test suspected'
+                )
+
+            # Headings (hero text swap = strong A/B signal)
+            h_a, h_b = snap_a['headingCount'], snap_b['headingCount']
+            head_r = _ratio(h_a, h_b) if max(h_a, h_b) > 0 else 1.0
+            if h_a != h_b:
+                signals.append(
+                    f'heading count changed ({h_a} → {h_b}) '
+                    '— page variant or content swap'
+                )
+
+            # Images (rotating carousel / banner)
+            img_a, img_b = snap_a['imageCount'], snap_b['imageCount']
+            img_r = _ratio(img_a, img_b)
+            if img_r < 0.85:
+                signals.append(
+                    f'image count shifted ({img_a} → {img_b}) '
+                    '— rotating carousel or banner'
+                )
+
+            # Weighted geometric mean — element count carries most weight
+            ratio = (elem_r ** 0.5) * (text_r ** 0.3) * (img_r ** 0.2)
+            ratio = round(ratio, 3)
+            stable = ratio >= 0.90
+
+            if not stable:
+                print(
+                    f"   ⚠️  Page instability detected (ratio={ratio:.2f}): "
+                    + '; '.join(signals[:2])
+                )
+
+            return {
+                'stable':     stable,
+                'ratio':      ratio,
+                'signals':    signals,
+                'checked':    True,
+                'snapshot_a': {
+                    'visible_elements': total_a,
+                    'text_nodes':       text_a,
+                    'headings':         h_a,
+                    'images':           img_a,
+                },
+                'snapshot_b': {
+                    'visible_elements': total_b,
+                    'text_nodes':       text_b,
+                    'headings':         h_b,
+                    'images':           img_b,
+                },
+            }
+
+        except Exception as e:
+            logger.debug(f"_check_page_stability failed: {e}")
+            return {
+                'stable': True, 'ratio': 1.0, 'signals': [],
+                'checked': False, 'error': str(e)[:120],
+            }
+
+    def _apply_stability_downgrade(self, evidence: Dict, stability: Dict) -> Dict:
+        """
+        Post-processing step: if the page was structurally unstable during
+        extraction, proportionally downgrade every extractor's confidence
+        score and annotate the provenance of affected keys.
+
+        Called in extract_all() after _analyze_single_page() returns.
+        No-op when stability.stable is True or stability.checked is False.
+
+        Downgrade formula:
+            ratio=0.90 → -10 pts   (just below threshold)
+            ratio=0.80 → -20 pts
+            ratio=0.70 → -30 pts (capped)
+
+        Args:
+            evidence:   The full evidence dict (mutated in-place).
+            stability:  Result from _check_page_stability().
+
+        Returns:
+            The same evidence dict.
+        """
+        if stability.get('stable', True) or not stability.get('checked', False):
+            return evidence
+
+        from extractors.provenance import mark_stability_downgraded
+
+        ratio    = stability.get('ratio', 1.0)
+        signals  = stability.get('signals', [])
+        pts      = min(30, max(5, round((1.0 - ratio) * 100)))
+
+        print(
+            f"   📉 Applying stability downgrade: −{pts} pts on all metrics "
+            f"(ratio={ratio:.2f})"
+        )
+
+        for key, value in evidence.items():
+            if not isinstance(value, dict):
+                continue
+            if 'confidence' not in value:
+                continue
+            original = value['confidence']
+            value['confidence'] = max(0, original - pts)
+            mark_stability_downgraded(
+                value,
+                downgrade_pts=pts,
+                stability_ratio=ratio,
+                signals=signals,
+            )
+
+        return evidence
 
     async def _preflight_page_quality(self, page, url: str) -> Dict:
         """
@@ -8035,6 +8398,221 @@ class DeepEvidenceEngine:
             return f"{zone_type} section{size_hint}"
         return None
 
+    def _synthesize_motion_narrative(
+        self,
+        motion: Dict,
+        cdp_evidence: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        Convert raw motion tokens (durations, easing curves, patterns) into a
+        structured narrative that explains *why* those choices exist — not just
+        what they are.
+
+        Returns:
+            {
+                'strategy':       str,    # 'minimal'|'performance-conscious'|'layered'|'expressive'
+                'context_groups': {       # motion grouped by user-experience context
+                    'hover':        {ms, easing, elements},
+                    'reveal':       {ms, easing, elements},
+                    'ambient':      {ms, easing, elements},
+                    'page_transition': {ms, easing, elements},
+                },
+                'dominant_easing': str,
+                'anomalies':      [str],  # anything that doesn't fit the pattern
+                'summary':        str,    # one paragraph for designers
+                'comparison_note': str,   # set by caller when cross-page comparison is available
+            }
+        """
+        details  = motion.get('details', {})
+        ds       = details.get('duration_scale', {})
+        tiers    = ds.get('duration_tiers', ds.get('tiers', {}))
+        patterns = details.get('motion_patterns', [])
+        kf_anims = details.get('keyframe_animations', [])
+        ep       = details.get('easing_palette', {})
+        choreo   = motion.get('choreography', [])
+        libraries = details.get('libraries', [])
+        durations = ds.get('values_ms', [])
+
+        # ── 1. Map patterns to UX contexts ───────────────────────────────────
+        # The motion_patterns list has named entries like 'hover_feedback' and
+        # 'state_change'. Map these to semantic UX contexts.
+        context_groups: Dict = {}
+        _CONTEXT_MAP = {
+            'hover_feedback':    'hover',
+            'hover':             'hover',
+            'state_change':      'reveal',
+            'reveal':            'reveal',
+            'scroll':            'reveal',
+            'entrance':          'reveal',
+            'page_transition':   'page_transition',
+            'loading':           'ambient',
+            'ambient':           'ambient',
+            'loop':              'ambient',
+        }
+        for p in patterns:
+            pname = p.get('name', '').lower()
+            ctx   = _CONTEXT_MAP.get(pname)
+            if not ctx:
+                # fallback: classify by duration
+                ms = p.get('duration_ms', 0)
+                if ms <= 150:
+                    ctx = 'hover'
+                elif ms <= 350:
+                    ctx = 'reveal'
+                elif ms <= 800:
+                    ctx = 'page_transition'
+                else:
+                    ctx = 'ambient'
+            context_groups[ctx] = {
+                'ms':       p.get('duration_ms'),
+                'easing':   p.get('easing', ''),
+                'elements': p.get('element_count', 0),
+                'props':    p.get('properties', [])[:4],
+            }
+
+        # Also classify tier data not covered by named patterns
+        tier_context_map = {
+            'fast':     'hover',
+            'micro':    'hover',
+            'normal':   'reveal',
+            'slow':     'reveal',
+            'dramatic': 'page_transition',
+            'glacial':  'ambient',
+        }
+        for tier_name, tier_data in tiers.items():
+            ctx = tier_context_map.get(tier_name, 'reveal')
+            if ctx not in context_groups:
+                context_groups[ctx] = {
+                    'ms':       tier_data.get('ms'),
+                    'easing':   ep.get('primary', 'ease'),
+                    'elements': tier_data.get('count', 0),
+                    'props':    [],
+                }
+
+        # ── 2. Detect anomalies ──────────────────────────────────────────────
+        anomalies: list = []
+
+        # Sub-perception threshold check (applies to any number of durations)
+        for d in durations:
+            if 0 < d < 50:
+                anomalies.append(
+                    f"{d}ms is below the human perception threshold (~50ms). "
+                    "At this speed, animation serves no functional purpose — "
+                    "it only adds CSS parse cost."
+                )
+
+        # Outlier durations (more than 3× away from median — meaningful with 3+ values)
+        if len(durations) >= 3:
+            sorted_d = sorted(durations)
+            median = sorted_d[len(sorted_d) // 2]
+            for d in durations:
+                if d > median * 3 and d > 500:
+                    anomalies.append(
+                        f"{d}ms is an outlier — {round(d / max(median, 1), 1)}× the median "
+                        f"({median}ms). Verify it's intentional (page transition or loader?)."
+                    )
+
+        # Infinite-loop keyframes that aren't obviously loaders
+        for kf in kf_anims:
+            if kf.get('iteration') == 'infinite' and kf.get('duration_ms', 0) > 500:
+                kf_name = kf.get('name', '?')
+                anomalies.append(
+                    f"Infinite keyframe animation '{kf_name}' ({kf.get('duration_ms')}ms). "
+                    "Ambient looping animation — ensure it can be paused for "
+                    "prefers-reduced-motion users."
+                )
+
+        # JS animation libraries (if detected, CSS motion tokens are incomplete)
+        if libraries:
+            anomalies.append(
+                f"JS animation libraries detected: {', '.join(libraries)}. "
+                "CSS motion tokens are partial — JS-driven animations (GSAP, Framer, etc.) "
+                "won't appear in duration_scale or easing_palette."
+            )
+
+        # CDP found animations CSS extractor missed
+        if cdp_evidence and isinstance(cdp_evidence, dict):
+            cdp_count = cdp_evidence.get('total_captured', 0)
+            if cdp_count > len(kf_anims) * 2:
+                anomalies.append(
+                    f"CDP captured {cdp_count} runtime animations vs "
+                    f"{len(kf_anims)} CSS keyframes. "
+                    "JavaScript is triggering significant animation not visible in stylesheets."
+                )
+
+        # ── 3. Classify motion strategy ──────────────────────────────────────
+        hover_ms  = context_groups.get('hover', {}).get('ms', 0) or 0
+        reveal_ms = context_groups.get('reveal', {}).get('ms', 0) or 0
+        pt_ms     = context_groups.get('page_transition', {}).get('ms', 0) or 0
+
+        n_durations = len(durations)
+        has_spring  = any('spring' in str(kf.get('easing','')) for kf in kf_anims)
+        has_library = bool(libraries)
+        has_overshoot = any(
+            c.get('role') == 'spring'
+            for c in ep.get('curves', [])
+        )
+
+        if n_durations <= 1 and not has_library:
+            strategy = 'minimal'
+        elif has_spring or has_overshoot:
+            strategy = 'expressive'
+        elif has_library:
+            strategy = 'layered'
+        elif n_durations >= 3 and hover_ms and hover_ms <= 150:
+            strategy = 'performance-conscious'
+        else:
+            strategy = 'layered'
+
+        # ── 4. Build summary paragraph ───────────────────────────────────────
+        strategy_desc = {
+            'minimal':               "minimal motion — one duration, no animation library, animation is functional not expressive",
+            'performance-conscious': "performance-conscious motion — fast hover feedback (imperceptible), deliberate reveal timing, consistent page transitions",
+            'layered':               "layered motion — multiple distinct animation contexts with different durations and easings per purpose",
+            'expressive':            "expressive motion — spring physics, overshoot curves, or JS animation libraries producing personality-forward animation",
+        }.get(strategy, strategy)
+
+        dominant_easing = ep.get('primary', 'ease')
+
+        parts = []
+        if hover_ms:
+            parts.append(
+                f"Hover interactions at {hover_ms}ms "
+                f"({'sub-perceptual — snappy' if hover_ms < 100 else 'perceptible — deliberate' if hover_ms > 200 else 'near-threshold — responsive'})"
+            )
+        if reveal_ms:
+            parts.append(
+                f"content reveals at {reveal_ms}ms "
+                f"({'fast, content-first' if reveal_ms < 200 else 'measured, designed to be seen' if reveal_ms < 350 else 'slow, cinematic'})"
+            )
+        if pt_ms:
+            parts.append(f"page-level transitions at {pt_ms}ms")
+
+        easing_note = {
+            'ease-in-out': "Standard ease-in-out — nothing unexpected, professionally appropriate",
+            'ease':        "CSS ease default — functional choice, not a deliberate design token",
+            'linear':      "Linear — common for loaders or progress; jarring for content transitions",
+            'ease-in':     "Ease-in dominant — accelerating exits; slightly unusual for reveal patterns",
+            'ease-out':    "Ease-out dominant — decelerating entrances; correct for reveal patterns",
+        }.get(dominant_easing, f"Custom easing ({dominant_easing})")
+
+        summary_parts = [
+            f"This site uses {strategy_desc}.",
+        ]
+        if parts:
+            summary_parts.append(f"{'; '.join(parts)}.")
+        summary_parts.append(easing_note + '.')
+        if anomalies:
+            summary_parts.append(f"{len(anomalies)} anomaly detected — see anomalies list.")
+
+        return {
+            'strategy':        strategy,
+            'context_groups':  context_groups,
+            'dominant_easing': dominant_easing,
+            'anomalies':       anomalies,
+            'summary':         ' '.join(summary_parts),
+        }
+
     def _synthesize_design_intent(self, evidence: Dict, url: str) -> str:
         """Produce a single readable sentence describing the site's design personality.
 
@@ -9200,6 +9778,184 @@ class DeepEvidenceEngine:
         if any('/category/' in path or '/categories/' in path for path in paths):
             patterns['categories'] = '/category/:category'
         return patterns
+
+
+async def multi_template_discover(
+    url: str,
+    max_pages: int = 30,
+    max_depth: int = 2,
+) -> Dict:
+    """
+    Phase 1 of the two-pass multi-template split.
+
+    Lightweight URL discovery: HTML fetch + BeautifulSoup only — no Playwright,
+    no deep extraction. Returns URL template clusters in < 15 seconds.
+
+    This is the function tested by test_multi_template_timeout.py's
+    test_multi_template_discover_is_fast. When that test passes, the timeout
+    problem is solved.
+
+    Args:
+        url:       Starting URL (homepage).
+        max_pages: Maximum links to collect before clustering. Default 30.
+        max_depth: Maximum crawl depth (1 = homepage only, 2 = follow one level). Default 2.
+
+    Returns:
+        {
+            'patterns': [
+                {
+                    'template': '/:section/:slug',
+                    'count':    12,
+                    'examples': ['https://site.com/blog/some-post', ...],
+                    'depth':    2,
+                    'label':    'Blog Article',
+                }
+            ],
+            'total_urls_found': int,
+            'discovery_time_s': float,
+            'url':              str,
+        }
+    """
+    import time
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urlparse, urljoin
+
+    start = time.perf_counter()
+    parsed_base = urlparse(url)
+    base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+    _HEADERS = {
+        'User-Agent': (
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        ),
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+    collected: set = set()
+
+    def _fetch_links(page_url: str) -> List[str]:
+        """Fetch one page and return internal hrefs."""
+        try:
+            resp = requests.get(page_url, headers=_HEADERS, timeout=8, allow_redirects=True)
+            if resp.status_code != 200:
+                return []
+            soup = BeautifulSoup(resp.text, 'lxml')
+            links = []
+            for a in soup.find_all('a', href=True):
+                href = a['href'].strip()
+                abs_href = urljoin(page_url, href)
+                p = urlparse(abs_href)
+                # Only internal, no fragments, no query-only
+                if (p.netloc == parsed_base.netloc
+                        and p.scheme in ('http', 'https')
+                        and not abs_href.endswith(('.pdf', '.jpg', '.png', '.zip'))
+                        and p.path != '/'):
+                    links.append(abs_href.split('#')[0].rstrip('/'))
+            return list(set(links))
+        except Exception:
+            return []
+
+    # Depth 1: homepage links
+    homepage_links = _fetch_links(url)
+    for link in homepage_links[:max_pages]:
+        collected.add(link)
+
+    # Depth 2 (optional): follow a sample of homepage links
+    if max_depth >= 2 and len(collected) < max_pages:
+        # Pick a diverse sample (up to 5 links, different first segments)
+        seen_segs: set = set()
+        sample = []
+        for link in homepage_links:
+            seg = urlparse(link).path.split('/')[1] if '/' in urlparse(link).path else ''
+            if seg and seg not in seen_segs and len(sample) < 5:
+                seen_segs.add(seg)
+                sample.append(link)
+        for link in sample:
+            for sub in _fetch_links(link)[:10]:
+                if len(collected) < max_pages * 3:
+                    collected.add(sub)
+
+    all_urls = list(collected)
+
+    # ── Cluster URLs into templates ──────────────────────────────────────────
+    # Reuse the existing DEE pattern-clustering logic by instantiating a minimal engine
+    _engine = DeepEvidenceEngine.__new__(DeepEvidenceEngine)
+    _engine.analysis_focus = 'auto'
+
+    # Build a minimal links_data dict and use _select_template_representatives
+    # (which already does pattern clustering internally)
+    # Instead, use the scoring + group approach directly:
+    def _extract_template(path: str) -> str:
+        """
+        Replace variable path segments with :param placeholders so that
+        /blog/post-one, /blog/post-two → /blog/:slug (same template).
+
+        Heuristics (in order):
+          - 4+ consecutive digits → :id (years, numeric IDs)
+          - Hyphen-separated words (any 2+) and NOT a short known keyword → :slug
+          - 8+ alphanumeric chars with no internal meaning → :id (hashes)
+          - Otherwise keep literal (structural segment like /blog, /shop)
+        """
+        import re as _re
+
+        # Short segments that look like slugs but are structural nav keywords
+        _STRUCTURAL = {
+            'blog', 'shop', 'features', 'about', 'podcast', 'news',
+            'magazine', 'magazines', 'category', 'categories',
+            'product', 'products', 'archive', 'archives',
+            'tag', 'tags', 'author', 'authors', 'page', 'pages',
+            'issue', 'issues', 'article', 'articles',
+        }
+
+        parts = path.strip('/').split('/')
+        out = []
+        for part in parts:
+            if not part:
+                continue
+            if _re.search(r'\d{4,}', part):              # year or long numeric ID
+                out.append(':id')
+            elif (part.lower() not in _STRUCTURAL          # not a nav keyword
+                  and _re.search(r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$', part, _re.I)):
+                out.append(':slug')                        # hyphenated-slug
+            elif _re.search(r'^[a-z0-9]{8,}$', part, _re.I):  # hash or UUID-ish
+                out.append(':id')
+            else:
+                out.append(part)                          # structural literal
+        return '/' + '/'.join(out) if out else '/'
+
+    clusters: Dict[str, list] = {}
+    for link in all_urls:
+        p = urlparse(link)
+        tmpl = _extract_template(p.path)
+        if tmpl not in clusters:
+            clusters[tmpl] = []
+        clusters[tmpl].append(link)
+
+    patterns = []
+    for tmpl, examples in sorted(clusters.items(), key=lambda x: -len(x[1])):
+        depth = len([s for s in tmpl.split('/') if s])
+        # Clean label from template
+        segs = [s for s in tmpl.split('/') if s and not s.startswith(':')]
+        label = ' › '.join(s.replace('-', ' ').title() for s in segs[:3]) or 'Homepage'
+        patterns.append({
+            'template': tmpl,
+            'count':    len(examples),
+            'examples': examples[:3],
+            'depth':    depth,
+            'label':    label,
+        })
+
+    elapsed = round(time.perf_counter() - start, 2)
+
+    return {
+        'patterns':          patterns,
+        'total_urls_found':  len(all_urls),
+        'discovery_time_s':  elapsed,
+        'url':               url,
+    }
 
 
 async def test_deep_engine():
