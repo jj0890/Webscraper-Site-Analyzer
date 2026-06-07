@@ -2629,6 +2629,176 @@
                 font-size: var(--text-xs);
             }
         }
+
+        /* ── Library Tab ── */
+        .lib-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--space-4);
+            gap: var(--space-3);
+            flex-wrap: wrap;
+        }
+        .lib-stats-bar {
+            display: flex;
+            gap: var(--space-4);
+            font-size: var(--text-sm);
+            color: var(--text-muted);
+        }
+        .lib-stats-bar strong { color: var(--text-primary); }
+        .lib-search-row {
+            display: flex;
+            gap: var(--space-3);
+            align-items: center;
+            margin-bottom: var(--space-3);
+            flex-wrap: wrap;
+        }
+        .lib-search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: var(--space-2) var(--space-3);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-primary);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-size: var(--text-sm);
+        }
+        .lib-search-input:focus { outline: none; border-color: var(--accent-blue); }
+        .lib-filter-row {
+            display: flex;
+            gap: var(--space-2);
+            align-items: center;
+            margin-bottom: var(--space-4);
+            flex-wrap: wrap;
+        }
+        .lib-pill {
+            padding: 3px 10px;
+            border-radius: 12px;
+            border: 1px solid var(--border-primary);
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            font-size: var(--text-xs);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .lib-pill:hover { border-color: var(--accent-blue); color: var(--text-primary); }
+        .lib-pill.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+        .lib-conf-label { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+        .lib-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: var(--text-sm);
+        }
+        .lib-table th {
+            text-align: left;
+            padding: var(--space-2) var(--space-3);
+            color: var(--text-muted);
+            font-size: var(--text-xs);
+            font-weight: 500;
+            border-bottom: 1px solid var(--border-primary);
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        .lib-table th:hover { color: var(--text-primary); }
+        .lib-table td {
+            padding: var(--space-2) var(--space-3);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: middle;
+        }
+        .lib-table tr:hover td { background: rgba(255,255,255,0.03); cursor: pointer; }
+        .lib-row-expand td { background: rgba(99,179,237,0.05) !important; }
+        .lib-color-dot {
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            display: inline-block;
+            border: 1px solid rgba(255,255,255,0.15);
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        .lib-conf-bar {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .lib-conf-pip {
+            width: 36px; height: 4px;
+            border-radius: 2px;
+            background: var(--border-primary);
+            overflow: hidden;
+        }
+        .lib-conf-pip-fill { height: 100%; border-radius: 2px; }
+        .lib-motion-badge {
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .lib-motion-minimal          { background: rgba(100,100,100,0.25); color: #888; }
+        .lib-motion-performance-conscious { background: rgba(72,187,120,0.15); color: #68d391; }
+        .lib-motion-layered          { background: rgba(99,179,237,0.15); color: #63b3ed; }
+        .lib-motion-expressive       { background: rgba(246,173,85,0.15); color: #f6ad55; }
+        .lib-expand-panel {
+            padding: var(--space-4);
+            background: var(--bg-secondary);
+            border-radius: var(--radius-md);
+            margin: 0 var(--space-3) var(--space-3);
+            font-size: var(--text-sm);
+        }
+        .lib-expand-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: var(--space-3);
+        }
+        .lib-expand-cell { }
+        .lib-expand-cell .lec-label {
+            font-size: var(--text-xs);
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .lib-expand-cell .lec-value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .lib-empty {
+            text-align: center;
+            padding: var(--space-10) var(--space-4);
+            color: var(--text-muted);
+        }
+        .lib-empty-icon { font-size: 2.5rem; margin-bottom: var(--space-3); }
+        .lib-section-title {
+            font-size: var(--text-sm);
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin: var(--space-6) 0 var(--space-3);
+            padding-bottom: var(--space-2);
+            border-bottom: 1px solid var(--border-primary);
+        }
+        .lib-findings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: var(--space-3);
+        }
+        .lib-finding-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-primary);
+            border-radius: var(--radius-md);
+            padding: var(--space-3);
+        }
+        .lib-finding-card .lfc-url { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: 4px; }
+        .lib-finding-card .lfc-label { font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-2); }
+        .lib-finding-card .lfc-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: var(--space-2); }
+        .lib-finding-card .lfc-tag {
+            padding: 1px 6px;
+            background: rgba(99,179,237,0.12);
+            border-radius: 8px;
+            font-size: 11px;
+            color: #63b3ed;
+        }
+        .lib-finding-card .lfc-meta { font-size: var(--text-xs); color: var(--text-muted); }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
@@ -2741,6 +2911,7 @@
                 <div class="tab" data-tab="apimap">API Map</div>
                 <div class="tab" data-tab="debug">Debug View</div>
                 <div class="tab" data-tab="analytics">Analytics</div>
+                <div class="tab" data-tab="library">📚 Library</div>
             </div>
 
             <!-- Extraction Results Tab -->
@@ -3023,6 +3194,68 @@
                     <!-- Analytics metrics will be inserted here -->
                 </div>
             </div>
+
+            <!-- Library Tab -->
+            <div class="tab-content" id="libraryTab">
+                <!-- Stats bar -->
+                <div class="lib-header">
+                    <div class="lib-stats-bar" id="libStatsBar">
+                        <span>Loading library…</span>
+                    </div>
+                    <button class="btn btn-secondary" style="font-size:var(--text-xs)" onclick="loadLibraryTab(true)">↺ Refresh</button>
+                </div>
+
+                <!-- Search + filters -->
+                <div class="lib-search-row">
+                    <input
+                        class="lib-search-input"
+                        id="libSearchInput"
+                        type="text"
+                        placeholder="Search by domain, font name, #hex color, or strategy…"
+                        oninput="debounceLibSearch()"
+                    />
+                </div>
+                <div class="lib-filter-row">
+                    <span class="lib-conf-label">Motion:</span>
+                    <button class="lib-pill active" data-strategy="all"    onclick="libSetStrategy(this,'all')">All</button>
+                    <button class="lib-pill"        data-strategy="minimal" onclick="libSetStrategy(this,'minimal')">Minimal</button>
+                    <button class="lib-pill"        data-strategy="performance-conscious" onclick="libSetStrategy(this,'performance-conscious')">Perf-conscious</button>
+                    <button class="lib-pill"        data-strategy="layered" onclick="libSetStrategy(this,'layered')">Layered</button>
+                    <button class="lib-pill"        data-strategy="expressive" onclick="libSetStrategy(this,'expressive')">Expressive</button>
+                    <span class="lib-conf-label" style="margin-left:var(--space-3)">Min confidence:</span>
+                    <input type="range" id="libConfSlider" min="0" max="100" value="0" style="width:80px;accent-color:var(--accent-blue)" oninput="document.getElementById('libConfVal').textContent=this.value+'%'; debounceLibSearch()">
+                    <span class="lib-conf-label" id="libConfVal">0%</span>
+                </div>
+
+                <!-- Results table -->
+                <div id="libTableWrap">
+                    <table class="lib-table" id="libTable">
+                        <thead>
+                            <tr>
+                                <th onclick="libSort('domain')">Domain ↕</th>
+                                <th onclick="libSort('primary_font')">Font ↕</th>
+                                <th onclick="libSort('motion_strategy')">Motion ↕</th>
+                                <th>Color</th>
+                                <th onclick="libSort('overall_confidence')">Conf ↕</th>
+                                <th onclick="libSort('scanned_at')">Scanned ↕</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="libTableBody">
+                            <tr><td colspan="7" class="lib-empty">
+                                <div class="lib-empty-icon">📚</div>
+                                <div>Library loading…</div>
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Findings / swipe file -->
+                <div id="libFindingsSection" style="display:none">
+                    <div class="lib-section-title">📌 Saved Findings</div>
+                    <div class="lib-findings-grid" id="libFindingsGrid"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -3063,6 +3296,7 @@
                 // Visual Hierarchy overlay needs recalculation when tab becomes visible
                 // (img.onload fires while tab is hidden → scale=0 → rects invisible)
                 if (targetTab === 'hierarchy') _vhRecalcOverlay();
+                if (targetTab === 'library') loadLibraryTab();
             });
         });
 
@@ -14992,6 +15226,281 @@
             }
 
             return container;
+        }
+
+        // ── Library Tab ──────────────────────────────────────────────────────
+
+        let _libLoaded      = false;       // only fetch on first open (refresh overrides)
+        let _libAllRows     = [];          // full result set for client-side filtering
+        let _libStrategy    = 'all';       // active strategy pill
+        let _libSortKey     = 'scanned_at';
+        let _libSortDir     = -1;          // -1 = desc, 1 = asc
+        let _libSearchTimer = null;
+        let _libOpenRowId   = null;        // currently expanded row scan id
+
+        async function loadLibraryTab(force = false) {
+            if (_libLoaded && !force) return;
+            _libLoaded = true;
+
+            // Stats header
+            try {
+                const s = await fetch('/api/library/stats').then(r => r.json());
+                const statsBar = document.getElementById('libStatsBar');
+                const topFont  = s.common_fonts?.[0]?.font ?? '—';
+                statsBar.innerHTML = `
+                    <span><strong>${s.total_scans}</strong> scans</span>
+                    <span><strong>${s.unique_domains}</strong> domains</span>
+                    <span>Most common font: <strong>${topFont}</strong></span>
+                    <span><strong>${s.total_findings}</strong> saved findings</span>
+                `;
+            } catch(e) { /* non-fatal */ }
+
+            // Scan rows
+            try {
+                const data = await fetch('/api/library?limit=200').then(r => r.json());
+                _libAllRows = data.scans || [];
+                _renderLibTable();
+            } catch(e) {
+                document.getElementById('libTableBody').innerHTML =
+                    `<tr><td colspan="7" class="lib-empty"><div class="lib-empty-icon">⚠️</div><div>Could not load library: ${e.message}</div></td></tr>`;
+            }
+
+            // Findings
+            _loadLibFindings();
+        }
+
+        async function _loadLibFindings() {
+            try {
+                const data = await fetch('/api/library/findings?limit=50').then(r => r.json());
+                const findings = data.findings || [];
+                const section  = document.getElementById('libFindingsSection');
+                const grid     = document.getElementById('libFindingsGrid');
+                if (!findings.length) { section.style.display = 'none'; return; }
+                section.style.display = '';
+                grid.innerHTML = findings.map(f => {
+                    const tags = JSON.parse(f.tags || '[]');
+                    const date = new Date(f.saved_at * 1000).toLocaleDateString();
+                    const tagHtml = tags.map(t => `<span class="lfc-tag">${t}</span>`).join('');
+                    const domain = (() => { try { return new URL(f.scan_url).hostname; } catch(e) { return f.scan_url; } })();
+                    return `
+                        <div class="lib-finding-card">
+                            <div class="lfc-url">${domain}</div>
+                            <div class="lfc-label">${f.label || 'Untitled finding'}</div>
+                            <div class="lfc-tags">${tagHtml}</div>
+                            <div class="lfc-meta">${date}</div>
+                        </div>`;
+                }).join('');
+            } catch(e) { /* non-fatal */ }
+        }
+
+        function debounceLibSearch() {
+            clearTimeout(_libSearchTimer);
+            _libSearchTimer = setTimeout(_applyLibFilter, 250);
+        }
+
+        function libSetStrategy(btn, strategy) {
+            document.querySelectorAll('.lib-pill').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            _libStrategy = strategy;
+            _applyLibFilter();
+        }
+
+        function libSort(key) {
+            if (_libSortKey === key) { _libSortDir *= -1; }
+            else { _libSortKey = key; _libSortDir = key === 'scanned_at' ? -1 : 1; }
+            _renderLibTable();
+        }
+
+        function _applyLibFilter() {
+            const raw   = document.getElementById('libSearchInput').value.trim().toLowerCase();
+            const minConf = parseInt(document.getElementById('libConfSlider').value, 10);
+
+            let rows = _libAllRows;
+
+            // Strategy filter
+            if (_libStrategy !== 'all') {
+                rows = rows.filter(r => r.motion_strategy === _libStrategy);
+            }
+
+            // Confidence filter
+            if (minConf > 0) {
+                rows = rows.filter(r => (r.overall_confidence || 0) >= minConf);
+            }
+
+            // Text filter — route by content
+            if (raw) {
+                if (raw.startsWith('#')) {
+                    // hex color
+                    rows = rows.filter(r => (r.primary_color || '').toLowerCase().startsWith(raw));
+                } else {
+                    rows = rows.filter(r =>
+                        (r.domain           || '').toLowerCase().includes(raw) ||
+                        (r.primary_font     || '').toLowerCase().includes(raw) ||
+                        (r.motion_strategy  || '').toLowerCase().includes(raw) ||
+                        (r.page_type        || '').toLowerCase().includes(raw) ||
+                        (r.brand_personality|| '').toLowerCase().includes(raw)
+                    );
+                }
+            }
+
+            _libAllRows._filtered = rows;
+            _renderLibTable(rows);
+        }
+
+        function _renderLibTable(rows) {
+            rows = rows || _libAllRows;
+
+            // Sort
+            const key = _libSortKey;
+            rows = [...rows].sort((a, b) => {
+                const va = a[key] ?? '';
+                const vb = b[key] ?? '';
+                if (va < vb) return -_libSortDir;
+                if (va > vb) return  _libSortDir;
+                return 0;
+            });
+
+            const tbody = document.getElementById('libTableBody');
+            if (!rows.length) {
+                tbody.innerHTML = `<tr><td colspan="7" class="lib-empty">
+                    <div class="lib-empty-icon">🔍</div>
+                    <div>No scans match this filter.</div>
+                </td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = rows.map(r => {
+                const domain   = r.domain || '—';
+                const font     = r.primary_font || '<em style="color:var(--text-muted)">—</em>';
+                const strategy = r.motion_strategy || '';
+                const conf     = r.overall_confidence;
+                const color    = r.primary_color;
+                const palette  = (() => { try { return JSON.parse(r.color_palette || '[]'); } catch(e) { return []; } })();
+                const date     = r.scanned_at ? new Date(r.scanned_at * 1000).toLocaleDateString() : '—';
+
+                const colorDots = (palette.length ? palette : (color ? [color] : [])).slice(0, 5).map(hex =>
+                    `<span class="lib-color-dot" style="background:${hex}" title="${hex}"></span>`
+                ).join('');
+
+                const motionClass = 'lib-motion-' + (strategy.replace(/\s/g, '-') || 'minimal');
+                const motionLabel = strategy || '—';
+
+                const confHtml = conf != null ? `
+                    <div class="lib-conf-bar">
+                        <div class="lib-conf-pip">
+                            <div class="lib-conf-pip-fill" style="width:${conf}%;background:${conf>=80?'#68d391':conf>=60?'#f6ad55':'#fc8181'}"></div>
+                        </div>
+                        ${conf}%
+                    </div>` : '<span style="color:var(--text-muted)">—</span>';
+
+                return `<tr data-scan-id="${r.id}" onclick="libToggleRow(this,'${r.id}')">
+                    <td><strong>${domain}</strong><br><span style="font-size:11px;color:var(--text-muted)">${r.page_type||''}</span></td>
+                    <td>${font}</td>
+                    <td><span class="lib-motion-badge ${motionClass}">${motionLabel}</span></td>
+                    <td>${colorDots || '<span style="color:var(--text-muted)">—</span>'}</td>
+                    <td>${confHtml}</td>
+                    <td style="color:var(--text-muted);font-size:var(--text-xs)">${date}</td>
+                    <td style="font-size:var(--text-xs);color:var(--accent-blue)">▶</td>
+                </tr>
+                <tr class="lib-expand-row" id="libExp_${r.id}" style="display:none">
+                    <td colspan="7" style="padding:0">
+                        <div class="lib-expand-panel" id="libExpContent_${r.id}">Loading…</div>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function libToggleRow(tr, scanId) {
+            // If clicking the expand row itself, ignore
+            if (tr.classList.contains('lib-expand-row')) return;
+
+            const expRow = document.getElementById('libExp_' + scanId);
+            const isOpen = expRow.style.display !== 'none';
+
+            // Close any previously open row
+            if (_libOpenRowId && _libOpenRowId !== scanId) {
+                const prev = document.getElementById('libExp_' + _libOpenRowId);
+                if (prev) prev.style.display = 'none';
+            }
+
+            if (isOpen) {
+                expRow.style.display = 'none';
+                _libOpenRowId = null;
+                return;
+            }
+
+            expRow.style.display = '';
+            _libOpenRowId = scanId;
+            tr.classList.add('lib-row-expand');
+
+            const panel = document.getElementById('libExpContent_' + scanId);
+            panel.textContent = 'Loading…';
+
+            try {
+                const data = await fetch('/api/library/' + scanId).then(r => r.json());
+                const sc   = data;
+                const ev   = sc.evidence || {};
+                const flat = ev.page_results?.home || ev;   // handle smart-nav
+
+                const typo    = flat.typography     || {};
+                const colors  = flat.colors         || {};
+                const spacing = flat.spacing_scale  || {};
+                const motion  = flat.motion_tokens  || {};
+                const spatial = flat.spatial_composition || {};
+                const layout  = flat.layout         || {};
+
+                const fonts  = typo.fonts || typo.ui_fonts || [];
+                const fontStr = Array.isArray(fonts) ? fonts.slice(0,2).join(', ') : '—';
+
+                const palette = colors.palette || {};
+                const allHex  = [...(palette.intentional||[]), ...(palette.primary||[])].slice(0,6);
+                const swatches = allHex.map(h =>
+                    `<span class="lib-color-dot" style="background:${h};width:18px;height:18px" title="${h}"></span>`
+                ).join('');
+
+                const narrative = motion.narrative || {};
+                const motionStr = narrative.summary || motion.motion_personality || '—';
+
+                const density   = spatial.whitespace_analysis?.content_density_pct;
+                const gridStr   = spatial.layout_grid?.grid_type || layout.pattern || '—';
+
+                const dsc = ev.design_system_consistency || {};
+                const consScore = dsc.overall_consistency_score
+                    ? (dsc.overall_consistency_score * 100).toFixed(0) + '%'
+                    : '—';
+
+                const typeScale = flat.typography?.type_scale;
+                let typeScaleStr = '—';
+                if (typeScale && typeof typeScale === 'object') {
+                    typeScaleStr = `×${(typeScale.ratio || 0).toFixed(2)} (${(typeScale.sizes_px || []).slice(0,3).join('/')} px)`;
+                } else if (typeof typeScale === 'number') {
+                    typeScaleStr = `×${typeScale.toFixed(2)}`;
+                }
+
+                panel.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--space-3);flex-wrap:wrap;gap:var(--space-2)">
+                        <div>
+                            <strong style="font-size:var(--text-base)">${sc.domain}</strong>
+                            <span style="font-size:var(--text-xs);color:var(--text-muted);margin-left:8px">${sc.analysis_mode || 'single'} · ${sc.access_strategy || ''}</span>
+                        </div>
+                        <div style="display:flex;gap:var(--space-2)">
+                            <button class="btn btn-secondary" style="font-size:11px" onclick="window.open('${sc.url}','_blank')">↗ Visit</button>
+                            <button class="btn btn-secondary" style="font-size:11px" onclick="document.getElementById('urlInput').value='${sc.url}'; loadLibraryTab._jumpScan=true; event.stopPropagation()">⟳ Re-scan</button>
+                        </div>
+                    </div>
+                    <div class="lib-expand-grid">
+                        <div class="lib-expand-cell"><div class="lec-label">Fonts</div><div class="lec-value">${fontStr || '—'}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Type Scale</div><div class="lec-value">${typeScaleStr}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Spacing Base</div><div class="lec-value">${sc.spacing_base_unit || spacing.base_unit || '—'}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Layout</div><div class="lec-value">${gridStr}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Colors</div><div class="lec-value" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${swatches || '—'}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Motion</div><div class="lec-value" style="font-size:var(--text-xs);max-width:220px">${motionStr}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Density</div><div class="lec-value">${density != null ? density.toFixed(1)+'%' : '—'}</div></div>
+                        <div class="lib-expand-cell"><div class="lec-label">Consistency</div><div class="lec-value">${consScore}</div></div>
+                    </div>`;
+            } catch(e) {
+                panel.textContent = 'Error loading detail: ' + e.message;
+            }
         }
     </script>
 
