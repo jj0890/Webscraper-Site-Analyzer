@@ -308,9 +308,10 @@ def rip_component():
     if selector and selector.lower() == 'auto':
         selector = None
     auth_state = data.get('auth_state')  # Optional
-    include_states = data.get('include_states', False)
-    output_format = data.get('output_format', 'json')
-    pre_action = data.get('pre_action')  # Optional — interact before ripping
+    include_states       = data.get('include_states', False)
+    output_format        = data.get('output_format', 'json')
+    pre_action           = data.get('pre_action')           # Optional — interact before ripping
+    capture_screenshot   = data.get('capture_screenshot', False)
 
     site_url, url_error = validate_url(site_url)
     if url_error:
@@ -333,7 +334,8 @@ def rip_component():
 
         ripper = _get_ripper_class()(site_url, selector)
         blueprint = run_async(ripper.rip(auth_state, include_states=include_states,
-                                         output_format=output_format, pre_action=pre_action))
+                                         output_format=output_format, pre_action=pre_action,
+                                         capture_screenshot=capture_screenshot))
 
         print("\n✅ Component rip complete!")
 
@@ -3783,6 +3785,261 @@ def library_reindex():
         return jsonify({'success': True, **result})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Guided Tour helpers ───────────────────────────────────────────────────────
+
+def _classify_stop_type(label: str, url: str, evidence: dict, base_url: str) -> str:
+    """
+    Classify a tour stop as 'homepage' | 'listing' | 'reading' | 'surface'.
+
+    Order: explicit page_type → URL pattern → content density heuristic.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        stop_path = urlparse(url).path.rstrip('/')
+        base_path = urlparse(base_url).path.rstrip('/')
+    except Exception:
+        stop_path = base_path = ''
+
+    if label == 'home' or stop_path == base_path or stop_path == '':
+        return 'homepage'
+
+    page_type = (evidence.get('meta_info') or {}).get('page_type', '')
+    if page_type == 'singleArticle':
+        return 'reading'
+
+    segments = [s.lower() for s in stop_path.split('/') if s]
+
+    _READING  = {'page', 'pages', 'article', 'articles', 'post', 'posts',
+                 'essay', 'story', 'stories', 'read', 'reader', 'entry',
+                 'chapter', 'chapters', 'issue-page'}
+    _LISTING  = {'magazine', 'magazines', 'issues', 'issue', 'category',
+                 'categories', 'archive', 'archives', 'blog', 'section',
+                 'tag', 'tags', 'collection', 'collections', 'topics',
+                 'series', 'editions', 'volumes'}
+
+    if any(seg in _READING for seg in segments):
+        return 'reading'
+    if any(seg in _LISTING for seg in segments):
+        return 'listing'
+
+    # Density-based fallback: text-heavy pages are reading pages
+    density = ((evidence.get('spatial_composition') or {})
+               .get('whitespace_analysis', {})
+               .get('content_density_pct') or 0)
+    if density > 55:
+        return 'reading'
+
+    return 'surface'
+
+
+def _extract_tour_typography(evidence: dict, context: str) -> dict:
+    """
+    Extract the typography most relevant for a given context.
+
+    context='reading'  → body_fonts (article body text)
+    context='surface'  → display_fonts / heading_fonts (landing/index pages)
+    """
+    typo = evidence.get('typography') or {}
+
+    if context == 'reading':
+        fonts = (typo.get('body_fonts')
+                 or typo.get('fonts')
+                 or typo.get('ui_fonts')
+                 or [])
+    else:
+        fonts = (typo.get('display_fonts')
+                 or typo.get('heading_fonts')
+                 or typo.get('fonts')
+                 or typo.get('ui_fonts')
+                 or [])
+
+    primary_font = fonts[0] if fonts else None
+
+    # Type scale sizes
+    scale = typo.get('type_scale') or {}
+    if isinstance(scale, dict):
+        sizes_px      = scale.get('sizes_px', [])
+        heading_sizes = scale.get('heading_sizes_px', [])
+        ratio         = scale.get('ratio')
+        body_size     = next((s for s in sorted(sizes_px) if s >= 12), None)
+        display_size  = max(heading_sizes) if heading_sizes else None
+    else:
+        ratio = scale if isinstance(scale, (int, float)) else None
+        body_size = display_size = None
+
+    # Line height
+    details = typo.get('details') or {}
+    line_height = None
+    if isinstance(details, dict):
+        lh_raw = details.get('line_height_ratio') or details.get('avgLineHeight')
+        if lh_raw:
+            try:
+                line_height = round(float(str(lh_raw).replace('px', '')), 2)
+            except (ValueError, TypeError):
+                pass
+
+    return {
+        'font':             primary_font,
+        'body_size_px':     round(body_size, 1)    if body_size    is not None else None,
+        'display_size_px':  round(display_size, 1) if display_size is not None else None,
+        'type_scale_ratio': round(ratio, 3)         if ratio        is not None else None,
+        'line_height':      line_height,
+        'all_fonts':        fonts[:4],
+    }
+
+
+def _synthesize_tour_bundle(evidence: dict, base_url: str) -> dict:
+    """
+    Build the Guided Tour output from a smart-nav evidence bundle.
+
+    Classifies each stop, extracts context-appropriate typography,
+    and computes the density shift between surface and reading pages.
+    """
+    from urllib.parse import urlparse
+
+    page_results = evidence.get('page_results') or {}
+    domain = urlparse(base_url).netloc
+
+    tour_stops       = []
+    reading_evidences = []
+    surface_evidences = []
+
+    for label, stop_ev in page_results.items():
+        meta = stop_ev.get('meta_info') or {}
+        url  = meta.get('url') or (base_url if label == 'home' else '')
+        density = ((stop_ev.get('spatial_composition') or {})
+                   .get('whitespace_analysis', {})
+                   .get('content_density_pct'))
+        confidence = (stop_ev.get('_meta') or {}).get('overall_confidence')
+
+        stop_type = _classify_stop_type(label, url, stop_ev, base_url)
+
+        tour_stops.append({
+            'label':      label,
+            'url':        url,
+            'type':       stop_type,
+            'density':    round(density, 1) if density is not None else None,
+            'page_type':  meta.get('page_type', ''),
+            'confidence': confidence,
+        })
+
+        if stop_type == 'reading':
+            reading_evidences.append(stop_ev)
+        else:
+            surface_evidences.append(stop_ev)
+
+    # Typography by context
+    reading_typo = _extract_tour_typography(reading_evidences[0], 'reading') if reading_evidences else None
+    surface_typo = _extract_tour_typography(surface_evidences[0], 'surface') if surface_evidences else None
+
+    # Density shift
+    surf_dens  = [s['density'] for s in tour_stops if s['type'] in ('homepage', 'surface', 'listing')  and s['density'] is not None]
+    read_dens  = [s['density'] for s in tour_stops if s['type'] == 'reading' and s['density'] is not None]
+    surf_avg   = round(sum(surf_dens) / len(surf_dens), 1) if surf_dens else None
+    read_avg   = round(sum(read_dens) / len(read_dens), 1) if read_dens else None
+    delta      = round(read_avg - surf_avg, 1) if (surf_avg is not None and read_avg is not None) else None
+
+    if delta is not None:
+        if abs(delta) > 30:
+            interp = 'Major shift — pages transition from browsing surface to immersive text'
+        elif abs(delta) > 15:
+            interp = 'Moderate shift — reading pages are noticeably denser than surface pages'
+        else:
+            interp = 'Consistent density — browsing and reading feel the same weight'
+    else:
+        interp = None
+
+    density_shift = {
+        'surface_avg': surf_avg,
+        'reading_avg': read_avg,
+        'delta':       delta,
+        'interpretation': interp,
+    }
+
+    # Shared design system — prefer home page evidence
+    home_ev = page_results.get('home') or next(iter(page_results.values()), {})
+
+    return {
+        'site':               domain,
+        'base_url':           base_url,
+        'tour_stops':         tour_stops,
+        'surface_typography': surface_typo,
+        'reading_typography': reading_typo,
+        'density_shift':      density_shift,
+        'design_system': {
+            'colors':      home_ev.get('colors'),
+            'spacing':     home_ev.get('spacing_scale'),
+            'motion':      home_ev.get('motion_tokens'),
+            'consistency': evidence.get('design_system_consistency'),
+        },
+        'analysis_mode': 'guided-tour',
+    }
+
+
+@app.route('/api/guided-tour', methods=['POST'])
+def guided_tour():
+    """
+    Scan a site as a reader would experience it.
+
+    Runs Smart Nav with content-focus, then synthesizes a tour bundle that
+    separates surface typography (homepage, listing pages) from reading
+    typography (article pages), and reports the density shift between them.
+
+    POST /api/guided-tour
+    Body: {
+        "site_url": "https://...",
+        "max_stops": 4        (optional, default 4, max 6)
+    }
+
+    Response: {
+        "success": true,
+        "site": "domain.com",
+        "tour_stops": [...],
+        "surface_typography": {...},
+        "reading_typography": {...},
+        "density_shift": { "surface_avg": 28.4, "reading_avg": 61.2, "delta": 32.8, ... },
+        "design_system": { "colors": ..., "spacing": ..., "motion": ..., "consistency": ... }
+    }
+    """
+    data = request.json or {}
+    site_url = data.get('site_url', '').strip()
+    if not site_url:
+        return jsonify({'error': 'site_url required'}), 400
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    from deep_evidence_engine import DeepEvidenceEngine
+
+    async def _run():
+        engine = DeepEvidenceEngine(
+            site_url,
+            analysis_mode='smart-nav',
+            analysis_focus='content',
+        )
+        return await engine.extract_all()
+
+    try:
+        evidence = run_async(_run())
+    except Exception as e:
+        logger.error(f"Guided tour failed for {site_url}: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'success': False}), 500
+
+    # Post-process into tour bundle
+    tour = _synthesize_tour_bundle(evidence, site_url)
+
+    # Auto-save to library
+    try:
+        from scan_library import save_scan as _lib_save
+        _lib_save(site_url, evidence, analysis_mode='guided-tour')
+    except Exception:
+        pass
+
+    return jsonify({'success': True, **tour})
 
 
 @app.route('/api/compare-sites', methods=['POST'])

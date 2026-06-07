@@ -340,7 +340,7 @@ class ComponentRipper:
 
     async def rip(self, auth_state: Optional[str] = None, use_stealth: bool = False,
                   include_states: bool = False, output_format: str = 'json',
-                  pre_action: Optional[dict] = None):
+                  pre_action: Optional[dict] = None, capture_screenshot: bool = False):
         """
         Extract component blueprint with optional auth and stealth mode
 
@@ -356,6 +356,7 @@ class ComponentRipper:
         """
         self._include_states = include_states
         self._output_format = output_format
+        self._capture_screenshot = capture_screenshot
         if use_stealth:
             # Use stealth agent for protected sites
             from stealth_agent import StealthAgent
@@ -863,6 +864,19 @@ class ComponentRipper:
         # Generate Markdown documentation (V2)
         component_name = selector.replace('.', '').replace('#', '').replace('[', '').replace(']', '')
         blueprint['markdown'] = self._generate_markdown_doc(blueprint, component_name)
+
+        # Optional: capture screenshot of the live element
+        if getattr(self, '_capture_screenshot', False):
+            try:
+                import base64 as _b64
+                el = page.locator(selector).first
+                await el.scroll_into_view_if_needed(timeout=3000)
+                screenshot_bytes = await el.screenshot(timeout=5000)
+                blueprint['screenshot_base64'] = (
+                    'data:image/png;base64,' + _b64.b64encode(screenshot_bytes).decode()
+                )
+            except Exception as _se:
+                blueprint['screenshot_error'] = str(_se)
 
         return blueprint
 
