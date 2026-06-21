@@ -20,3 +20,5 @@ browser_sessions/
 server.pid
 .DS_Store
 website-understanding-sdk/node_modules/
+.playwright-mcp/
+data/
