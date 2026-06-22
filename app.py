@@ -4042,6 +4042,89 @@ def guided_tour():
     return jsonify({'success': True, **tour})
 
 
+@app.route('/api/editorial-audit', methods=['POST'])
+def editorial_audit():
+    """
+    Run the 10 editorial-industry checks against a single page.
+
+    POST /api/editorial-audit
+    Body: { "site_url": "https://..." }
+
+    Returns:
+      {
+        "success": true,
+        "score":   70,           // % of hard assertions passing
+        "passed":  7, "total": 10,
+        "tests": [
+          { "test_id": "json_ld", "test_name": "JSON-LD Structured Data",
+            "passed": true, "assertions": [...], "extracted": {...} },
+          ...
+        ]
+      }
+
+    Works best on article pages (not homepages) for JSON-LD / social-meta checks.
+    """
+    data = request.json or {}
+    site_url = data.get('site_url', '').strip()
+    if not site_url:
+        return jsonify({'error': 'site_url required'}), 400
+
+    site_url, url_error = validate_url(site_url)
+    if url_error:
+        return jsonify({'error': url_error}), 400
+
+    from patchright.async_api import async_playwright
+    from extractors.editorial_signals import EditorialSignalsExtractor
+    from extractors.base import ExtractionContext
+
+    async def _run():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={'width': 1440, 'height': 900},
+                user_agent=(
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/121.0.0.0 Safari/537.36'
+                )
+            )
+            page = await context.new_page()
+
+            # Capture network responses for Cache/CDN test
+            net_resps = []
+            async def _on_response(resp):
+                try:
+                    hdrs = await resp.all_headers()
+                    net_resps.append({'url': resp.url, 'headers': hdrs,
+                                      'status': resp.status})
+                except Exception:
+                    pass
+            page.on('response', lambda r: asyncio.ensure_future(_on_response(r)))
+
+            await page.goto(site_url, wait_until='domcontentloaded', timeout=60000)
+            # Give JS + ads time to run; Web Vitals need post-load paint entries
+            import asyncio as _aio
+            await _aio.sleep(3)
+
+            ctx = ExtractionContext(
+                page=page,
+                url=site_url,
+                html_content=await page.content(),
+                network_responses=net_resps,
+            )
+            result = await EditorialSignalsExtractor().extract(ctx)
+            await browser.close()
+            return result
+
+    try:
+        result = run_async(_run())
+    except Exception as e:
+        logger.error(f"Editorial audit failed for {site_url}: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'success': False}), 500
+
+    return jsonify({'success': True, **result})
+
+
 @app.route('/api/compare-sites', methods=['POST'])
 def compare_sites():
     """

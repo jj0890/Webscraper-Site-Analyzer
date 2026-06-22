@@ -3110,16 +3110,34 @@ class DeepEvidenceEngine:
                     except Exception:
                         pass
 
-                    is_auth_page = any(
-                        indicator in page_title
-                        or indicator in page_content_sample
-                        or indicator in visible_text
-                        for indicator in auth_indicators
+                    # Auth wall = page EXISTS to authenticate, not just a page that has
+                    # a "Sign in" link in its global navigation.
+                    # Require title-level signal OR body dominance (not just nav text).
+                    title_is_auth = any(indicator in page_title for indicator in auth_indicators)
+
+                    # Only use body text if it's SHORT (< 1500 chars) — a real page with
+                    # lots of content but a "Sign in" nav link should NOT trigger this.
+                    body_is_auth = (
+                        len(visible_text) < 1500
+                        and any(indicator in visible_text for indicator in auth_indicators)
                     )
 
-                    # Additional check: look for password input fields
-                    password_inputs = await page.query_selector_all('input[type="password"]')
-                    has_password_field = len(password_inputs) > 0
+                    is_auth_page = title_is_auth or body_is_auth
+
+                    # Only count password fields that are VISIBLE (not hidden modals).
+                    # Many sites have login modals in the DOM that aren't shown by default.
+                    password_inputs = await page.evaluate('''() => {
+                        return Array.from(document.querySelectorAll('input[type="password"]'))
+                            .filter(el => {
+                                const r = el.getBoundingClientRect();
+                                const s = getComputedStyle(el);
+                                return r.width > 0 && r.height > 0
+                                    && s.display !== 'none'
+                                    && s.visibility !== 'hidden'
+                                    && s.opacity !== '0';
+                            }).length;
+                    }''')
+                    has_password_field = password_inputs > 0
 
                     # Check for login form elements
                     login_forms = await page.query_selector_all('form[action*="login"], form[action*="signin"], form[id*="login"], form[class*="login"]')
