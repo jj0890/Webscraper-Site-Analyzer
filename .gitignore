@@ -22,3 +22,9 @@ server.pid
 website-understanding-sdk/node_modules/
 .playwright-mcp/
 data/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

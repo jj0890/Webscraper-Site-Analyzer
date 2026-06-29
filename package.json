@@ -5,7 +5,12 @@
   "scripts": {
     "start": "bash start.sh",
     "start:prod": "bash start.sh production",
-    "install:axe": "npm install axe-core --prefix ./website-understanding-sdk"
+    "install:axe": "npm install axe-core --prefix ./website-understanding-sdk",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4.105.0"
+  }
 }
