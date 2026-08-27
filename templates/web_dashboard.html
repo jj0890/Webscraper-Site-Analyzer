@@ -31,7 +31,7 @@
             /* ── Text System ── */
             --text-primary: #f0f0f3;
             --text-secondary: #a0a0ab;
-            --text-tertiary: #636370;
+            --text-tertiary: #7e7e8d;
             --text-disabled: #454550;
 
             /* ── Accent Palette ── */
@@ -55,6 +55,21 @@
             --code-green: #6ee7b7;
             --code-blue: #7dd3fc;
             --code-purple: #c4b5fd;
+            --code-amber: #e2b56a;
+            --code-string: #98c379;
+            --code-number: #d19a66;
+            --code-boolean: #c678dd;
+            --color-motion-dot: #c9b8ff;
+
+            /* ── Score State Colors ── */
+            --score-good-bg: rgba(52,211,153,0.12);
+            --score-good-text: #34d399;
+            --score-warn-bg: rgba(251,191,36,0.12);
+            --score-warn-text: #fbbf24;
+            --score-poor-bg: rgba(248,113,113,0.12);
+            --score-poor-text: #f87171;
+            --score-critical-bg: rgba(239,68,68,0.2);
+            --score-critical-text: #ef4444;
 
             /* ── Typography ── */
             --font-display: 'Fraunces', Georgia, serif;
@@ -101,7 +116,7 @@
             --duration-fast: 150ms;
             --duration-normal: 250ms;
             --duration-slow: 400ms;
-            --duration-entrance: 600ms;
+            --duration-entrance: 300ms;
         }
 
         /* ── Reset ── */
@@ -236,6 +251,16 @@
             box-shadow: 0 0 0 3px var(--accent-muted);
         }
 
+        input[type="text"]:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        select:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
         .btn {
             padding: var(--space-3) var(--space-6);
             border-radius: var(--radius-md);
@@ -274,6 +299,14 @@
             opacity: 0.4;
             cursor: not-allowed;
             pointer-events: none;
+        }
+
+        .btn:focus-visible,
+        .tab:focus-visible,
+        .expand-toggle:focus-visible,
+        .wizard-area-card:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
         }
 
         /* ── Results Section ── */
@@ -458,6 +491,16 @@
             font-size: 1.1rem;
         }
 
+        /* ── Score State Classes (replaces inline hex in JS) ── */
+        .score-good   { color: var(--score-good-text);     background: var(--score-good-bg); }
+        .score-warn   { color: var(--score-warn-text);     background: var(--score-warn-bg); }
+        .score-poor   { color: var(--score-poor-text);     background: var(--score-poor-bg); }
+        .score-critical { color: var(--score-critical-text); background: var(--score-critical-bg); }
+        .score-good-text { color: var(--score-good-text); }
+        .score-warn-text { color: var(--score-warn-text); }
+        .score-poor-text { color: var(--score-poor-text); }
+        .score-critical-text { color: var(--score-critical-text); }
+
         /* ── Confidence System ── */
         .confidence-badge {
             font-family: var(--font-mono);
@@ -605,12 +648,12 @@
             transition: transform var(--duration-fast) var(--ease-out);
         }
         .ev-key.collapsed .ev-toggle { transform: rotate(-90deg); }
-        .ev-key-name { color: #e2b56a; font-weight: 500; }
+        .ev-key-name { color: var(--code-amber); font-weight: 500; }
         .ev-key-type { color: var(--text-disabled); font-size: 0.68rem; font-style: italic; margin-left: 4px; }
         .ev-val { font-family: var(--font-mono); font-size: 0.78rem; padding: 2px 0 2px 1.25rem; }
-        .ev-val-string { color: #98c379; }
-        .ev-val-number { color: #d19a66; }
-        .ev-val-boolean { color: #c678dd; }
+        .ev-val-string { color: var(--code-string); }
+        .ev-val-number { color: var(--code-number); }
+        .ev-val-boolean { color: var(--code-boolean); }
         .ev-val-null { color: var(--text-disabled); font-style: italic; }
         .ev-children { overflow: hidden; transition: max-height 0.2s ease; }
         .ev-children.collapsed { max-height: 0 !important; }
@@ -942,7 +985,7 @@
         }
         .detail-row code { color: #0a84ff; font-size: 0.72rem; word-break: break-all; }
         .detail-label { color: #666; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.4rem; margin-bottom: 0.2rem; }
-        .detail-check { color: #34c759; } .detail-cross { color: #555; }
+        .detail-check { color: var(--success); } .detail-cross { color: var(--text-disabled); }
 
         /* ── Motion track animations (motion_tokens card) ── */
         @keyframes motion-track-slide {
@@ -967,7 +1010,7 @@
             top: 50%; left: 0;
             width: 12px; height: 12px;
             border-radius: 50%;
-            background: #c9b8ff;
+            background: var(--color-motion-dot);
             transform: translateY(-50%);
             animation: none;
             transition: box-shadow 0.2s;
@@ -2799,6 +2842,15 @@
             color: #63b3ed;
         }
         .lib-finding-card .lfc-meta { font-size: var(--text-xs); color: var(--text-muted); }
+
+        /* ── Accessibility: Reduced Motion ── */
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+          }
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
@@ -2840,7 +2892,7 @@
         </div>
 
         <div class="input-section">
-            <label class="input-label">Enter URL to Analyze</label>
+            <label class="input-label" for="urlInput">Enter URL to Analyze</label>
             <div class="input-group">
                 <input type="text" id="urlInput" placeholder="https://example.com/article" value="">
                 <select id="analysisModeSelect" style="background: var(--surface-0); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); color: var(--text-primary); font-family: var(--font-body); font-size: var(--text-md); min-width: 160px;">
@@ -2903,19 +2955,19 @@
         </div>
 
         <div class="results-section" id="results">
-            <div class="tabs">
-                <div class="tab active" data-tab="extraction">Extraction Results</div>
-                <div class="tab" data-tab="hierarchy">Visual Hierarchy</div>
-                <div class="tab" data-tab="content">Pattern Library</div>
-                <div class="tab" data-tab="componentmap">Component Map</div>
-                <div class="tab" data-tab="apimap">API Map</div>
-                <div class="tab" data-tab="debug">Debug View</div>
-                <div class="tab" data-tab="analytics">Analytics</div>
-                <div class="tab" data-tab="library">📚 Library</div>
+            <div class="tabs" role="tablist" aria-label="Analysis results">
+                <button type="button" class="tab active" data-tab="extraction" role="tab" aria-selected="true" aria-controls="extractionTab" id="tab-extraction">Extraction Results</button>
+                <button type="button" class="tab" data-tab="hierarchy" role="tab" aria-selected="false" aria-controls="hierarchyTab" id="tab-hierarchy">Visual Hierarchy</button>
+                <button type="button" class="tab" data-tab="content" role="tab" aria-selected="false" aria-controls="contentTab" id="tab-content">Pattern Library</button>
+                <button type="button" class="tab" data-tab="componentmap" role="tab" aria-selected="false" aria-controls="componentmapTab" id="tab-componentmap">Component Map</button>
+                <button type="button" class="tab" data-tab="apimap" role="tab" aria-selected="false" aria-controls="apimapTab" id="tab-apimap">API Map</button>
+                <button type="button" class="tab" data-tab="debug" role="tab" aria-selected="false" aria-controls="debugTab" id="tab-debug">Debug View</button>
+                <button type="button" class="tab" data-tab="analytics" role="tab" aria-selected="false" aria-controls="analyticsTab" id="tab-analytics">Analytics</button>
+                <button type="button" class="tab" data-tab="library" role="tab" aria-selected="false" aria-controls="libraryTab" id="tab-library">📚 Library</button>
             </div>
 
             <!-- Extraction Results Tab -->
-            <div class="tab-content active" id="extractionTab">
+            <div class="tab-content active" id="extractionTab" role="tabpanel" aria-labelledby="tab-extraction">
                 <!-- AI Summary Card -->
                 <!-- Brand Overview Hero (injected by JS) -->
                 <div id="brand-hero-container"></div>
@@ -2996,7 +3048,7 @@
             </div>
 
             <!-- Visual Hierarchy Tab -->
-            <div class="tab-content" id="hierarchyTab">
+            <div class="tab-content" id="hierarchyTab" role="tabpanel" aria-labelledby="tab-hierarchy">
                 <div class="hierarchy-container">
                     <div class="hierarchy-header">
                         <h2>👁️ Visual Hierarchy Analysis</h2>
@@ -3071,7 +3123,7 @@
             </div>
 
             <!-- Pattern Library Tab (replaces Content Extraction) -->
-            <div class="tab-content" id="contentTab">
+            <div class="tab-content" id="contentTab" role="tabpanel" aria-labelledby="tab-content">
                 <div class="pattern-library-container">
                     <div class="pattern-library-header">
                         <h2>🧩 Visual Pattern Library</h2>
@@ -3109,7 +3161,7 @@
             </div>
 
             <!-- Component Map Tab -->
-            <div class="tab-content" id="componentmapTab">
+            <div class="tab-content" id="componentmapTab" role="tabpanel" aria-labelledby="tab-componentmap">
                 <div class="component-map-container">
                     <div class="component-map-header">
                         <h2>🗺️ Component Structure Map</h2>
@@ -3123,7 +3175,7 @@
             </div>
 
             <!-- API Map Tab -->
-            <div class="tab-content" id="apimapTab">
+            <div class="tab-content" id="apimapTab" role="tabpanel" aria-labelledby="tab-apimap">
                 <div class="api-map-container">
                     <div class="api-map-header">
                         <h2>📡 API Relationship Map</h2>
@@ -3179,7 +3231,7 @@
             </div>
 
             <!-- Debug View Tab -->
-            <div class="tab-content" id="debugTab">
+            <div class="tab-content" id="debugTab" role="tabpanel" aria-labelledby="tab-debug">
                 <div class="debug-section">
                     <div class="debug-title">Network Requests</div>
                     <ul class="debug-list" id="networkList">
@@ -3189,14 +3241,14 @@
             </div>
 
             <!-- Analytics Tab -->
-            <div class="tab-content" id="analyticsTab">
+            <div class="tab-content" id="analyticsTab" role="tabpanel" aria-labelledby="tab-analytics">
                 <div class="metrics-grid" id="analyticsGrid">
                     <!-- Analytics metrics will be inserted here -->
                 </div>
             </div>
 
             <!-- Library Tab -->
-            <div class="tab-content" id="libraryTab">
+            <div class="tab-content" id="libraryTab" role="tabpanel" aria-labelledby="tab-library">
                 <!-- Stats bar -->
                 <div class="lib-header">
                     <div class="lib-stats-bar" id="libStatsBar">
@@ -3284,8 +3336,12 @@
             tab.addEventListener('click', () => {
                 const targetTab = tab.getAttribute('data-tab');
 
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab').forEach(t => {
+                    t.classList.remove('active');
+                    t.setAttribute('aria-selected', 'false');
+                });
                 tab.classList.add('active');
+                tab.setAttribute('aria-selected', 'true');
 
                 document.querySelectorAll('.tab-content').forEach(content => {
                     content.classList.remove('active');
@@ -3790,7 +3846,9 @@
 
             document.getElementById('wizardCardGrid').innerHTML = focuses.map((f, i) => `
                 <div class="wizard-area-card${f.id === wizard.analysisFocus ? ' recommended' : ''}"
+                     role="button" tabindex="0"
                      onclick="wizardSetFocus('${f.id}')"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wizardSetFocus('${f.id}');}"
                      style="animation-delay: ${i * 60}ms; position: relative; text-align: left; align-items: flex-start; gap: var(--space-2);">
                     ${f.recommended ? '<span style="position:absolute;top:var(--space-2);right:var(--space-2);font-size:0.6rem;font-weight:700;letter-spacing:0.06em;color:#0a84ff;background:rgba(10,132,255,0.1);border:1px solid rgba(10,132,255,0.3);border-radius:4px;padding:1px 5px;">DEFAULT</span>' : ''}
                     <span class="wizard-icon" style="font-size:1.5rem;">${f.icon}</span>
@@ -3878,7 +3936,7 @@
 
             let html = '';
             // "Scan All" recommended card
-            html += `<div class="wizard-area-card recommended" onclick="wizardScanAll()" style="animation-delay: 0ms;">
+            html += `<div class="wizard-area-card recommended" role="button" tabindex="0" onclick="wizardScanAll()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wizardScanAll();}" style="animation-delay: 0ms;">
                 <span class="wizard-icon">&#9889;</span>
                 <span class="wizard-label">Scan All Areas</span>
                 <span class="wizard-count">Recommended &middot; auto-selects ${WIZARD_MAX_PAGES} diverse pages</span>
@@ -3888,7 +3946,7 @@
                 const count = wizard.areas[seg].length;
                 const icon = getAreaIcon(seg);
                 const label = getAreaLabel(seg);
-                html += `<div class="wizard-area-card" onclick="wizardSelectArea('${seg}')" style="animation-delay: ${(i + 1) * 50}ms;">
+                html += `<div class="wizard-area-card" role="button" tabindex="0" onclick="wizardSelectArea('${seg}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wizardSelectArea('${seg}');}" style="animation-delay: ${(i + 1) * 50}ms;">
                     <span class="wizard-icon">${icon}</span>
                     <span class="wizard-label">${label}</span>
                     <span class="wizard-count">${count} page${count !== 1 ? 's' : ''}</span>
@@ -4474,7 +4532,7 @@
                 const sections = inv.section_summary || [];
                 for (const s of sections) {
                     const pct = inv.total > 0 ? Math.round(s.count / inv.total * 100) : 0;
-                    invHtml += `<span style="background: rgba(245,158,11,0.12); color: #b45309; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 500;">${s.section} <span style="opacity:0.7;">(${s.count} · ${pct}%)</span></span>`;
+                    invHtml += `<span style="background: var(--warning-muted); color: var(--warning); padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 500;">${s.section} <span style="opacity:0.7;">(${s.count} · ${pct}%)</span></span>`;
                 }
 
                 invHtml += `</div>`;
@@ -5220,7 +5278,7 @@
                         <div style="color: #aaa; font-size: 0.8rem; line-height: 1.4;">
                             ${data.pattern || data.summary || 'Detected'}
                         </div>
-                        ${conf ? `<div style="margin-top: 0.5rem; height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;"><div style="height: 100%; width: ${conf}%; background: ${confColor}; border-radius: 2px;"></div></div>` : ''}
+                        ${conf ? `<div role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${conf}" aria-label="Confidence: ${conf}%" style="margin-top: 0.5rem; height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;"><div style="height: 100%; width: ${conf}%; background: ${confColor}; border-radius: 2px;"></div></div>` : ''}
                         ${detailHTML}
                         ${expandHTML}
                     `;
@@ -6045,7 +6103,7 @@
                         </div>
                         <div style="flex: 1; display: flex; align-items: center; gap: 0.75rem;">
                             <div style="flex: 1; background: #0a0a0a; border-radius: 4px; height: 8px; overflow: hidden;">
-                                <div style="background: ${scoreColor}; width: ${Math.min(semantic.score, 100)}%; height: 100%; border-radius: 4px; transition: width 1s ease;"></div>
+                                <div style="background: ${scoreColor}; width: ${Math.min(semantic.score, 100)}%; height: 100%; border-radius: 4px; transition: width 0.3s ease;"></div>
                             </div>
                             <span style="color: ${scoreColor}; font-size: 0.8rem; font-weight: 600; white-space: nowrap;">${qualityLabel}</span>
                         </div>
@@ -9278,7 +9336,7 @@
                     <div style="font-size:2.2rem; font-weight:700; color:${scoreColor};">${score}<span style="font-size:1rem; color:#666;">/100</span></div>
                     <div style="flex:1;">
                         <div style="height:6px; background:#1a1a1a; border-radius:3px; overflow:hidden;">
-                            <div style="height:100%; width:${score}%; background:${scoreColor}; border-radius:3px; transition:width 0.6s;"></div>
+                            <div style="height:100%; width:${score}%; background:${scoreColor}; border-radius:3px; transition:width 0.3s;"></div>
                         </div>
                         <div style="font-size:0.75rem; color:#666; margin-top:0.3rem;">${checks.filter(c => c.pass).length} of ${checks.length} checks passed</div>
                     </div>
@@ -9797,7 +9855,7 @@
                         <div style="flex:1;">
                             <div style="font-size:0.82rem; color:#ccc; font-weight:600; margin-bottom:3px;">${score}/100 points</div>
                             <div style="height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
-                                <div style="height:100%; width:${score}%; background:${gradeColor}; border-radius:3px; transition:width 0.6s;"></div>
+                                <div style="height:100%; width:${score}%; background:${gradeColor}; border-radius:3px; transition:width 0.3s;"></div>
                             </div>
                             <div style="font-size:0.68rem; color:#666; margin-top:3px;">${score}/100 — ${Object.values(checks).filter(c => c.pass).length} of ${Object.keys(checks).length} checks passed</div>
                         </div>
@@ -11296,7 +11354,7 @@
                         </div>
                         <div style="flex:1;">
                             <div style="height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
-                                <div style="height:100%; width:${score}%; background:${scoreColor}; border-radius:3px; transition:width 0.6s;"></div>
+                                <div style="height:100%; width:${score}%; background:${scoreColor}; border-radius:3px; transition:width 0.3s;"></div>
                             </div>
                             <div style="font-size:0.72rem; color:#666; margin-top:3px;">${checks.filter(c => c.pass).length} of ${checks.length} meta tags present</div>
                         </div>

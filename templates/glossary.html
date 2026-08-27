@@ -132,6 +132,12 @@
             margin-bottom: var(--space-6); transition: border-color 0.15s;
         }
         .search-box:focus { outline: none; border-color: var(--accent); }
+        .search-box:focus-visible,
+        input[type="search"]:focus-visible,
+        input[type="text"]:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
         .search-box::placeholder { color: var(--text-disabled); }
         .search-meta {
             font-size: var(--text-xs); color: var(--text-disabled);
@@ -501,6 +507,15 @@
         @media (max-width: 500px) {
             .card-grid { grid-template-columns: 1fr; }
             .wi-nav { padding: var(--space-3) var(--space-4); }
+        }
+
+        /* ── Accessibility: Reduced Motion ── */
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+          }
         }
     </style>
 </head>

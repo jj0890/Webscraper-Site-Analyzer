@@ -95,6 +95,36 @@
             --duration-fast: 150ms;
             --duration-normal: 250ms;
             --duration-slow: 400ms;
+
+            /* ── Figma Brand ── */
+            --color-figma: #a259ff;
+
+            /* ── Discovery Pill Category Colors ── */
+            --pill-navigation: #38bdf8;
+            --pill-hero: #fbbf24;
+            --pill-content_grid: #34d399;
+            --pill-footer: #94a3b8;
+            --pill-section: #818cf8;
+            --pill-sidebar: #fb923c;
+            --pill-form: #e879f9;
+            --pill-media: #f87171;
+            --pill-block: #888;
+            --pill-accordion: #fb923c;
+            --pill-tabs: #38bdf8;
+            --pill-modal: #a78bfa;
+            --pill-breadcrumb: #94a3b8;
+            --pill-table: #2dd4bf;
+            --pill-carousel: #f97316;
+            --pill-pricing: #22d3ee;
+            --pill-timeline: #818cf8;
+            --pill-alert: #fbbf24;
+            --pill-stepper: #a3e635;
+            --pill-marquee: #e879f9;
+            --pill-testimonial: #fb7185;
+            --pill-cta: #34d399;
+            --pill-split_content: #67e8f9;
+            --pill-newsletter: #c084fc;
+            --pill-social_proof: #fcd34d;
         }
 
         /* ── Reset ── */
@@ -526,31 +556,31 @@
             font-weight: 500;
         }
 
-        .discovery-pill.cat-navigation { background: rgba(56,189,248,0.15); color: #38bdf8; }
-        .discovery-pill.cat-hero { background: rgba(251,191,36,0.15); color: #fbbf24; }
-        .discovery-pill.cat-content_grid { background: rgba(52,211,153,0.15); color: #34d399; }
-        .discovery-pill.cat-footer { background: rgba(148,163,184,0.15); color: #94a3b8; }
-        .discovery-pill.cat-section { background: rgba(129,140,248,0.15); color: #818cf8; }
-        .discovery-pill.cat-sidebar { background: rgba(251,146,60,0.15); color: #fb923c; }
-        .discovery-pill.cat-form { background: rgba(232,121,249,0.15); color: #e879f9; }
-        .discovery-pill.cat-media { background: rgba(248,113,113,0.15); color: #f87171; }
-        .discovery-pill.cat-block { background: rgba(255,255,255,0.08); color: #888; }
-        .discovery-pill.cat-accordion { background: rgba(251,146,60,0.15); color: #fb923c; }
-        .discovery-pill.cat-tabs { background: rgba(56,189,248,0.15); color: #38bdf8; }
-        .discovery-pill.cat-modal { background: rgba(167,139,250,0.15); color: #a78bfa; }
-        .discovery-pill.cat-breadcrumb { background: rgba(148,163,184,0.15); color: #94a3b8; }
-        .discovery-pill.cat-table { background: rgba(45,212,191,0.15); color: #2dd4bf; }
-        .discovery-pill.cat-carousel { background: rgba(249,115,22,0.15); color: #f97316; }
-        .discovery-pill.cat-pricing { background: rgba(34,211,238,0.15); color: #22d3ee; }
-        .discovery-pill.cat-timeline { background: rgba(129,140,248,0.15); color: #818cf8; }
-        .discovery-pill.cat-alert { background: rgba(251,191,36,0.15); color: #fbbf24; }
-        .discovery-pill.cat-stepper { background: rgba(163,230,53,0.15); color: #a3e635; }
-        .discovery-pill.cat-marquee { background: rgba(232,121,249,0.15); color: #e879f9; }
-        .discovery-pill.cat-testimonial { background: rgba(251,113,133,0.15); color: #fb7185; }
-        .discovery-pill.cat-cta { background: rgba(52,211,153,0.15); color: #34d399; }
-        .discovery-pill.cat-split_content { background: rgba(103,232,249,0.15); color: #67e8f9; }
-        .discovery-pill.cat-newsletter { background: rgba(192,132,252,0.15); color: #c084fc; }
-        .discovery-pill.cat-social_proof { background: rgba(252,211,77,0.15); color: #fcd34d; }
+        .discovery-pill.cat-navigation  { background: color-mix(in srgb, var(--pill-navigation)  15%, transparent); color: var(--pill-navigation); }
+        .discovery-pill.cat-hero         { background: color-mix(in srgb, var(--pill-hero)         15%, transparent); color: var(--pill-hero); }
+        .discovery-pill.cat-content_grid { background: color-mix(in srgb, var(--pill-content_grid) 15%, transparent); color: var(--pill-content_grid); }
+        .discovery-pill.cat-footer       { background: color-mix(in srgb, var(--pill-footer)       15%, transparent); color: var(--pill-footer); }
+        .discovery-pill.cat-section      { background: color-mix(in srgb, var(--pill-section)      15%, transparent); color: var(--pill-section); }
+        .discovery-pill.cat-sidebar      { background: color-mix(in srgb, var(--pill-sidebar)      15%, transparent); color: var(--pill-sidebar); }
+        .discovery-pill.cat-form         { background: color-mix(in srgb, var(--pill-form)         15%, transparent); color: var(--pill-form); }
+        .discovery-pill.cat-media        { background: color-mix(in srgb, var(--pill-media)        15%, transparent); color: var(--pill-media); }
+        .discovery-pill.cat-block        { background: rgba(255,255,255,0.08);                                        color: var(--pill-block); }
+        .discovery-pill.cat-accordion    { background: color-mix(in srgb, var(--pill-accordion)    15%, transparent); color: var(--pill-accordion); }
+        .discovery-pill.cat-tabs         { background: color-mix(in srgb, var(--pill-tabs)         15%, transparent); color: var(--pill-tabs); }
+        .discovery-pill.cat-modal        { background: color-mix(in srgb, var(--pill-modal)        15%, transparent); color: var(--pill-modal); }
+        .discovery-pill.cat-breadcrumb   { background: color-mix(in srgb, var(--pill-breadcrumb)   15%, transparent); color: var(--pill-breadcrumb); }
+        .discovery-pill.cat-table        { background: color-mix(in srgb, var(--pill-table)        15%, transparent); color: var(--pill-table); }
+        .discovery-pill.cat-carousel     { background: color-mix(in srgb, var(--pill-carousel)     15%, transparent); color: var(--pill-carousel); }
+        .discovery-pill.cat-pricing      { background: color-mix(in srgb, var(--pill-pricing)      15%, transparent); color: var(--pill-pricing); }
+        .discovery-pill.cat-timeline     { background: color-mix(in srgb, var(--pill-timeline)     15%, transparent); color: var(--pill-timeline); }
+        .discovery-pill.cat-alert        { background: color-mix(in srgb, var(--pill-alert)        15%, transparent); color: var(--pill-alert); }
+        .discovery-pill.cat-stepper      { background: color-mix(in srgb, var(--pill-stepper)      15%, transparent); color: var(--pill-stepper); }
+        .discovery-pill.cat-marquee      { background: color-mix(in srgb, var(--pill-marquee)      15%, transparent); color: var(--pill-marquee); }
+        .discovery-pill.cat-testimonial  { background: color-mix(in srgb, var(--pill-testimonial)  15%, transparent); color: var(--pill-testimonial); }
+        .discovery-pill.cat-cta          { background: color-mix(in srgb, var(--pill-cta)          15%, transparent); color: var(--pill-cta); }
+        .discovery-pill.cat-split_content{ background: color-mix(in srgb, var(--pill-split_content)15%, transparent); color: var(--pill-split_content); }
+        .discovery-pill.cat-newsletter   { background: color-mix(in srgb, var(--pill-newsletter)   15%, transparent); color: var(--pill-newsletter); }
+        .discovery-pill.cat-social_proof { background: color-mix(in srgb, var(--pill-social_proof) 15%, transparent); color: var(--pill-social_proof); }
 
         .discovery-card-selector {
             font-family: var(--font-mono);
@@ -600,9 +630,9 @@
         .btn-rip-figma {
             padding: var(--space-2) var(--space-4);
             border-radius: var(--radius-md);
-            border: 1px solid rgba(162,89,255,0.3);
-            background: rgba(162,89,255,0.1);
-            color: #c9b8ff;
+            border: 1px solid color-mix(in srgb, var(--color-figma) 30%, transparent);
+            background: color-mix(in srgb, var(--color-figma) 10%, transparent);
+            color: color-mix(in srgb, var(--color-figma) 80%, white);
             font-family: var(--font-body);
             font-size: var(--text-xs);
             font-weight: 600;
@@ -611,7 +641,12 @@
         }
 
         .btn-rip-figma:hover {
-            background: rgba(162,89,255,0.25);
+            background: color-mix(in srgb, var(--color-figma) 25%, transparent);
+        }
+
+        .btn-rip-figma:focus-visible {
+            outline: 2px solid var(--color-figma);
+            outline-offset: 2px;
         }
 
         .discovery-card-preview {
@@ -935,6 +970,15 @@
             color: var(--accent-text);
             border-color: var(--border-accent);
         }
+
+        /* ── Accessibility: Reduced Motion ── */
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+          }
+        }
     </style>
 </head>
 <body>
@@ -1012,7 +1056,7 @@
                         <span>⚡ Capture hover/focus states</span>
                     </label>
                     <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-size:0.85rem; color:#aaa;">
-                        <input type="checkbox" id="figmaOutput" style="accent-color:#a259ff;">
+                        <input type="checkbox" id="figmaOutput" style="accent-color:var(--color-figma);">
                         <span style="color:#c9b8ff;">◆ Figma-ready output</span>
                     </label>
                     <button onclick="findAcrossSite()" id="crossSiteBtn"
