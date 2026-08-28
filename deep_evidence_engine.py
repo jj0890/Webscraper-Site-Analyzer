@@ -732,6 +732,26 @@ class DeepEvidenceEngine:
                 'nav_2': 'https://site.com/docs'
             }
         """
+        # ── Phase 0: WaterCrawl scout (when API key is configured) ──────────────
+        # Crawls ~12 pages cheaply, classifies by structural type (docs/blog/
+        # product/ecommerce/…), then picks one representative per type. Gives
+        # Smart Nav a diversity-optimised candidate pool before we spend
+        # Patchright time on anything. Falls back silently if key is absent.
+        try:
+            from scout import smart_nav_urls
+            scout_urls = await smart_nav_urls(base_url, limit=12, max_pages=4)
+            if scout_urls and len(scout_urls) >= 2:
+                result = {'home': base_url}
+                for url in scout_urls:
+                    if url.rstrip('/') == base_url.rstrip('/'):
+                        continue
+                    result[f'nav_{len(result)}'] = url
+                    if len(result) >= 5:  # home + 4 nav pages max
+                        break
+                return result
+        except Exception as e:
+            print(f'   ⚠️  WaterCrawl scout failed: {e}')
+
         # ── Try Cloudflare discovery first (if configured) ──
         if self.discovery_method in ('cloudflare', 'auto'):
             cf_urls = await self._discover_via_cloudflare(base_url, limit=50)
